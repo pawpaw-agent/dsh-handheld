@@ -158,6 +158,24 @@ mWakefulness=Dozing
   注：1.11.0 删掉的那个前台服务宿主是 `AgentMonitorService`（dropbox 里 36 条崩溃全是它），
   与隧道保活不是一回事。
 
+### 「添加附件」点了没反应：WebView 的 onShowFileChooser 从来没实现（2026-09-14）
+
+真机复现：点输入区的 `+`（或回形针）只把输入框聚焦、弹出软键盘，**不弹任何选择器**。
+
+原因不是 dsh：它的两个入口都是 `fileInputRef.current.click()`，点的是页面里那个
+`<input type=file multiple accept=…>`。而 Android WebView 只能通过
+`WebChromeClient.onShowFileChooser` 把这类请求交给宿主 —— `MainActivity` 的
+WebChromeClient 此前**只实现了 `onProgressChanged`**，默认实现返回 false，
+于是既不报错也不弹选择器，用户看到的就是「按钮坏了」。
+
+修法：实现 `onShowFileChooser`，把 dsh 写在 input 上的 `accept` 与多选原样透传给
+`ACTION_OPEN_DOCUMENT`，选完在 `onActivityResult` 里用
+`WebChromeClient.FileChooserParams.parseResult` 回填。两条纪律：**上一次没回话的回调要
+先作废、取消也要回 null** —— 否则页面那个 input 会永远卡在等待选择，之后再也弹不出来。
+
+App 自己的「导入私钥」是另一条路径（`pickSshKey()` + `ACTION_OPEN_DOCUMENT` + REQ_PICK_KEY），
+两者用不同的 requestCode 分开。
+
 ### 手动「断开连接 → 重新连接」也不再重载（2026-09-14）
 
 用户报的「断开重连之后还是会重新加载网页」：`disconnectCurrent()` 原本会

@@ -23,6 +23,7 @@ import android.view.WindowManager
 import android.webkit.CookieManager
 import android.webkit.HttpAuthHandler
 import android.webkit.URLUtil
+import android.webkit.ValueCallback
 import android.webkit.WebChromeClient
 import android.webkit.WebResourceError
 import android.webkit.WebResourceRequest
@@ -213,6 +214,8 @@ class MainActivity : Activity() {
         const val UA_MARKER = "DshHandheld/1.0"
         const val DEFAULT_PORT = "3080"
         const val REQ_PICK_KEY = 2001
+        /** WebView 内 <input type=file> 的文件选择请求（与私钥导入分开）。 */
+        const val REQ_WEB_FILE = 2002
 
         const val PREF_SERVER_TOKEN = "server_token" // dsh 0.1.2+ 一次性启动 token（服务重启后自动更新）
 
@@ -365,6 +368,51 @@ class MainActivity : Activity() {
                     } else {
                         progressBar?.visibility = View.VISIBLE
                         progressBar?.progress = newProgress
+                    }
+                }
+
+                /**
+                 * 页面的 `<input type=file>` 要选择器：转交系统文件选择器，选完把 URI 回填。
+                 *
+                 * 页面里两个入口都走这里（「添加附件」= 任意文件，「回形针」= 图片），
+                 * accept 与多选由 dsh 自己写在 input 上，这里原样透传，不做二次过滤 ——
+                 * 过滤归 dsh 的校验（它有格式/大小/张数的那一整套文案）。
+                 */
+                override fun onShowFileChooser(
+                    view: WebView?,
+                    filePathCallback: ValueCallback<Array<Uri>>?,
+                    fileChooserParams: FileChooserParams?
+                ): Boolean {
+                    // 上一次没回话的回调必须先作废：留着它页面那个 input 会永远卡在
+                    // 「等待选择」，之后再点也不会弹（用户看到的就是「按钮坏了」）。
+                    webFileCallback?.onReceiveValue(null)
+                    webFileCallback = filePathCallback
+                    val accepts = fileChooserParams?.acceptTypes
+                        ?.map { it.trim() }?.filter { it.isNotEmpty() } ?: emptyList()
+                    val intent = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
+                        addCategory(Intent.CATEGORY_OPENABLE)
+                        if (accepts.size == 1 && !accepts[0].contains(",")) {
+                            type = accepts[0]
+                        } else {
+                            type = "*/*"
+                            if (accepts.isNotEmpty()) {
+                                putExtra(Intent.EXTRA_MIME_TYPES, accepts.toTypedArray())
+                            }
+                        }
+                        if (fileChooserParams?.mode == FileChooserParams.MODE_OPEN_MULTIPLE) {
+                            putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true)
+                        }
+                    }
+                    DiagLog.i(TAG, "onShowFileChooser: accept=${accepts.joinToString()} " +
+                        "multi=${fileChooserParams?.mode == FileChooserParams.MODE_OPEN_MULTIPLE}")
+                    return try {
+                        startActivityForResult(intent, REQ_WEB_FILE)
+                        true
+                    } catch (e: Exception) {
+                        DiagLog.e(TAG, "onShowFileChooser: 打不开系统文件选择器：${e.message}")
+                        webFileCallback = null
+                        filePathCallback?.onReceiveValue(null)
+                        false
                     }
                 }
             }
@@ -911,6 +959,16 @@ class MainActivity : Activity() {
 
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         super.onActivityResult(requestCode, resultCode, data)
+        // WebView 的文件选择：**无论取消还是成功都要回话**（null 也算），否则页面那个
+        // input 会一直挂着，用户再点「添加附件」就没反应了。
+        if (requestCode == REQ_WEB_FILE) {
+            val cb = webFileCallback
+            webFileCallback = null
+            val uris = WebChromeClient.FileChooserParams.parseResult(resultCode, data)
+            DiagLog.i(TAG, "onShowFileChooser 返回：${uris?.size ?: 0} 个文件（resultCode=$resultCode）")
+            cb?.onReceiveValue(uris)
+            return
+        }
         if (requestCode != REQ_PICK_KEY || resultCode != RESULT_OK) return
         val uri: Uri = data?.data ?: return
         try {
@@ -930,6 +988,17 @@ class MainActivity : Activity() {
         statusView?.setTextColor(if (err) COL_ERROR else COL_MUTED)
         statusView?.visibility = if (msg.isBlank()) View.GONE else View.VISIBLE
     }
+
+    // ── WebView 内的文件选择 ─────────────────────────────────
+    /**
+     * 页面里那个 `<input type=file>` 的回调。
+     *
+     * **不实现 onShowFileChooser 的后果是「按钮点了没反应」**：dsh 输入区的「添加附件」
+     * 与回形针都是 `fileInputRef.current.click()`，WebView 只能靠 WebChromeClient 把这个
+     * 请求交出来；默认实现返回 false，于是既不报错也不弹选择器（2026-09-14 真机复现：
+     * 点 + 只把输入框聚焦、弹出软键盘）。
+     */
+    private var webFileCallback: ValueCallback<Array<Uri>>? = null
 
     // ── 下载转交 ─────────────────────────────────────────────
     /**
