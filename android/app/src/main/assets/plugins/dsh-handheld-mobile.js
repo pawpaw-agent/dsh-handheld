@@ -257,6 +257,62 @@ window.__ModuleLoader__.load({
   [data-handheld="frame"] [data-phase] header [class*="_moreButton"] {
     display: none !important;
   }
+
+  /* ---------- 8. 设置对话框：两栏 → 上下 ----------
+     宿主桌面版是「800px 面板 = 188px 竖导航 + 内容列」。手机上面板只有
+     calc(100vw - 48px) ≈ 336px，内容列被压到 ~100px —— 真机实测每个字一行
+     （「选择新会话的默认权限模式」竖着排成 12 行）。
+
+     改成：面板铺满 + 导航从左侧竖栏变成顶部横向 tab 条。
+     判据用语义结构而不是哈希类名：面板是 [role=dialog][aria-modal=true]:has(> nav)，
+     导航就是它下面那个 <nav>，内容列是 _content / _options。
+     作用域挂在 html:has([data-handheld="frame"]) 而不是 frame 上：这个对话框是 fixed
+     浮层，可能被渲染到 frame 之外（portal），挂在 frame 上会漏掉。 */
+  html:has([data-handheld="frame"]) [role="dialog"][aria-modal="true"]:has(> nav) {
+    width: calc(100vw - 16px) !important;
+    max-width: calc(100vw - 16px) !important;
+    height: calc(100dvh - 16px) !important;
+    max-height: calc(100dvh - 16px) !important;
+    border-radius: 20px !important;
+    flex-direction: column !important;
+  }
+  html:has([data-handheld="frame"]) [role="dialog"][aria-modal="true"] > nav {
+    flex: none !important;
+    flex-direction: row !important;
+    align-items: center !important;
+    width: auto !important;
+    gap: 6px !important;
+    padding: 10px 12px 4px !important;
+    overflow-x: auto !important;
+    overscroll-behavior-x: contain;
+    scrollbar-width: none;
+  }
+  html:has([data-handheld="frame"]) [role="dialog"][aria-modal="true"] > nav::-webkit-scrollbar {
+    display: none;
+  }
+  /* 「设置」那行标题在窄屏不占位（横向 tab 条自己说明是什么） */
+  html:has([data-handheld="frame"]) [role="dialog"][aria-modal="true"] > nav > :first-child {
+    display: none !important;
+  }
+  html:has([data-handheld="frame"]) [role="dialog"][aria-modal="true"] > nav > [class*="_navList"] {
+    flex-direction: row !important;
+    gap: 4px !important;
+    min-width: 0;
+  }
+  html:has([data-handheld="frame"]) [role="dialog"][aria-modal="true"] > nav [class*="_navCell"] {
+    flex: none !important;
+    height: 36px !important;
+    padding: 7px 12px !important;
+    white-space: nowrap;
+  }
+  /* 内容列铺满，内边距收紧 */
+  html:has([data-handheld="frame"]) [role="dialog"][aria-modal="true"] > [class*="_content"] {
+    flex: 1 1 auto !important;
+    min-height: 0 !important;
+  }
+  html:has([data-handheld="frame"]) [role="dialog"][aria-modal="true"] [class*="_options"] {
+    padding: 0 14px 18px !important;
+  }
 }
 
 /* 宽屏 / 精确指针：这一层整体退场，交给桌面布局。 */

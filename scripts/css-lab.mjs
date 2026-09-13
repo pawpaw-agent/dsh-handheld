@@ -122,6 +122,9 @@ const main = async () => {
                moreDisp: disp('[class*=\"_moreButton\"]'),
                cornerRight: (function(){ var c=q('[class*=\"_headerCorner\"]'); if(!c) return null; var r=c.getBoundingClientRect(); return Math.round(r.right); })(),
                viewport: de.clientWidth,
+               dlgW: (function(){ var d=q('[role=\"dialog\"][aria-modal=\"true\"]'); return d ? Math.round(d.getBoundingClientRect().width) : null; })(),
+               dlgNavDir: (function(){ var n=q('[role=\"dialog\"][aria-modal=\"true\"] > nav'); return n ? getComputedStyle(n).flexDirection : null; })(),
+               dlgContentW: (function(){ var c=q('[role=\"dialog\"][aria-modal=\"true\"] > [class*=\"_content\"]'); return c ? Math.round(c.getBoundingClientRect().width) : null; })(),
                menu: (function(){ var m=q('[class*=\"_menu\"]'); if(!m) return null; var r=m.getBoundingClientRect();
                  return {l:Math.round(r.left), t:Math.round(r.top), r:Math.round(r.right), b:Math.round(r.bottom)}; })(),
                chip: (function(){ var c=q('[class*=\"_trigger\"]'); if(!c) return null; var r=c.getBoundingClientRect();
