@@ -170,18 +170,22 @@ window.__ModuleLoader__.load({
   }
 
   /* ---------- 5. 头部弹层 ----------
-     胶囊 / 谱系的弹层是 position:absolute + top:calc(100% + 5px)，锚在触发按钮的 root
-     上。这里只做两件事：保证 root 仍是定位元素（否则包含块上溯到整屏高的 frame，
-     菜单会掉到屏幕外），以及让它往左展开、不越出视口。 */
+     胶囊 / 谱系的弹层是 position:absolute，宿主按「锚在触发按钮的 root 上」设计
+     （.QsffPG_root{position:relative}）。但触发按钮在右对齐的动作道里，锚在它身上再展开
+     336px 宽的菜单，左边会被挤出屏幕（真机实测：菜单左半截被裁掉）。
+
+     所以把包含块抬到**头部**：root 保持 static（宿主的初始值），header 设 relative
+     （上面已经设了），弹层的 left/top 于是相对头部解析 —— 横向落在头部左边缘 +8px，
+     纵向落在整个头部下方，336px 宽在 384px 视口里完整可见。 */
   [data-handheld="frame"] [data-phase] header [class*="_root"]:has(> button[class*="_trigger"]) {
-    position: relative !important;
+    position: static !important;
   }
   [data-handheld="frame"] [data-phase] header [class*="_menu"] {
-    left: auto !important;
-    right: 0 !important;
+    left: 8px !important;
+    right: auto !important;
     width: min(336px, calc(100vw - 16px));
     max-width: none;
-    max-height: min(420px, calc(100dvh - 120px));
+    max-height: min(420px, calc(100dvh - 160px));
   }
 
   /* ---------- 6. hero 阶段的浮动入口 ----------
