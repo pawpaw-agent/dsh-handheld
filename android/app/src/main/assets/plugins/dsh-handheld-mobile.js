@@ -218,13 +218,27 @@ window.__ModuleLoader__.load({
   }
 
   /* ---------- 7. 做不到的入口不留 ----------
-     工作区标题行那颗 + 开的目录选择器由**宿主**决定：本部署里 directory-picker-auto
-     判成 native，对话框开在电脑桌面上，手机上按下去什么都不会发生。要让它可用就得在
-     宿主侧把交互钉成 -browse —— 本项目不动服务端 composition，所以这个入口直接去掉。
+     (a) 工作区标题行那颗 +（dsh 自己的按钮，aria-label = workspace.add）：它开的目录
+     选择器由**宿主**决定，本部署里 directory-picker-auto 判成 native，对话框开在电脑
+     桌面上，手机上按下去什么都不会发生。要让它可用就得在宿主侧把交互钉成 -browse ——
+     本项目不动服务端 composition，所以这个入口直接去掉。
      两个 aria-label 是 dsh 自己词典里的 zh / en 值；换第三种语言时它会重新出现
-     （只是多一个按了没反应的入口，不会坏）。 */
+     （只是多一个按了没反应的入口，不会坏）。
+
+     (b) 会话头右上角的「在 XXX 中打开工作目录」（dsh-client-ui-open-in-app 的分屏按钮）：
+     它是**在电脑上**用某个已安装的程序打开当前会话的工作目录 —— 宿主探测到的是
+     filemanager（GET /open-in-app/apps 返回 {"apps":["filemanager"]}），点击调
+     /open-in-app/open，效果是**电脑桌面**上弹出文件管理器窗口，手机上什么都不会发生。
+     同一个理由去掉。判据用类名而不是 aria-label：这个按钮的类名带模块哈希
+     （_split / _main / _chevron），本 dsh 的样式语料里只有三处 _split，另两处
+     （轨迹表、交付物卡片）都不在会话头里，所以 header [class*="_split"] 能精确命中它。
+     注意：上面这段注释里**不能出现反引号** —— CSS 整段在 JS 模板字符串内，
+     反引号会提前终止字符串（踩过两次，node --check 会以 SyntaxError 报出来）。 */
   [aria-label="添加工作区"],
   [aria-label="Add workspace"] {
+    display: none !important;
+  }
+  [data-handheld="frame"] [data-phase] header [class*="_split"] {
     display: none !important;
   }
 }

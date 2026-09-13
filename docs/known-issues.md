@@ -329,6 +329,15 @@ unzip -p app-debug.apk classes6.dex | grep -a -o "onCreate: savedUrl" | wc -l
 已挂上的两个 Loader 条目要到 `dsh-web` 下次重启才掉（进程内模块表仍列着
 `dsh-client-ui-directory-picker-browse`）。
 
+
+### 顺手清掉的第三个「宿主侧入口」
+
+会话头右上角那枚「在 文件管理器 中打开工作目录」（`dsh-client-ui-open-in-app` 的分屏按钮 +
+它的下拉）也是**在电脑上**动作：宿主探测本机装了哪些编辑器/Git GUI/终端/文件管理器
+（本机 `GET /open-in-app/apps` 返回 `{"apps":["filemanager"]}`），点击调 `/open-in-app/open`，
+效果是电脑桌面上弹出文件管理器窗口 —— 手机上按下去什么都不发生。同一条原则：去掉
+（适配层里按类名 `header [class*="_split"]` 隐藏；本 dsh 语料里另两处 `_split` 都不在会话头）。
+
 结论：**手机端「添加工作区」与「文件浏览」都按「做不到就不留」处理**，
 不再依赖任何主机侧改动；2026-09-13 适配层自研后，这两条是自研层的原生行为，
 不再是「打在别人代码上的补丁」。

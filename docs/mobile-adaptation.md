@@ -65,8 +65,10 @@ dsh 哪天改了这些，CI 的 `Mobile adaptation contract` 会红，而不是�
   会话切换、面板重挂时丢。
 - **计数收进 aria-label**：窄屏下后台任务胶囊只留状态点与下箭头，完整计数仍在按钮的
   `aria-label` 上（状态与无障碍信息都没丢，只是不再霸占标题宽度）。
-- **做不到的入口不留**：工作区标题行那颗 `+` 开的目录选择器由宿主决定（本部署判成
-  native，对话框开在电脑桌面上），本项目不动服务端 composition，所以直接隐藏。
+- **做不到的入口不留**：凡是「动作发生在电脑上」的入口，手机上按了都没反应，一律隐藏 ——
+  ① 工作区标题行的 `+`（目录选择器判成 native，对话框开在电脑桌面）；
+  ② 会话头右上角的「在 文件管理器 中打开工作目录」（`open-in-app`：宿主探测本机应用，
+  在本机打开工作目录）。本项目不动服务端 composition，所以不去改宿主的判定，直接隐藏入口。
 
 ## 本版**没有**做的（与上游能力的差距，按需再补）
 
@@ -96,4 +98,4 @@ fixture 页面 + 真实的 dsh 组件 CSS，`file://` 加载）：见 `docs/mobi
 
 `MainActivity.MOBILE_PLUGIN_REV` 是 WebView 侧的缓存键：**内容变了必须换 rev**，否则可能
 命中旧缓存。CI 断言 App 常量与 bundle 内的 `id` 一致（`check-mobile-hooks.mjs` 的静态
-不变量）。当前为 `dsh-handheld-mobile-1.0.4`。
+不变量）。当前为 `dsh-handheld-mobile-1.0.5`。

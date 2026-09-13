@@ -46,7 +46,7 @@ const BOOTSTRAP_SRC = path.join(REPO, 'android/app/src/main/assets/plugins/mobil
 
 // 与 MainActivity 的常量保持一致（id 必须与 bundle 内部一致；rev 是缓存键）
 const PLUGIN_ID = 'dsh-handheld-mobile';
-const PLUGIN_REV = 'dsh-handheld-mobile-1.0.4';
+const PLUGIN_REV = 'dsh-handheld-mobile-1.0.5';
 const PLUGIN_URL = `/plugins/??${PLUGIN_ID}/client.js&rev=${PLUGIN_REV}`;
 
 const CHROME = process.env.CHROME_BIN

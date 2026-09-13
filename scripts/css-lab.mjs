@@ -118,6 +118,7 @@ const main = async () => {
                fab: disp('[data-handheld=\"fab\"]'),
                count: disp('[class*=\"_count\"]'),
                drawerBtn: disp('[data-handheld=\"toggle\"]'),
+               splitDisp: disp('[class*=\"_split\"]'),
                menu: (function(){ var m=q('[class*=\"_menu\"]'); if(!m) return null; var r=m.getBoundingClientRect();
                  return {l:Math.round(r.left), t:Math.round(r.top), r:Math.round(r.right), b:Math.round(r.bottom)}; })(),
                chip: (function(){ var c=q('[class*=\"_trigger\"]'); if(!c) return null; var r=c.getBoundingClientRect();
