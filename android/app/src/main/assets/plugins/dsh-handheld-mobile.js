@@ -76,16 +76,21 @@ window.__ModuleLoader__.load({
     width: ${DRAWER_W} !important;
     max-width: 86vw;
     z-index: 40;
-    transform: translateX(-102%);
-    transition: transform .22s cubic-bezier(.2, .7, .3, 1);
+    /* 关：整列推到屏幕外。
+       刻意用 left 而不是 transform —— transform（以及 will-change: transform）会让
+       这一列成为 position:fixed 后代的**包含块**，而设置对话框恰恰渲染在侧栏里
+       （SettingsRoot 注册进 sidebar.settings 槽，是个 position:fixed 浮层）。
+       踩过的后果：对话框被缩进抽屉的坐标系 —— 只有抽屉那么宽、贴着屏幕左边
+       （真机实测 329px vs 视口 384px），里面的桌面两栏布局被压成一字一行。 */
+    left: calc(-1 * (min(86vw, 340px) + 12px));
+    transition: left .22s cubic-bezier(.2, .7, .3, 1);
     /* 刘海与手势条：抽屉自己吃安全区，里面的内容不必各自处理 */
     padding-top: env(safe-area-inset-top, 0px);
     padding-bottom: env(safe-area-inset-bottom, 0px);
     border-right: 0 !important;
-    will-change: transform;
   }
   [data-handheld="frame"]:not([data-sidebar-collapsed]) > [class*="_sidebarCol"] {
-    transform: none;
+    left: 0;
     box-shadow: 0 0 42px rgba(0, 0, 0, .55);
   }
   /* 收起时彻底让出指针，免得一条看不见的侧栏吃掉边缘手势 */

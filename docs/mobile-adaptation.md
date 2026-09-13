@@ -58,6 +58,11 @@ dsh 哪天改了这些，CI 的 `Mobile adaptation contract` 会红，而不是�
 
 - **抽屉的开合状态归宿主**。我们只调用 `ctx.layout.toggleSidebar()`，读它写的
   `data-sidebar-collapsed`。自己再存一份状态迟早会和宿主的窄屏逻辑打架。
+- **抽屉用 `left` 定位，不用 `transform`**：设置对话框（`position: fixed` 浮层）渲染在
+  **侧栏里面**（`SettingsRoot` 注册进 `sidebar.settings` 槽）。`transform` 或
+  `will-change: transform` 会让侧栏成为 fixed 后代的包含块 —— 对话框就被缩进抽屉的
+  坐标系（真机实测：只有 329px 宽、贴着屏幕左边，视口是 384px）。用 `left` 位移没有
+  这个副作用。
 - **CSS 优先，JS 只做三件事**：打 `data-handheld` 标记、注册两个槽（会话头的目录按钮、
   外壳浮层的遮罩与浮动入口）、在抽屉里点会话行时收起抽屉。
 - **槽而不是手塞 DOM**：遮罩与按钮注册进宿主的 `shell.overlay` /
@@ -101,4 +106,4 @@ fixture 页面 + 真实的 dsh 组件 CSS，`file://` 加载）：见 `docs/mobi
 
 `MainActivity.MOBILE_PLUGIN_REV` 是 WebView 侧的缓存键：**内容变了必须换 rev**，否则可能
 命中旧缓存。CI 断言 App 常量与 bundle 内的 `id` 一致（`check-mobile-hooks.mjs` 的静态
-不变量）。当前为 `dsh-handheld-mobile-1.0.8`。
+不变量）。当前为 `dsh-handheld-mobile-1.0.9`。
