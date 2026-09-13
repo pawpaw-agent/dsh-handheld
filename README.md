@@ -336,7 +336,7 @@ node scripts/check-mobile-hooks.mjs
 （`scripts/ui-verify.mjs`，手机视口 + A/B 对照 + 截图）见
 [`docs/mobile-ui-verification.md`](docs/mobile-ui-verification.md)。
 
-> ⚠️ **对上游产物打了四处补丁**（P1–P4）：
+> ⚠️ **对上游产物打了五处补丁**（P1–P5）：
 >
 > - **P1** 摘掉上游 v2.4.0 新增的「删除会话」菜单项 —— 它的宿主半边
 >   （`POST /api/mobile-nav.session.delete`）在「服务端零改动」的前提下不存在，点它只会报
@@ -347,6 +347,8 @@ node scripts/check-mobile-hooks.mjs
 >   于是上溯到整屏高的 frame，点开后台任务菜单会落在屏幕外（箭头会翻转，菜单看不见）。
 > - **P4** 宿主缺席时不显示「文件浏览」 —— 它依赖第三方的 dsh-web-ui/aionui explorer 套件，
 >   本部署没装，按下去没有任何反应。
+> - **P5** 手机上去掉「添加工作区」 —— 它的目录选择器由宿主决定，本部署判成 native，
+>   对话框开在电脑桌面上；按「做不到的入口就不留」去掉（宿主侧钉 `-browse` 可恢复）。
 >
 > 补丁位置、影响面与重新 vendoring 步骤见
 > [`docs/vendored-plugin-patches.md`](docs/vendored-plugin-patches.md)（该文也写了会话删除的

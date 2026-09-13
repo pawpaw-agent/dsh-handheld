@@ -230,7 +230,7 @@ class MainActivity : Activity() {
         // P2 放宽后台任务胶囊的压缩条件），补丁内容与重新 vendoring 步骤见
         // docs/vendored-plugin-patches.md。
         const val MOBILE_PLUGIN_ID = "dsh-web-mobile"
-        const val MOBILE_PLUGIN_REV = "dsh-web-mobile-2.4.1-dsh2"
+        const val MOBILE_PLUGIN_REV = "dsh-web-mobile-2.4.1-dsh3"
         const val MOBILE_PLUGIN_URL = "/plugins/??$MOBILE_PLUGIN_ID/client.js&rev=$MOBILE_PLUGIN_REV"
 
         /**

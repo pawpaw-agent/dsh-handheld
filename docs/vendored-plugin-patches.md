@@ -21,7 +21,7 @@ bundle 原样放在 `android/app/src/main/assets/plugins/dsh-web-mobile-client.j
 > `session-menu.js` 28 行 —— 删除项在触摸下的 arm 判定；另有把 mobile effect 的
 > 触发条件从 `MOBILE_QUERY` 泛化为可传 `TOUCH_QUERY` 的重构。
 
-## 补丁清单（共 4 处）
+## 补丁清单（共 5 处）
 
 ### P1 — 禁用「删除会话」菜单项
 
@@ -146,6 +146,33 @@ html:not(:has([data-aionui-explorer-col])) [data-mobile-nav="explorer"] { displa
 永远判否，按钮就再也回不来了。套件哪天装上，按钮自动回来（这一支**本机无法验证**，
 因为没有套件可装）。
 
+### P5 — 手机上去掉「添加工作区」
+
+**位置**：bundle 内 `effects/aionui-compat.js`，紧随 P4（同在一个
+`@media (max-width: 1023px) and (pointer: coarse)` 块里，桌面不受影响）。
+
+**问题**：工作区标题行右边那颗 `+` 是 **dsh 自己的按钮**（`aria-label = workspace.add`）。
+它开的目录选择器由**宿主**决定：本部署里 `directory-picker-auto` 在 boot 采样时判成
+native（回环绑定 + 非 SSH 启动 + 有 `DISPLAY`/`WAYLAND_DISPLAY` + `zenity` 在 PATH），
+于是对话框开在**电脑的桌面**上 —— 手机上按下去只弹一个 tooltip，什么都不会发生。
+
+**改法**：按「做不到的入口就不留」直接去掉，而不是留一个按了没反应的按钮：
+
+```css
+[aria-label="添加工作区"], [aria-label="Add workspace"] { display: none !important; }
+```
+
+两个 aria-label 是 dsh 自己词典里的 zh / en 值；换第三种语言时按钮会重新出现 —— 只是
+多一个不可用入口，不会坏。
+
+**已知代价（写在这里免得以后当成 bug 查）**：宿主侧若把交互钉成 `-browse`
+（`cordis.patch.yml` 里禁用 `directory-picker`，改挂
+`@deepseek-ai/dsh-host-directory-picker-browse` + `@deepseek-ai/dsh-client-ui-directory-picker-browse`
+两行），这个入口在手机上是**能用的**；届时删掉这一条即可恢复。
+本项目当前的约定是**不动服务端 composition**，所以默认去掉。2026-09-13 曾在主机侧钉过
+一次并用真机确认「手机弹出应用内目录对话框」，随后按用户要求回滚（理由见
+`docs/known-issues.md` §五）。
+
 ## 验证方法
 
 用手机尺寸（384×832、`hasTouch`、触屏 UA）打开真实 dsh 页面，按 App 的方式注入
@@ -174,17 +201,18 @@ P2 的验证在真机上看会话头：在「有后台任务运行、无子代�
    （同时把 `right: auto` 改成 `left: auto`）。
 6. 重新应用 P4：`grep -n "data-aionui-explorer-col"` 找回那条 `html:not(:has(…))` 规则，
    上游若已自带同类守卫则跳过。
-7. `node --check` 确认语法通过。
+7. 重新应用 P5：`grep -n 'aria-label="添加工作区"'` 找回那条双 aria-label 的隐藏规则。
+8. `node --check` 确认语法通过。
    ⚠️ **CSS 整体位于 JS 模板字符串内**：新增注释里**不能出现反引号**，否则会提前
    终止模板字符串。这一条是实测踩过的 —— `node --check` 会以
    `SyntaxError: Unexpected identifier` 报出来。
-8. 同步更新 `MainActivity.MOBILE_PLUGIN_REV` 与 `scripts/ui-verify.mjs` 的
+9. 同步更新 `MainActivity.MOBILE_PLUGIN_REV` 与 `scripts/ui-verify.mjs` 的
    `PLUGIN_REV`（两处必须一致，`check-mobile-hooks.mjs` 的静态不变量会校验 id，
    但 rev 的一致性靠这两处手改）：rev 是 WebView 侧的缓存键，内容变了 rev 不变
    可能命中旧缓存。
-9. 跑 `node scripts/check-mobile-hooks.mjs --contract` —— 重新 vendoring 会改变
+10. 跑 `node scripts/check-mobile-hooks.mjs --contract` —— 重新 vendoring 会改变
    插件依赖的 dsh 钩子集合，那必须是显式动作。
-10. 若上游已把该功能做成无需宿主半边，或本项目决定安装宿主半边，则删除 P1。
+11. 若上游已把该功能做成无需宿主半边，或本项目决定安装宿主半边，则删除 P1。
 
 ## 附：会话删除走「外部移除」
 

@@ -315,11 +315,22 @@ unzip -p app-debug.apk classes6.dex | grep -a -o "onCreate: savedUrl" | wc -l
 | 1 | 点后台任务胶囊，箭头翻转但**菜单在屏幕外** | 插件把胶囊 `_root` 降级为 `position: static`，弹层的包含块上溯到整屏高的 frame，`top: calc(100% + 5px)` 落到屏外 | 插件 P3：`static` → `relative`，clamp 改 `right: 0` |
 | 2 | **导出会话日志提示成功，文件不落地** | `MainActivity` 从未 `setDownloadListener`；Android WebView 对没有 listener 的下载**静默丢弃** | 新增 `enqueueDownload()`：转交 DownloadManager，显式带 Cookie（隧道后面是 cookie 认证），API 29+ 落公共 Downloads |
 | 3 | **文件浏览是死按钮**（头部 + 抽屉两处） | 它只给 frame 打 `data-aionui-explorer-open`，靠第三方 dsh-web-ui/aionui 套件的 explorer 列变浮层；该套件**不是 dsh 自带**，本机 grep `data-aionui-explorer-col` 等 4 个标记全部 0 命中 | 插件 P4：`html:not(:has([data-aionui-explorer-col]))` 时隐藏这两个入口 |
-| 4 | **添加工作区**：手机按下无反应，对话框开在电脑上 | web bundle 挂的是 `directory-picker-auto`，boot 采样判定为 native（回环绑定 + 非 SSH 启动 + 有 DISPLAY/WAYLAND + zenity 在 PATH）→ 在**主机桌面**弹 GTK 对话框 | 主机侧：`~/.dsh/profiles/web/cordis.patch.yml` 禁用 `directory-picker`，改挂 `-browse`（应用内对话框，两边都能用） |
+| 4 | **添加工作区**：手机按下无反应，对话框开在电脑上 | web bundle 挂的是 `directory-picker-auto`，boot 采样判定为 native（回环绑定 + 非 SSH 启动 + 有 DISPLAY/WAYLAND + zenity 在 PATH）→ 在**主机桌面**弹 GTK 对话框 | 插件 P5：手机上直接去掉这个入口（做不到就不留）。宿主侧钉 `-browse` 也能让它可用，但那要改服务端 composition，超出本项目边界 |
 
 第 4 条的取证最直接：手机按下后主机上出现了
 `zenity --file-selection --directory --title=Select Workspace Directory` 进程；杀掉它，
 手机才弹「无法打开文件夹 / directory picker failed: Command failed: zenity …」。
+
+**关于第 4 条的一个来回，记在这里免得重复走**：2026-09-13 当天先在主机侧
+`~/.dsh/profiles/web/cordis.patch.yml` 里把交互钉成了 `-browse`（禁用 `directory-picker`、
+改挂 `dsh-host-directory-picker-browse` + `dsh-client-ui-directory-picker-browse`），并真机确认
+「手机弹出应用内目录对话框」。随后按用户要求**回滚**：不在主机端动 composition。回滚后磁盘
+配置与改动前逐字节一致（md5 `0e07e4a4…`）。注意 live patch 的**「加」生效、「撤」不生效** ——
+已挂上的两个 Loader 条目要到 `dsh-web` 下次重启才掉（进程内模块表仍列着
+`dsh-client-ui-directory-picker-browse`）。
+
+结论：**手机端「添加工作区」与「文件浏览」都按「做不到就不留」处理**（P5 / P4），
+不再依赖任何主机侧改动。
 
 ### 仍未覆盖
 

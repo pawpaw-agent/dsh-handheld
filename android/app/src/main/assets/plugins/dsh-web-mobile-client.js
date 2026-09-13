@@ -2367,6 +2367,24 @@ exports.LAYOUT_CSS = `/* ---------- mobile-only layout (narrow viewport AND touc
   html:not(:has([data-aionui-explorer-col])) [data-mobile-nav="explorer"] {
     display: none !important;
   }
+
+  /* --- P5：手机上去掉「添加工作区」---
+     工作区标题行右边那颗 + （dsh 自己的按钮，aria-label = workspace.add）。
+     它开的目录选择器由**宿主**决定：本部署里 directory-picker-auto 在 boot 采样时
+     判成 native（回环绑定 + 非 SSH 启动 + 有 DISPLAY/WAYLAND + zenity 在 PATH），
+     于是对话框开在**电脑的桌面**上 —— 手机上按下去只弹一个 tooltip，什么都不会发生
+     （真机取证：主机上抓到 zenity --file-selection --directory 进程；杀掉它手机才报
+     directory picker failed: Command failed: zenity …，见 docs/known-issues.md §五）。
+     把交互钉成 -browse 后端就能两边都用，但那要改宿主的 composition，而本项目的约定是
+     **不动服务端**。所以这里按「做不到的入口就不留」直接把它去掉。
+     两个 aria-label 是 dsh 自己词典里的 zh/en 值（workspace.add）；换第三种语言时
+     按钮会重新出现 —— 只是多一个按了没反应的入口，不会坏，要根治仍在宿主侧钉 -browse。
+     若宿主已钉 -browse（手机可用），删掉这一条即可恢复入口。
+     本块整体在 @media (max-width: 1023px) and (pointer: coarse) 里，桌面不受影响。 */
+  [aria-label="添加工作区"],
+  [aria-label="Add workspace"] {
+    display: none !important;
+  }
   /* --- Settings dialog on mobile ---
      Desktop: 800px two-column flex (188px nav + content). Mobile: a
      near-full-width sheet — nav tabs wrap into rows on top, option rows
