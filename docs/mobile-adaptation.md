@@ -117,4 +117,4 @@ fixture 页面 + 真实的 dsh 组件 CSS，`file://` 加载）：见 `docs/mobi
 
 `MainActivity.MOBILE_PLUGIN_REV` 是 WebView 侧的缓存键：**内容变了必须换 rev**，否则可能
 命中旧缓存。CI 断言 App 常量与 bundle 内的 `id` 一致（`check-mobile-hooks.mjs` 的静态
-不变量）。当前为 `dsh-handheld-mobile-1.0.11`。
+不变量）。当前为 `dsh-handheld-mobile-1.0.12`。
