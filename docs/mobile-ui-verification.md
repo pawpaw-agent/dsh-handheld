@@ -137,6 +137,22 @@ node scripts/device-ui-verify.mjs --url "http://<本机 LAN IP>:38082/?token=<to
 > Android WebView 的 devtools 还有个脾气：**只有首条 `Page.navigate` 稳**，
 > `Page.enable` / `Runtime.evaluate` 会间歇性挂住。脚本已按此调整顺序并容忍 enable 失败。
 
+## 真机取证的几个坑（都踩过）
+
+- **无障碍树给不出命中测试**：`uiautomator dump` 里的 `clickable=true` + 正常 `bounds`
+  只说明布局对，不说明这一笔点得到（1.0.11 的 bug 就是「bounds 全对、点了没反应」）。
+  要判断「点了有没有反应」，只能真的 `input tap` 再核对状态变化。
+- **穿透要用「背后的元素」来测**：怀疑某层点不动时，去点它背后一个**有明显反应**的元素
+  （输入框 → 软键盘弹起、会话行 → 切换），有反应就说明是穿透而不是被吃掉。
+  1.0.11 的定位就是靠「点设置页背后的输入框，软键盘起来了」这一条。
+- **抽屉开合有个无障碍树信号**：收起时宿主把侧栏渲染成 rail，树里会出现「打开侧边栏」
+  这个按钮；展开时它消失。看不到侧栏内容时可以用它判断抽屉状态。
+- **`logcat -t N` 会被三星自己的日志挤出窗口**：查本 App 的日志要用
+  `adb logcat -d | grep DshHandheld`（`DiagLog.i` 的 tag 就是 `DshHandheld`），
+  不要用行数截断 —— 这一条耽误过一次取证。
+- **a11y 树偶尔会给出空/残缺的一棵**：dump 后先看可见节点数，太少就再 dump 一次
+  （`/tmp/dump.py` 就是这么写的）。
+
 ## 隧道不变量：真机秒级检查
 
 ```sh
