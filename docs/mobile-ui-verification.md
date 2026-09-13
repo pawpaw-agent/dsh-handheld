@@ -46,8 +46,10 @@ panelPE / colPE`）是为 1.0.11 那个「设置页点不动」加的：**几何
 内部**（真实页面就是这样，`SettingsRoot` 注册进 `sidebar.settings` 槽），跑两遍对比 ——
 
 ```sh
-# 1) 负对照：剥掉兜底规则的 CSS，故障应当复现
-node /tmp/css-of-plugin.mjs /tmp/plugin-css-legacy.css --legacy
+# 0) 先把 bundle 里那段 CSS 抽出来（与 WebView 里跑的逐字相同）
+node scripts/plugin-css.mjs /tmp/plugin-css.css
+# 1) 负对照：剥掉模态兜底规则的版本，故障应当复现
+node scripts/plugin-css.mjs /tmp/plugin-css-legacy.css --drop-modal-guard
 node scripts/css-lab.mjs --page file:///tmp/fixture/fixture-modal.html \
   --css /tmp/plugin-css-legacy.css --out /tmp/shot-legacy.png
 #   → closeHit=div               （✕ 不是命中目标 = 点不动）
@@ -55,7 +57,6 @@ node scripts/css-lab.mjs --page file:///tmp/fixture/fixture-modal.html \
 #     behindEatenByOverlay=false （点击穿透到背后的页面）
 #     panelPE / maskPE / colPE = none
 # 2) 当前 CSS：应当可点
-node /tmp/css-of-plugin.mjs /tmp/plugin-css.css
 node scripts/css-lab.mjs --page file:///tmp/fixture/fixture-modal.html \
   --css /tmp/plugin-css.css --out /tmp/shot-fixed.png
 #   → closeHit=button.VOzbGW_close、closeIsInPanel=true
@@ -63,10 +64,9 @@ node scripts/css-lab.mjs --page file:///tmp/fixture/fixture-modal.html \
 #     panelPE / maskPE / colPE = auto
 ```
 
-`scripts/css-lab.mjs` 是仓库里的（探针随适配层一起演进）；fixture 与
-`/tmp/css-of-plugin.mjs`（从 bundle 里抽出那段 CSS 模板字符串并做 `${…}` 替换，
-`--legacy` 顺带剥掉指定的那条规则）是本机临时产物。**负对照必须有**：
-一条永远通过的断言等于没有断言。
+`scripts/css-lab.mjs` 与 `scripts/plugin-css.mjs` 都在仓库里（探针与抽取器随适配层
+一起演进）；fixture 页面是本机临时产物（真实的 dsh 组件 CSS 从已安装的 bundle 里抽，
+不随仓库走）。**负对照必须有**：一条永远通过的断言等于没有断言。
 
 ⚠️ **fixture 是近似**：这个沙箱里 Chromium 发不出任何 HTTP（`Page.navigate` 到 http://
 一律超时，`file://` 与 `data:` 可以），所以页面是照着 dsh 真实产物搭的，主题变量不全、
