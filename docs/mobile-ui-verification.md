@@ -5,30 +5,44 @@
 
 ## 它建立在什么之上
 
-dsh 官方前端是桌面布局，窄屏下侧栏常驻挤占内容。适配靠 **App 侧注入**
-[dsh-web-mobile](https://github.com/mexiaosqwq/dsh-web-mobile)（MIT）实现，
-服务端零改动：
+dsh 官方前端是桌面布局，窄屏下侧栏常驻挤占内容。适配靠 **App 侧注入一个客户端插件**
+实现（2026-09-13 起这一层是本仓库自研，见 `docs/mobile-adaptation.md`），服务端零改动：
 
 ```
 MainActivity
-  ├─ addDocumentStartJavaScript(assets/plugins/mobile-bootstrap.js)   ← 钩住 __DSH_BOOT__
-  └─ shouldInterceptRequest → assets/plugins/dsh-web-mobile-client.js ← 把插件喂给引导循环
+  ├─ addDocumentStartJavaScript(assets/plugins/mobile-bootstrap.js)     ← 钩住 __DSH_BOOT__
+  └─ shouldInterceptRequest → assets/plugins/dsh-handheld-mobile.js     ← 把插件喂给引导循环
 ```
 
-插件通过 **dsh 的 DOM 属性**找到界面结构再改造它：
+插件通过 **dsh 的 DOM 属性与结构**找到界面再改造它。契约（唯一事实来源）在
+`scripts/mobile-hooks-contract.json`，扫描范围是**整份 bundle**（规则大量写在 CSS 里）：
 
 | 钩子 | 用途 |
 |---|---|
-| `data-phase` | 应用就绪/阶段判定，抽屉与全屏的挂载时机 |
-| `data-composer-input` | 输入框定位（键盘避让、悬浮输入条） |
-| `data-slot` | 插槽结构 |
-| `data-conversation-composer-overlay` | 会话区浮层 |
-| `data-shell-overlay` | 外壳浮层 |
-| `data-testid` | 稳定的测试锚点 |
+| `data-phase` | 会话阶段判定（`hero` 没有会话头 → 浮动入口在那时出现） |
+| `data-sidebar-collapsed` | 抽屉的开合信号（宿主窄屏下的 `!narrowExpanded`） |
 
-**这些钩子没有任何版本契约**：dsh 独立演进，插件是我们 vendor 下来钉死的
-（`2.4.1-dsh3`）。dsh 哪天改个属性名，适配就**静默失效** —— 抽屉不弹、布局错位，
-只能在手机上发现。这就是下面两层验证要解决的问题。
+**这些钩子没有版本契约**：dsh 独立演进，适配层钉在 `dsh-handheld-mobile-1.0.0`。
+dsh 哪天改了属性名或那几层结构，适配就**静默失效** —— 抽屉不弹、布局错位，只能在手机上
+发现。这就是下面几层验证要解决的问题。
+
+## 零层：本地渲染回环（改 CSS 时用，秒级）
+
+改一行 CSS 就等一次 CI 构建 + 装机是受不了的，所以在本地把候选样式渲染出来看：
+
+```sh
+# fixture 页面（用真实 class 名搭的最小结构）+ 真实的 dsh 组件 CSS
+node /tmp/shot.mjs --page file:///tmp/fixture/fixture.html \
+  --css /tmp/fixture/our.css [--open 1] [--hero 1] --out /tmp/fixture/shot.png
+```
+
+它同时打一份**计算样式探针**（侧栏 position/left/width、遮罩 opacity、胶囊计数 display、
+弹层矩形、横向溢出），所以「抽屉是不是真的滑到了屏外」「菜单有没有落在视口内」是**断言**，
+不是看图猜。
+
+⚠️ **fixture 是近似**：这个沙箱里 Chromium 发不出任何 HTTP（`Page.navigate` 到 http://
+一律超时，`file://` 与 `data:` 可以），所以页面是照着 dsh 真实产物搭的，主题变量不全、
+视觉不可信；**几何与层叠可信，最终判据永远是下面第三层的真机截图**。
 
 ## 第一层：契约金丝雀（可进 CI，秒级）
 
@@ -53,7 +67,7 @@ node scripts/check-mobile-hooks.mjs          # 需要本机装有 dsh
 逐个断言契约里声明的钩子**确实存在于当前 dsh 的前端产物**里。dsh 改了名字就红。
 
 **每次升级 dsh 之后跑一次。** 若钩子有变，说明适配需要相应处理
-（重新 vendoring 上游插件 / 修好选择器后再打补丁，见 `docs/vendored-plugin-patches.md`）。
+（改适配层的选择器 / 改契约后再跑，见 `docs/mobile-adaptation.md`）。
 
 确认新钩子在真实 dsh 上存在后，用 `--update-contract` 刷新契约：
 

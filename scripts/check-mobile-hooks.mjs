@@ -5,7 +5,7 @@
  * ## 它防的是什么
  *
  * 这个 App 的价值是「在手机上用 dsh 网页」，而那个适配完全建立在
- * **dsh 前端的一组 DOM 钩子**之上（dsh-web-mobile 插件通过 `data-phase`、
+ * **dsh 前端的一组 DOM 钩子**之上（自研适配层通过 `data-phase`、
  * `data-composer-input` 之类的属性找到 dsh 的界面结构，再改造它）。
  *
  * 这些钩子**没有任何版本契约**：dsh 独立演进，插件是我们 vendor 下来钉死的。
@@ -38,7 +38,7 @@ import { execSync } from 'node:child_process';
 import path from 'node:path';
 
 const REPO = path.resolve(path.dirname(new URL(import.meta.url).pathname), '..');
-const BUNDLE = path.join(REPO, 'android/app/src/main/assets/plugins/dsh-web-mobile-client.js');
+const BUNDLE = path.join(REPO, 'android/app/src/main/assets/plugins/dsh-handheld-mobile.js');
 const BOOTSTRAP = path.join(REPO, 'android/app/src/main/assets/plugins/mobile-bootstrap.js');
 const MAIN_ACTIVITY = path.join(
   REPO, 'android/app/src/main/java/com/dshhandheld/app/MainActivity.kt');
@@ -88,7 +88,22 @@ const OTHER_HOST_PREFIXES = [
  *    它表达的是「别的插件正在拖东西」，dsh 前端里当然找不到，不能进 `dshHooks`。
  *  - `data-file-viewer-open`：插件自己写入并自己读回。
  */
-const PLUGIN_OWN = ['data-mobile-nav', 'data-mobile-nav-dragging', 'data-file-viewer-open'];
+const PLUGIN_OWN = ['data-handheld'];
+
+/**
+ * 从插件 bundle 里读出它依赖的宿主 DOM 钩子（`data-*` 属性选择器）。
+ *
+ * 扫的是**整份文件**而不只是 `querySelector('...[data-x]')`：2026-09-13 起适配层是
+ * 自己写的，大量规则直接写在 CSS 里（`[data-phase] header`、`:has([data-phase="hero"])`），
+ * 只认 JS 里的 querySelector 会让这些依赖从契约里漏掉 —— 金丝雀就哑了。
+ *
+ * `dataset.foo = ...` 这种写法不算：它不产生字面量 `data-foo`，也就不是「读宿主钩子」。
+ */
+function readHostHooks(text) {
+  const found = new Set();
+  for (const m of text.matchAll(/\[(data-[a-z-]+)(?:[=\]])/g)) found.add(m[1]);
+  return found;
+}
 
 const die = (msg) => { console.error(`\n✗ ${msg}\n`); process.exit(1); };
 
@@ -128,10 +143,7 @@ function findDshModules() {
 // 而不是悄悄多依赖几个没人验证过的钩子。
 if (process.argv.includes('--contract')) {
   const b = readFileSync(BUNDLE, 'utf8');
-  const read = new Set();
-  for (const m of b.matchAll(/(?:querySelector|querySelectorAll|closest|matches)\s*\(\s*'([^']+)'/g)) {
-    for (const a of m[1].matchAll(/\[(data-[a-z-]+)(?:[=\]])/g)) read.add(a[1]);
-  }
+  const read = readHostHooks(b);
   const otherPrefixes = OTHER_HOST_PREFIXES;
   const actual = [...read]
     .filter((h) => !otherPrefixes.some((p) => h.startsWith(p)))
@@ -206,10 +218,7 @@ function collectFrontendText(root) {
 
 // ── 从插件 bundle 提取「读取的钩子」────────────────────────────────────────
 const bundle = readFileSync(BUNDLE, 'utf8');
-const readHooks = new Set();
-for (const m of bundle.matchAll(/(?:querySelector|querySelectorAll|closest|matches)\s*\(\s*'([^']+)'/g)) {
-  for (const a of m[1].matchAll(/\[(data-[a-z-]+)(?:[=\]])/g)) readHooks.add(a[1]);
-}
+const readHooks = readHostHooks(bundle);
 
 const isOtherHost = (h) => OTHER_HOST_PREFIXES.some((p) => h.startsWith(p));
 const dshHooks = [...readHooks].filter((h) => !isOtherHost(h) && !PLUGIN_OWN.includes(h)).sort();
@@ -291,7 +300,7 @@ if (missing.length) {
   for (const h of missing) console.log(`  - ${h}`);
   console.log('');
   console.log('处理方式：确认 dsh 是否改了属性名。若改了，需要更新');
-  console.log('  android/app/src/main/assets/plugins/dsh-web-mobile-client.js');
+  console.log('  android/app/src/main/assets/plugins/dsh-handheld-mobile.js');
   console.log('（重新 vendoring 上游插件，或修好选择器后再打补丁）。');
   console.log('详见 docs/vendored-plugin-patches.md。');
 }

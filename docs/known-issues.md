@@ -312,10 +312,10 @@ unzip -p app-debug.apk classes6.dex | grep -a -o "onCreate: savedUrl" | wc -l
 
 | # | 现象 | 根因 | 修法 |
 |---|---|---|---|
-| 1 | 点后台任务胶囊，箭头翻转但**菜单在屏幕外** | 插件把胶囊 `_root` 降级为 `position: static`，弹层的包含块上溯到整屏高的 frame，`top: calc(100% + 5px)` 落到屏外 | 插件 P3：`static` → `relative`，clamp 改 `right: 0` |
+| 1 | 点后台任务胶囊，箭头翻转但**菜单在屏幕外** | 上游插件把胶囊 `_root` 降级为 `position: static`，弹层的包含块上溯到整屏高的 frame，`top: calc(100% + 5px)` 落到屏外 | 自研层直接不降级 `_root`，弹层改 `right: 0` 展开 |
 | 2 | **导出会话日志提示成功，文件不落地** | `MainActivity` 从未 `setDownloadListener`；Android WebView 对没有 listener 的下载**静默丢弃** | 新增 `enqueueDownload()`：转交 DownloadManager，显式带 Cookie（隧道后面是 cookie 认证），API 29+ 落公共 Downloads |
-| 3 | **文件浏览是死按钮**（头部 + 抽屉两处） | 它只给 frame 打 `data-aionui-explorer-open`，靠第三方 dsh-web-ui/aionui 套件的 explorer 列变浮层；该套件**不是 dsh 自带**，本机 grep `data-aionui-explorer-col` 等 4 个标记全部 0 命中 | 插件 P4：`html:not(:has([data-aionui-explorer-col]))` 时隐藏这两个入口 |
-| 4 | **添加工作区**：手机按下无反应，对话框开在电脑上 | web bundle 挂的是 `directory-picker-auto`，boot 采样判定为 native（回环绑定 + 非 SSH 启动 + 有 DISPLAY/WAYLAND + zenity 在 PATH）→ 在**主机桌面**弹 GTK 对话框 | 插件 P5：手机上直接去掉这个入口（做不到就不留）。宿主侧钉 `-browse` 也能让它可用，但那要改服务端 composition，超出本项目边界 |
+| 3 | **文件浏览是死按钮**（头部 + 抽屉两处） | 它只给 frame 打 `data-aionui-explorer-open`，靠第三方 dsh-web-ui/aionui 套件的 explorer 列变浮层；该套件**不是 dsh 自带**，本机 grep `data-aionui-explorer-col` 等 4 个标记全部 0 命中 适配层不再提供这个入口（自研层不含 explorer 集成） |
+| 4 | **添加工作区**：手机按下无反应，对话框开在电脑上 | web bundle 挂的是 `directory-picker-auto`，boot 采样判定为 native（回环绑定 + 非 SSH 启动 + 有 DISPLAY/WAYLAND + zenity 在 PATH）→ 在**主机桌面**弹 GTK 对话框 适配层在手机上直接隐藏这个入口（做不到就不留）。宿主侧钉 `-browse` 也能让它可用，但那要改服务端 composition，超出本项目边界 |
 
 第 4 条的取证最直接：手机按下后主机上出现了
 `zenity --file-selection --directory --title=Select Workspace Directory` 进程；杀掉它，
@@ -329,8 +329,9 @@ unzip -p app-debug.apk classes6.dex | grep -a -o "onCreate: savedUrl" | wc -l
 已挂上的两个 Loader 条目要到 `dsh-web` 下次重启才掉（进程内模块表仍列着
 `dsh-client-ui-directory-picker-browse`）。
 
-结论：**手机端「添加工作区」与「文件浏览」都按「做不到就不留」处理**（P5 / P4），
-不再依赖任何主机侧改动。
+结论：**手机端「添加工作区」与「文件浏览」都按「做不到就不留」处理**，
+不再依赖任何主机侧改动；2026-09-13 适配层自研后，这两条是自研层的原生行为，
+不再是「打在别人代码上的补丁」。
 
 ### 仍未覆盖
 

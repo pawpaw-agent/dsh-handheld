@@ -133,7 +133,7 @@ dsh-handheld/
 │   ├── terminal-rewrite-plan.md              # 终端自研计划（已中止，只留结论）
 │   ├── releasing.md                          # 发布说明的公共部分（安装 / 许可 / 依赖上限）
 │   ├── release-notes-0.1.{2,3,4}.md          # 各版本发布说明
-│   ├── vendored-plugin-patches.md            # 对上游插件 bundle 的唯一补丁
+│   ├── mobile-adaptation.md                  # 自研手机端适配层：依赖、取舍、边界
 │   ├── dsh-plugins-404-fix.md
 │   └── archive/dsh-protocol.md               # 【存档】DSH 线上协议逆向规格（已无实现）
 ├── .github/workflows/ci.yml                  # dbclient → 终端一致性门禁 → 构建并校验 release APK
@@ -309,22 +309,19 @@ secrets 缺失时（fork / PR）回退 debug 签名并告警，该产物**不可
 
 ## 移动端界面适配
 
-dsh 官方 Web 前端是桌面布局，窄屏下侧栏会常驻挤占内容。本项目在 **App 侧**注入
-[dsh-web-mobile](https://github.com/mexiaosqwq/dsh-web-mobile)（MIT，作者 mexiaosqwq）
-客户端插件来适配——`addDocumentStartJavaScript` 钩住 `__DSH_BOOT__` 启动图，
-`shouldInterceptRequest` 从 APK assets 返回插件 bundle，**服务端不需要装任何插件**。
+dsh 官方 Web 前端是桌面布局，窄屏下侧栏会常驻挤占内容。本项目在 **App 侧**注入一个
+**自研的**客户端插件（`assets/plugins/dsh-handheld-mobile.js`）来适配——
+`addDocumentStartJavaScript` 钩住 `__DSH_BOOT__` 启动图，`shouldInterceptRequest` 从 APK
+assets 返回插件 bundle，**服务端不需要装任何插件**。
 
-> 该项目是第三方作品，其许可证见 `android/app/src/main/assets/plugins/LICENSE-dsh-web-mobile.txt`。
-
-**适配建立在 dsh 的一组 DOM 属性之上**（`data-phase` / `data-composer-input` /
-`data-slot` / `data-shell-overlay` / `data-conversation-composer-overlay` / `data-testid`），
-而这些属性**没有版本契约** —— dsh 独立演进，插件是我们 vendor 下来钉死的。dsh 改个属性名，
-适配就**静默失效**（抽屉不弹、布局错位），只能在手机上发现。
+**适配建立在 dsh 的 DOM 之上**：两个属性（`data-phase`、`data-sidebar-collapsed`）加三层
+结构（外壳网格与侧栏列、会话头、头部弹层）。这些**没有版本契约** —— dsh 独立演进，
+适配层钉在 `dsh-handheld-mobile-1.0.0`。dsh 改个属性名或那几层结构，适配就**静默失效**
+（抽屉不弹、布局错位），只能在手机上发现。
 
 因此有**契约金丝雀**在 CI 里守着：`node scripts/check-mobile-hooks.mjs --contract`
-断言插件实际读取的钩子与提交在仓库里的
-`scripts/mobile-hooks-contract.json` 完全一致 —— 重新 vendoring 若多依赖了
-没验证过的钩子，CI 直接失败。
+断言适配层实际读取的钩子与提交在仓库里的 `scripts/mobile-hooks-contract.json` 完全一致
+（扫描范围是**整份 bundle**，规则写在 CSS 里也算），改了依赖而不更新契约，CI 直接失败。
 
 **升级 dsh 之后**请在本机跑一次完整检查（需要装着 dsh 的环境）：
 
@@ -336,25 +333,21 @@ node scripts/check-mobile-hooks.mjs
 （`scripts/ui-verify.mjs`，手机视口 + A/B 对照 + 截图）见
 [`docs/mobile-ui-verification.md`](docs/mobile-ui-verification.md)。
 
-> ⚠️ **对上游产物打了五处补丁**（P1–P5）：
+> ℹ️ **手机端适配层是本仓库自研**（`android/app/src/main/assets/plugins/dsh-handheld-mobile.js`，
+> 约 15 KB）：一个标准的 dsh 客户端插件，由 App 在 document-start 注入，服务端零改动。
 >
-> - **P1** 摘掉上游 v2.4.0 新增的「删除会话」菜单项 —— 它的宿主半边
->   （`POST /api/mobile-nav.session.delete`）在「服务端零改动」的前提下不存在，点它只会报
->   `HTTP 404`。
-> - **P2** 放宽窄屏下后台任务胶囊的压缩条件 —— 上游只在「子代理谱系 + 后台任务」同时存在
->   时压缩它，实测两者只出现其一时会把会话标题压成一个字（渲染成 `检..`）。
-> - **P3** 修头部弹层的锚点 —— 插件把胶囊 root 降级成 `position: static`，弹层的包含块
->   于是上溯到整屏高的 frame，点开后台任务菜单会落在屏幕外（箭头会翻转，菜单看不见）。
-> - **P4** 宿主缺席时不显示「文件浏览」 —— 它依赖第三方的 dsh-web-ui/aionui explorer 套件，
->   本部署没装，按下去没有任何反应。
-> - **P5** 手机上去掉「添加工作区」 —— 它的目录选择器由宿主决定，本部署判成 native，
->   对话框开在电脑桌面上；按「做不到的入口就不留」去掉（宿主侧钉 `-browse` 可恢复）。
+> 2026-09-13 之前这一层是 vendored 的第三方 dsh-web-mobile（MIT）外加 5 个手工补丁 ——
+> 每次上游发版都要在上游文件**体内**重打一遍，补丁与上游代码混在一起说不清归属。
+> 现在它是我们自己的代码：进 git、有版本、能单独 review；上游插件与许可证已删除。
 >
-> 补丁位置、影响面与重新 vendoring 步骤见
-> [`docs/vendored-plugin-patches.md`](docs/vendored-plugin-patches.md)（该文也写了会话删除的
-> 「外部移除」做法：dsh 官方不在接口里提供物理删除，UI 上只有单向且不回收磁盘的归档）。
-> 2026-09-13 的全 UI 走查结论（哪些正常、修了什么、哪些依赖环境）见
-> [`docs/known-issues.md`](docs/known-issues.md) §五。
+> 它依赖的 dsh DOM 钩子只有两个（`data-phase`、`data-sidebar-collapsed`），由
+> `scripts/check-mobile-hooks.mjs` 对着 `scripts/mobile-hooks-contract.json` 守 —— dsh 哪天
+> 改了这些，CI 的 `Mobile adaptation contract` 会红，而不是手机上一声不响地坏掉。
+>
+> 设计取舍、能力边界（本版**没有**做手势等）与验证方式见
+> [`docs/mobile-adaptation.md`](docs/mobile-adaptation.md)；三层验证见
+> [`docs/mobile-ui-verification.md`](docs/mobile-ui-verification.md)。
+> 2026-09-13 的全 UI 走查结论见 [`docs/known-issues.md`](docs/known-issues.md) §五。
 
 ---
 
@@ -403,7 +396,6 @@ node scripts/check-mobile-hooks.mjs
 | Termux `terminal-view` / `terminal-emulator` | Apache-2.0（上游 `LICENSE.md` 的例外条款） | Gradle 依赖 |
 | Termux `termux-shared` 的 `terminal/io/**`（vendored） | **GPLv3-only** | `java/com/termux/shared/terminal/io/` |
 | Dropbear `dbclient` / `dropbearkey` | MIT 风格（见随附文件） | `jniLibs/.../LICENSE-dropbear.txt` |
-| dsh-web-mobile 客户端插件 | MIT | `assets/plugins/LICENSE-dsh-web-mobile.txt` |
 
 > ⚠️ Apache-2.0 要求随附许可证文本，**当前 APK 里没有**（进不了 APK 的那份 `.txt` 见上文
 > 「Termux 组件的 vendoring」）。这是待补的合规项。

@@ -41,12 +41,12 @@ const TOKEN = arg('token', process.env.DSH_TOKEN ?? '');
 const OUT = arg('out', path.join(process.cwd(), 'ui-verify-out'));
 const REPO = path.resolve(path.dirname(new URL(import.meta.url).pathname), '..');
 
-const BUNDLE = path.join(REPO, 'android/app/src/main/assets/plugins/dsh-web-mobile-client.js');
+const BUNDLE = path.join(REPO, 'android/app/src/main/assets/plugins/dsh-handheld-mobile.js');
 const BOOTSTRAP_SRC = path.join(REPO, 'android/app/src/main/assets/plugins/mobile-bootstrap.js');
 
 // 与 MainActivity 的常量保持一致（id 必须与 bundle 内部一致；rev 是缓存键）
-const PLUGIN_ID = 'dsh-web-mobile';
-const PLUGIN_REV = 'dsh-web-mobile-2.4.1-dsh3';
+const PLUGIN_ID = 'dsh-handheld-mobile';
+const PLUGIN_REV = 'dsh-handheld-mobile-1.0.0';
 const PLUGIN_URL = `/plugins/??${PLUGIN_ID}/client.js&rev=${PLUGIN_REV}`;
 
 const CHROME = process.env.CHROME_BIN

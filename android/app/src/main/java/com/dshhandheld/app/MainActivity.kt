@@ -216,21 +216,22 @@ class MainActivity : Activity() {
 
         const val PREF_SERVER_TOKEN = "server_token" // dsh 0.1.2+ 一次性启动 token（服务重启后自动更新）
 
-        // ── 移动端适配插件（dsh-web-mobile, MIT, github.com/mexiaosqwq/dsh-web-mobile）──
+        // ── 手机端适配插件（dsh-handheld-mobile，本仓库自研）────────────────
         // 纯 App 侧注入，服务端零改动：doc-start 时用 setter 钩住 window.__DSH_BOOT__，
-        // 在服务端写入的启动图里补一条 dsh-web-mobile 插件项（entry + batch，URL 指向
-        // 我们自己的 agent 数据 URL）；WebView 引导循环按清单 create 该插件时，
-        // shouldInterceptRequest 命中该 URL 返回 APK assets 里的插件 bundle（283KB）。
-        // 插件运行时外部依赖仅 react/jsx-runtime + dsh-client-ui-primitives，
-        // 均已在前端壳的 staticModules 种子里（已验证），无需额外注入。
-        // 上游插件（mexiaosqwq/dsh-web-mobile，MIT）的 id 与缓存版本号。id 必须与
-        // APK assets 里那个 bundle 内部的 `id: "dsh-web-mobile"` 一致，改不得。
+        // 在服务端写入的启动图里补一条插件项（entry + batch，URL 指向我们自己的 agent
+        // 数据 URL）；WebView 引导循环按清单 create 该插件时，shouldInterceptRequest 命中
+        // 该 URL 返回 APK assets 里的插件 bundle。
+        // 插件运行时外部依赖仅 react/jsx-runtime + dsh-client-ui-primitives，均已在前端壳
+        // 的 staticModules 种子里（已验证），无需额外注入。
+        //
+        // 2026-09-13 起这一层是**我们自己的代码**：此前 vendored 的第三方
+        // dsh-web-mobile（MIT）已删除 —— 每次上游发版都要在它体内重打补丁，补丁与上游
+        // 代码混在一起说不清归属。适配层源码见 assets/plugins/dsh-handheld-mobile.js。
+        //
+        // id 必须与那个 bundle 内的 `id: "dsh-handheld-mobile"` 一致，改不得（CI 有断言）。
         // rev 只是 WebView 侧的缓存键：内容变更必须换 rev，否则可能命中旧缓存。
-        // `-dshN` 后缀标记我们对 bundle 打过补丁（P1 摘掉「删除会话」注入项、
-        // P2 放宽后台任务胶囊的压缩条件），补丁内容与重新 vendoring 步骤见
-        // docs/vendored-plugin-patches.md。
-        const val MOBILE_PLUGIN_ID = "dsh-web-mobile"
-        const val MOBILE_PLUGIN_REV = "dsh-web-mobile-2.4.1-dsh3"
+        const val MOBILE_PLUGIN_ID = "dsh-handheld-mobile"
+        const val MOBILE_PLUGIN_REV = "dsh-handheld-mobile-1.0.0"
         const val MOBILE_PLUGIN_URL = "/plugins/??$MOBILE_PLUGIN_ID/client.js&rev=$MOBILE_PLUGIN_REV"
 
         /**
@@ -297,7 +298,7 @@ class MainActivity : Activity() {
                 }
             }
             webViewClient = object : WebViewClient() {
-                // 拦截 dsh-web-mobile 插件 bundle：返回 APK assets 里的客户端脚本
+                // 拦截手机端适配插件 bundle：返回 APK assets 里的客户端脚本
                 override fun shouldInterceptRequest(
                     view: WebView?,
                     request: android.webkit.WebResourceRequest?
@@ -306,7 +307,7 @@ class MainActivity : Activity() {
                     // 兜底匹配：?? 可能被编码为 %3F%3F，只锚定 /plugins/ 前缀 + 插件 id
                     if (!u.contains("/plugins/") || !u.contains("$MOBILE_PLUGIN_ID/client.js")) return null
                     val bytes = try {
-                        assets.open("plugins/dsh-web-mobile-client.js").use { it.readBytes() }
+                        assets.open("plugins/dsh-handheld-mobile.js").use { it.readBytes() }
                     } catch (e: Exception) { return null }
                     return android.webkit.WebResourceResponse(
                         "text/javascript", "utf-8", ByteArrayInputStream(bytes)

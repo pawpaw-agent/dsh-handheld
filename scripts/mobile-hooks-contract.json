@@ -1,24 +1,12 @@
 {
-  "note": "移动端适配所依赖的 dsh DOM 钩子。由 scripts/check-mobile-hooks.mjs 维护；CI 用 --contract 模式校验插件与它一致，完整检查需在本机装有 dsh 时运行。",
+  "note": "手机端适配层依赖的 dsh DOM 钩子。由 scripts/check-mobile-hooks.mjs 维护；CI 用 --contract 模式校验插件与它一致，完整检查（断言这些钩子确实在 dsh 前端产物里）需在本机装有 dsh 时运行。\n扫描范围是**整份 bundle**，不只是 JS 里的 querySelector：适配层的规则大量写在 CSS 里（[data-phase] header、:has([data-phase=\"hero\"])），只认 JS 会让这些依赖漏出契约。\n2026-09-13 起适配层自研，钩子从 6 个收敛到 2 个 —— 变少是正常的，但每一次变化都必须是显式动作（跑 --update-contract），不是悄悄漂移。",
   "verifiedAgainst": {
     "dsh": "0.1.5-rc.2",
-    "date": "2026-09-11"
+    "date": "2026-09-13"
   },
   "dshHooks": [
-    "data-composer-input",
-    "data-conversation-composer-overlay",
     "data-phase",
-    "data-shell-overlay",
-    "data-slot",
-    "data-testid"
+    "data-sidebar-collapsed"
   ],
-  "otherHostHooks": [
-    "data-aionui-explorer-col",
-    "data-aionui-preview-col",
-    "data-dsh-market-root",
-    "data-dsh-ssh-entry",
-    "data-dsh-taskboard-entry",
-    "data-genui",
-    "data-gitgraph-chip-anchor"
-  ]
+  "otherHostHooks": []
 }
