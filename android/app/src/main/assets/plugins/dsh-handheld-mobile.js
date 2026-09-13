@@ -47,6 +47,19 @@ window.__ModuleLoader__.load({
     var DRAWER_W = "min(86vw, 340px)";
 
     /**
+     * 「点了这一笔不等于选完了」的目标集合 —— 抽屉的「点一下收起来」启发式在这上面让路。
+     *
+     *  - 表单控件与按钮：它们自己处理这一笔（搜索框、视图选项、会话行按钮……）；
+     *  - 各类浮层：借住在侧栏 DOM 里、视觉上却是视口级的对话框 / 菜单 / 下拉。
+     *    最要命的是设置对话框：把它当「选完了」收掉抽屉，对话框会当场冻住
+     *    （原理见 CSS 第 2 节与下面 onFrameClick 的注释）。
+     */
+    var INERT_TARGETS = [
+      "input", "textarea", "select", "button", "[contenteditable]",
+      "[role=dialog]", "[role=alertdialog]", "[role=menu]", "[role=listbox]", "[aria-modal=true]",
+    ].join(", ");
+
+    /**
      * 我们的样式表。
      *
      * ⚠️ 这是一段 JS 模板字符串：**里面不能出现反引号**，否则提前终止字符串
@@ -96,6 +109,16 @@ window.__ModuleLoader__.load({
   /* 收起时彻底让出指针，免得一条看不见的侧栏吃掉边缘手势 */
   [data-handheld="frame"][data-sidebar-collapsed] > [class*="_sidebarCol"] {
     pointer-events: none;
+  }
+  /* ……但抽屉里只要挂着模态，整列就必须照旧吃指针。
+     设置对话框是**视口级**浮层（fixed + inset:0，盖满整屏），逻辑上却住在侧栏里
+     （SettingsRoot 注册进 sidebar.settings 槽）：抽屉一收，上面那条 pointer-events:none
+     会连同它一起冻住 —— 对话框还在屏幕上，却变成一张点不动的画，点击直接穿透到
+     背后的页面（真机实测：点 × 不关、点导航不切分区、点对话框外的输入框反而把软键盘
+     调起来）。pointer-events 是继承属性，在这一层要回来，里面的遮罩与面板自动跟随。
+     判据只用 [role=dialog][aria-modal]：不依赖任何包裹层结构，宿主换一层包裹也成立。 */
+  [data-handheld="frame"][data-sidebar-collapsed]:has([role="dialog"][aria-modal="true"]) > [class*="_sidebarCol"] {
+    pointer-events: auto;
   }
 
   /* ---------- 3. 遮罩 ---------- */
@@ -375,7 +398,14 @@ window.__ModuleLoader__.load({
           if (!col || !col.contains(target)) return;
           // 抽屉里的输入框与按钮（搜索、视图选项…）自己处理这一笔；其余点击
           //（会话行、工作区行）意味着「选完了」，顺手把抽屉收起来。
-          if (target.closest("input, textarea, select, button, [contenteditable]")) return;
+          //
+          // 浮层里的点击同样不归这条启发式管：设置对话框（[role=dialog][aria-modal]）、
+          // 菜单、下拉都只是**借住在侧栏的 DOM 里**，视觉上是视口级的。
+          // 踩过的坑：对话框里随便点一下它的空白处或某行文字（不是按钮），这里就把
+          // 抽屉收了 —— 抽屉收起后整列让出指针（见 CSS 第 2 节），对话框当场变成
+          // 一张点不动的画，于是「设置页面无法关闭」。CSS 那边已经补了兜底，
+          // 这里再堵住源头：模态开着的时候，抽屉的开合不该由「点了非按钮」决定。
+          if (target.closest(INERT_TARGETS)) return;
           props.closeDrawer();
         };
         frame.addEventListener("click", onFrameClick, true);

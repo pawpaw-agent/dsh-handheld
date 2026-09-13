@@ -70,6 +70,16 @@ dsh 哪天改了这些，CI 的 `Mobile adaptation contract` 会红，而不是�
   会话切换、面板重挂时丢。
 - **计数收进 aria-label**：窄屏下后台任务胶囊只留状态点与下箭头，完整计数仍在按钮的
   `aria-label` 上（状态与无障碍信息都没丢，只是不再霸占标题宽度）。
+- **浮层住在抽屉里，但只借住 DOM**：设置对话框由宿主注册进 `sidebar.settings` 槽，
+  所以它在 DOM 上是侧栏的后代；但它 `position: fixed`、盖满整屏，视觉上是视口级的。
+  这条「借住」关系有两个坑，1.0.11 都堵上了：① 抽屉收起时的 `pointer-events: none`
+  会把对话框一起冻住（它是继承属性）→ 抽屉里只要有 `[role=dialog][aria-modal]`，
+  整列就把指针要回来；② 「抽屉里点一下就收起来」的启发式会把对话框里的一次点击
+  当成"选完了" → 浮层（dialog / menu / listbox）里的点击不参与这条启发式。
+  详见 `docs/known-issues.md` §五。
+- **BACK = Esc**：手机上关掉一个铺满整屏的页面，用户的直觉是系统返回键。页面里有模态时
+  BACK 先派发一次 Escape（dsh 的模态在 document 上监听 Escape），240ms 后复查，
+  模态还在就回退到原语义（网页历史 → 连接屏 → 退到后台）。
 - **做不到的入口不留**：凡是「动作发生在电脑上」的入口，手机上按了都没反应，一律隐藏 ——
   ① 工作区标题行的 `+`（目录选择器判成 native，对话框开在电脑桌面）；
   ② 会话头右上角的「在 文件管理器 中打开工作目录」（`open-in-app`：宿主探测本机应用，
@@ -97,7 +107,8 @@ dsh 哪天改了这些，CI 的 `Mobile adaptation contract` 会红，而不是�
 2. **对已安装 dsh 的完整检查**（本机）：`node scripts/check-mobile-hooks.mjs`
    —— 断言那两个钩子确实还在 dsh 前端产物里
 3. **真机**：装 CI 产物 → `adb exec-out screencap`（不需要 debuggable）+ `uiautomator dump`
-   取无障碍树核对元素与坐标
+   取无障碍树核对元素与坐标；**命中测试**（点了有没有反应）只能用 `input tap` 驱动 + 看
+   实际状态变化 —— 无障碍树给不出「这一笔被谁吃住」，而 1.0.11 修的正是这一类故障
 
 另有一个**本地渲染回环**用于快速迭代 CSS（这个沙箱里 Chromium 发不出 HTTP，所以用
 fixture 页面 + 真实的 dsh 组件 CSS，`file://` 加载）：见 `docs/mobile-ui-verification.md`。
@@ -106,4 +117,4 @@ fixture 页面 + 真实的 dsh 组件 CSS，`file://` 加载）：见 `docs/mobi
 
 `MainActivity.MOBILE_PLUGIN_REV` 是 WebView 侧的缓存键：**内容变了必须换 rev**，否则可能
 命中旧缓存。CI 断言 App 常量与 bundle 内的 `id` 一致（`check-mobile-hooks.mjs` 的静态
-不变量）。当前为 `dsh-handheld-mobile-1.0.10`。
+不变量）。当前为 `dsh-handheld-mobile-1.0.11`。

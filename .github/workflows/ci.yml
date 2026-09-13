@@ -261,7 +261,7 @@ jobs:
       # 这一层，用 release 包**无法取证** —— 拿不到 WebView 的 DOM。
       #
       # 有了 debug 包的 WebView devtools socket，就能 adb forward 后直接查真实渲染结果
-      # （[data-mobile-nav] 在不在、有没有横向溢出），也就是把 scripts/ui-verify.mjs
+      # （[data-handheld] 在不在、有没有横向溢出），也就是把 scripts/ui-verify.mjs
       # 对真实页面做的那套断言搬到真机上。见 docs/mobile-ui-verification.md。
       #
       # ⚠️ 该产物是 debuggable + debug 签名，**绝不可对外分发**，只是 CI artifact。

@@ -131,7 +131,61 @@ const main = async () => {
                menu: (function(){ var m=q('[class*=\"_menu\"]'); if(!m) return null; var r=m.getBoundingClientRect();
                  return {l:Math.round(r.left), t:Math.round(r.top), r:Math.round(r.right), b:Math.round(r.bottom)}; })(),
                chip: (function(){ var c=q('[class*=\"_trigger\"]'); if(!c) return null; var r=c.getBoundingClientRect();
-                 return {l:Math.round(r.left), r:Math.round(r.right), b:Math.round(r.bottom)}; })() }; })()`,
+                 return {l:Math.round(r.left), r:Math.round(r.right), b:Math.round(r.bottom)}; })(),
+               // ── 命中测试（elementFromPoint）──
+               // 只量几何不够：「抽屉收起时 pointer-events:none 把住在里面的设置对话框
+               // 一起冻住」这种故障，盒子模型完全正常 —— 坏的是**能不能点**。
+               // 这里直接问浏览器：这个坐标上最上面的是谁。
+               hit: (function () {
+                 var who = function (x, y) {
+                   var e = document.elementFromPoint(x, y);
+                   if (!e) return null;
+                   var tag = e.tagName.toLowerCase();
+                   var cls = (e.className && String(e.className).split(' ')[0]) || '';
+                   return tag + (cls ? '.' + cls : '');
+                 };
+                 var mid = function (el) { var r = el.getBoundingClientRect();
+                   return [Math.round(r.left + r.width / 2), Math.round(r.top + r.height / 2)]; };
+                 var dlg = q('[role="dialog"][aria-modal="true"]');
+                 var close = q('[class*="_close"]');
+                 var mask = q('[class*="_mask"]');
+                 var behind = q('[data-composer-input] textarea, [data-composer-input]');
+                 var pt = close ? mid(close) : null;
+                 var mt = mask ? [4, Math.round(innerHeight / 2)] : null;
+                 var bt = behind ? mid(behind) : null;
+                 var at = function (p) { return p ? document.elementFromPoint(p[0], p[1]) : null; };
+                 var path = function (e) {
+                   var out = [];
+                   for (var i = 0; e && i < 4; i++, e = e.parentElement) {
+                     var cls = (e.className && String(e.className).split(' ')[0]) || '';
+                     out.push(e.tagName.toLowerCase() + (cls ? '.' + cls : ''));
+                   }
+                   return out.join(' < ');
+                 };
+                 var overlay = dlg ? dlg.parentElement : null;
+                 return {
+                   closePt: pt,
+                   closeHit: pt ? who(pt[0], pt[1]) : null,
+                   closeIsInPanel: !!(dlg && at(pt) && dlg.contains(at(pt))),
+                   maskHit: mask ? who(mt[0], mt[1]) : null,
+                   behindPt: bt,
+                   behindRect: behind ? (function () { var r = behind.getBoundingClientRect();
+                     return [Math.round(r.left), Math.round(r.top), Math.round(r.right), Math.round(r.bottom)]; })() : null,
+                   behindHit: bt ? who(bt[0], bt[1]) : null,
+                   // 整条命中栈（最上面在最前）：一眼看出这一笔被谁吃住了
+                   behindStack: bt ? document.elementsFromPoint(bt[0], bt[1]).slice(0, 6).map(path) : null,
+                   panelRect: dlg ? (function () { var r = dlg.getBoundingClientRect();
+                     return [Math.round(r.left), Math.round(r.top), Math.round(r.right), Math.round(r.bottom)]; })() : null,
+                   // 这一笔被浮层吃住了吗？false = 穿透到背后的页面（真机上表现为软键盘被调起来）
+                   behindEatenByOverlay: !!(bt && overlay && (function () {
+                     var e = at(bt); return !!(e && (e === overlay || overlay.contains(e)));
+                   })()),
+                   panelPE: dlg ? getComputedStyle(dlg).pointerEvents : null,
+                   maskPE: mask ? getComputedStyle(mask).pointerEvents : null,
+                   colPE: col ? getComputedStyle(col).pointerEvents : null,
+                 };
+               })(),
+             }; })()`,
     returnByValue: true,
   });
   const shot = await cdp.send('Page.captureScreenshot', { format: 'png' }, 20000);

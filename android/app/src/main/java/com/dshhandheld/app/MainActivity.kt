@@ -217,6 +217,27 @@ class MainActivity : Activity() {
         /** WebView 内 <input type=file> 的文件选择请求（与私钥导入分开）。 */
         const val REQ_WEB_FILE = 2002
 
+        // ── 网页模态与系统 BACK（见 dismissWebModalThenFallback）────────────
+        /** 页面里有没有活着的模态对话框（设置页就是其中之一，没有 URL 语义可退）。 */
+        const val JS_MODAL_OPEN =
+            "(function(){return document.querySelector('[role=dialog][aria-modal=true]')?true:false})()"
+
+        /**
+         * 有模态就替用户按一下 Esc。
+         *
+         * 用 `document.dispatchEvent` 而不是派给某个元素：dsh 的模态自己在 document 上
+         * 监听 Escape（`document.addEventListener("keydown", ...)`），派给元素要猜焦点在哪。
+         * 返回 true = 确实有模态、Esc 已经发出去了。
+         */
+        const val JS_ESCAPE_MODAL =
+            "(function(){var d=document.querySelector('[role=dialog][aria-modal=true]');" +
+                "if(!d)return false;" +
+                "document.dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',code:'Escape',bubbles:true}));" +
+                "return true})()"
+
+        /** 发完 Esc 到复查之间留的时间：React 提交状态需要一帧。 */
+        const val MODAL_ESCAPE_SETTLE_MS = 240L
+
         const val PREF_SERVER_TOKEN = "server_token" // dsh 0.1.2+ 一次性启动 token（服务重启后自动更新）
 
         // ── 手机端适配插件（dsh-handheld-mobile，本仓库自研）────────────────
@@ -234,7 +255,7 @@ class MainActivity : Activity() {
         // id 必须与那个 bundle 内的 `id: "dsh-handheld-mobile"` 一致，改不得（CI 有断言）。
         // rev 只是 WebView 侧的缓存键：内容变更必须换 rev，否则可能命中旧缓存。
         const val MOBILE_PLUGIN_ID = "dsh-handheld-mobile"
-        const val MOBILE_PLUGIN_REV = "dsh-handheld-mobile-1.0.10"
+        const val MOBILE_PLUGIN_REV = "dsh-handheld-mobile-1.0.11"
         const val MOBILE_PLUGIN_URL = "/plugins/??$MOBILE_PLUGIN_ID/client.js&rev=$MOBILE_PLUGIN_REV"
 
         /**
@@ -1636,6 +1657,53 @@ class MainActivity : Activity() {
                 DiagLog.i(TAG, "BACK: 连接屏 → 退到后台（隧道保持）")
                 moveTaskToBack(true)
             }
+            else -> dismissWebModalThenFallback()
+        }
+    }
+
+    /**
+     * 网页里有模态（`[role=dialog][aria-modal]`，例如设置页）时，BACK 先当 Esc 用；
+     * 页面没吃掉这一下，再走原来的 BACK 语义。
+     *
+     * 手机上没有 Esc 键：设置页那种铺满整屏的浮层，用户唯一的"关掉"直觉就是返回手势。
+     * 不接这一下的话，BACK 会把用户送到连接屏（甚至网页历史里），而设置页还开着。
+     *
+     * 两处必须小心：
+     *  1. `evaluateJavascript` 是异步的，所以这里只能先问页面、再在回调里决定回退，
+     *     不能像原来那样同步 `when` 一把梭；
+     *  2. 页面"吃掉了"不等于"关掉了" —— 有的模态不监听 Escape。所以发完 Esc 等一下
+     *     再复查一次，模态还在就照样走原来的 BACK 语义，绝不把 BACK 变成空操作。
+     */
+    private fun dismissWebModalThenFallback() {
+        val wv = webView
+        if (wv == null) {
+            fallbackBack()
+            return
+        }
+        wv.evaluateJavascript(JS_ESCAPE_MODAL) { escaped ->
+            if (escaped != "true") {
+                fallbackBack()
+                return@evaluateJavascript
+            }
+            ui.postDelayed({
+                val live = alive.get()
+                val current = webView
+                if (!live || current == null) return@postDelayed
+                current.evaluateJavascript(JS_MODAL_OPEN) { stillOpen ->
+                    if (stillOpen == "true") {
+                        DiagLog.i(TAG, "BACK: 模态没吃下 Esc，按原语义回退")
+                        fallbackBack()
+                    } else {
+                        DiagLog.i(TAG, "BACK: 关掉网页模态（Esc）")
+                    }
+                }
+            }, MODAL_ESCAPE_SETTLE_MS)
+        }
+    }
+
+    /** 原来的 BACK 语义：网页历史 → 连接屏 → 退到后台。 */
+    private fun fallbackBack() {
+        when {
             webView?.canGoBack() == true -> {
                 DiagLog.i(TAG, "BACK: 网页历史回退 url=${webView?.url}")
                 webView?.goBack()

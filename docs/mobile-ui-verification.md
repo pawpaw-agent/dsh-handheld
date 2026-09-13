@@ -37,12 +37,40 @@ node scripts/css-lab.mjs --page file:///tmp/fixture/fixture.html \
 ```
 
 它同时打一份**计算样式探针**（侧栏 position/left/width、遮罩 opacity、胶囊计数 display、
-弹层矩形、横向溢出），所以「抽屉是不是真的滑到了屏外」「菜单有没有落在视口内」是**断言**，
-不是看图猜。
+弹层矩形、横向溢出，以及 `elementFromPoint` 的**命中栈**），所以「抽屉是不是真的滑到了
+屏外」「菜单有没有落在视口内」「设置页还点不点得动」是**断言**，不是看图猜。
+
+命中测试那一组（`hit.closeHit / closeIsInPanel / maskHit / behindEatenByOverlay /
+panelPE / colPE`）是为 1.0.11 那个「设置页点不动」加的：**几何全对但命中测试全错**
+正是它的特征（见 `docs/known-issues.md` §五）。用法：把设置浮层放进 fixture 的**侧栏列
+内部**（真实页面就是这样，`SettingsRoot` 注册进 `sidebar.settings` 槽），跑两遍对比 ——
+
+```sh
+# 1) 负对照：剥掉兜底规则的 CSS，故障应当复现
+node /tmp/css-of-plugin.mjs /tmp/plugin-css-legacy.css --legacy
+node scripts/css-lab.mjs --page file:///tmp/fixture/fixture-modal.html \
+  --css /tmp/plugin-css-legacy.css --out /tmp/shot-legacy.png
+#   → closeHit=div               （✕ 不是命中目标 = 点不动）
+#     closeIsInPanel=false
+#     behindEatenByOverlay=false （点击穿透到背后的页面）
+#     panelPE / maskPE / colPE = none
+# 2) 当前 CSS：应当可点
+node /tmp/css-of-plugin.mjs /tmp/plugin-css.css
+node scripts/css-lab.mjs --page file:///tmp/fixture/fixture-modal.html \
+  --css /tmp/plugin-css.css --out /tmp/shot-fixed.png
+#   → closeHit=button.VOzbGW_close、closeIsInPanel=true
+#     maskHit=div.VOzbGW_mask、behindEatenByOverlay=true（浮层吃住了这一笔）
+#     panelPE / maskPE / colPE = auto
+```
+
+`scripts/css-lab.mjs` 是仓库里的（探针随适配层一起演进）；fixture 与
+`/tmp/css-of-plugin.mjs`（从 bundle 里抽出那段 CSS 模板字符串并做 `${…}` 替换，
+`--legacy` 顺带剥掉指定的那条规则）是本机临时产物。**负对照必须有**：
+一条永远通过的断言等于没有断言。
 
 ⚠️ **fixture 是近似**：这个沙箱里 Chromium 发不出任何 HTTP（`Page.navigate` 到 http://
 一律超时，`file://` 与 `data:` 可以），所以页面是照着 dsh 真实产物搭的，主题变量不全、
-视觉不可信；**几何与层叠可信，最终判据永远是下面第三层的真机截图**。
+视觉不可信；**几何、层叠与命中测试可信，最终判据永远是下面第三层的真机截图**。
 
 ## 第一层：契约金丝雀（可进 CI，秒级）
 
@@ -83,8 +111,11 @@ node scripts/device-ui-verify.mjs --url "http://<本机 LAN IP>:38082/?token=<to
 
 它驱动**真机上 App 自己的 WebView**（经 adb 的 `webview_devtools_remote` socket），
 所以注入是 App 干的、插件是 App 喂的、视口是真的手机视口 —— 只有"把 WebView 指到某个
-地址"这一步是脚本做的。已实测通过：`[data-mobile-nav]` 出现 `frame / drawer-actions /
-explorer / session-log / fab` 五个标记，无横向溢出。
+地址"这一步是脚本做的。
+
+> 历史记录（vendored 时代，已不适用）：当时 `[data-mobile-nav]` 出现 `frame / drawer-actions /
+> explorer / session-log / fab` 五个标记。自研层只有 `data-handheld`，取值是
+> `frame / backdrop / fab / toggle`。
 
 前置：
 1. 装 **debug** 包（CI 出 `dsh-handheld-debug` artifact）。只有 debuggable 才开
@@ -137,7 +168,7 @@ node scripts/ui-verify.mjs --base http://127.0.0.1:38082 --token <token>
 `Fetch.fulfillRequest` ≈ `shouldInterceptRequest`），然后：
 
 - **A/B 对照**：同一页面跑两遍（不注入 / 注入），差异本身就是适配生效的证据；
-- 断言：插件加载成功、建出 `[data-mobile-nav]`、**无横向溢出**、页面已渲染；
+- 断言：插件加载成功、打出 `[data-handheld]` 标记、**无横向溢出**、页面已渲染；
 - 产出：两张截图 + `report.json`。
 
 零依赖（Node 22 原生 WebSocket + fetch），不需要 `npm install`。

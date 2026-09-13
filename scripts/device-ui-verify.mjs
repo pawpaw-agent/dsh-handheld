@@ -53,9 +53,9 @@ const PROBE = `(() => {
     href: location.href,
     title: document.title,
     // 插件自建标记：出现即证明插件被加载并跑过适配
-    mobileNav: q('[data-mobile-nav]'),
-    mobileNavValues: [...new Set([...document.querySelectorAll('[data-mobile-nav]')]
-      .map(e => e.getAttribute('data-mobile-nav')))].slice(0, 14),
+    mobileNav: q('[data-handheld]'),
+    mobileNavValues: [...new Set([...document.querySelectorAll('[data-handheld]')]
+      .map(e => e.getAttribute('data-handheld')))].slice(0, 14),
     // dsh 原生钩子：适配所依附的
     phase: q('[data-phase]'),
     composer: q('[data-composer-input], textarea'),
@@ -156,7 +156,7 @@ const main = async () => {
   }
   console.log('');
   console.log('── 适配标记（插件自建）──');
-  console.log(`  [data-mobile-nav]  ${o.mobileNav > 0 ? `✓ ${o.mobileNav} 个` : '✗ 0 个 —— 插件没跑'}`);
+  console.log(`  [data-handheld]    ${o.mobileNav > 0 ? `✓ ${o.mobileNav} 个` : '✗ 0 个 —— 插件没跑'}`);
   if (o.mobileNavValues.length) console.log(`  取值             ${o.mobileNavValues.join(', ')}`);
   console.log('');
   const checks = [

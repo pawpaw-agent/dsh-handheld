@@ -46,7 +46,7 @@ const BOOTSTRAP_SRC = path.join(REPO, 'android/app/src/main/assets/plugins/mobil
 
 // 与 MainActivity 的常量保持一致（id 必须与 bundle 内部一致；rev 是缓存键）
 const PLUGIN_ID = 'dsh-handheld-mobile';
-const PLUGIN_REV = 'dsh-handheld-mobile-1.0.10';
+const PLUGIN_REV = 'dsh-handheld-mobile-1.0.11';
 const PLUGIN_URL = `/plugins/??${PLUGIN_ID}/client.js&rev=${PLUGIN_REV}`;
 
 const CHROME = process.env.CHROME_BIN
@@ -213,10 +213,12 @@ async function run({ inject, bundleBytes, bootstrap, label }) {
       const q = (s) => document.querySelectorAll(s).length;
       return {
         title: document.title,
-        // 适配是否落地：插件自建的导航标记
-        mobileNav: q('[data-mobile-nav]'),
-        mobileNavValues: [...new Set([...document.querySelectorAll('[data-mobile-nav]')]
-          .map(e => e.getAttribute('data-mobile-nav')))].slice(0, 12),
+        // 适配是否落地：插件自己打的标记（自研层用 data-handheld；vendored 时代是
+        // data-mobile-nav —— 换层时这里漏改过一次，于是 harness 对着一个不存在的标记
+        // 判「插件没加载」。标记名与 assets/plugins 里的实现同源，改一处就该改这里。）
+        handheld: q('[data-handheld]'),
+        handheldValues: [...new Set([...document.querySelectorAll('[data-handheld]')]
+          .map(e => e.getAttribute('data-handheld')))].slice(0, 12),
         // dsh 原生钩子（适配所依附的）
         phase: q('[data-phase]'),
         composer: q('[data-composer-input], textarea'),
@@ -274,11 +276,11 @@ const main = async () => {
 
   const baseline = await run({ inject: false, bundleBytes, bootstrap, label: 'a-baseline-desktop' });
   console.log(`[A 基线·不注入]  横向溢出=${baseline.observed.overflowX}  `
-    + `mobileNav=${baseline.observed.mobileNav}  左侧宽栏=${baseline.observed.sidebarish}`);
+    + `handheld 标记=${baseline.observed.handheld}  左侧宽栏=${baseline.observed.sidebarish}`);
 
   const adapted = await run({ inject: true, bundleBytes, bootstrap, label: 'b-adapted-mobile' });
   console.log(`[B 适配·注入]    横向溢出=${adapted.observed.overflowX}  `
-    + `mobileNav=${adapted.observed.mobileNav}  左侧宽栏=${adapted.observed.sidebarish}`);
+    + `handheld 标记=${adapted.observed.handheld}  左侧宽栏=${adapted.observed.sidebarish}`);
   console.log(`                 插件被拦截并下发 ${adapted.intercepted} 次`);
 
   console.log('');
@@ -291,9 +293,9 @@ const main = async () => {
   console.log('');
   console.log('── 适配是否生效 ──');
   const checks = [
-    ['插件已加载并建出移动导航', adapted.observed.mobileNav > 0],
-    ['移动导航标记', adapted.observed.mobileNavValues.length > 0
-      ? adapted.observed.mobileNavValues.join(', ') : '（无）'],
+    ['插件已加载并打出适配标记', adapted.observed.handheld > 0],
+    ['适配标记', adapted.observed.handheldValues.length > 0
+      ? adapted.observed.handheldValues.join(', ') : '（无）'],
     ['无横向溢出', adapted.observed.overflowX <= 1],
     ['页面已渲染', adapted.observed.bodyChildren > 0],
   ];
