@@ -336,9 +336,15 @@ node scripts/check-mobile-hooks.mjs
 （`scripts/ui-verify.mjs`，手机视口 + A/B 对照 + 截图）见
 [`docs/mobile-ui-verification.md`](docs/mobile-ui-verification.md)。
 
-> ⚠️ **对上游产物打了唯一一处补丁**：摘掉上游 v2.4.0 新增的「删除会话」菜单项——它的宿主
-> 半边（`POST /api/mobile-nav.session.delete`）在「服务端零改动」的前提下不存在，点它只会报
-> `HTTP 404`。补丁位置、影响面与重新 vendoring 步骤见
+> ⚠️ **对上游产物打了两处补丁**（P1、P2）：
+>
+> - **P1** 摘掉上游 v2.4.0 新增的「删除会话」菜单项 —— 它的宿主半边
+>   （`POST /api/mobile-nav.session.delete`）在「服务端零改动」的前提下不存在，点它只会报
+>   `HTTP 404`。
+> - **P2** 放宽窄屏下后台任务胶囊的压缩条件 —— 上游只在「子代理谱系 + 后台任务」同时存在
+>   时压缩它，实测两者只出现其一时会把会话标题压成一个字（渲染成 `检..`）。
+>
+> 补丁位置、影响面与重新 vendoring 步骤见
 > [`docs/vendored-plugin-patches.md`](docs/vendored-plugin-patches.md)（该文也写了会话删除的
 > 「外部移除」做法：dsh 官方不在接口里提供物理删除，UI 上只有单向且不回收磁盘的归档）。
 

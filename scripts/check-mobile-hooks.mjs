@@ -71,8 +71,24 @@ const OTHER_HOST_PREFIXES = [
   'data-gitgraph-',      // git 图谱插件
 ];
 
-/** 插件自己写入的标记（不是对宿主的依赖）。`data-mobile-nav` 两边都有，按特殊处理。 */
-const PLUGIN_OWN = ['data-mobile-nav', 'data-file-viewer-open'];
+/**
+ * 属于**这个插件自己**的标记 —— 不是对 dsh 的依赖，因此不参与契约断言。
+ *
+ * ⚠️ 与 `OTHER_HOST_PREFIXES` 的区别：那些是**别的宿主产品**（AionUi / genui / …）的钩子；
+ * 这里三条都在插件自己的 `data-mobile-nav*` 命名空间里。分类同样必须准确 —— 误报会让
+ * 金丝雀失去信任，而漏报会让它对着一个根本不该存在的钩子永远报红。
+ *
+ * 三种情况：
+ *  - `data-mobile-nav`：插件自己的命名空间（`="frame"` / `"toggle"` / `"fab"` …），
+ *    宿主侧也用它挂移动端标记，两边都有，按特殊处理。
+ *  - `data-mobile-nav-dragging`：插件定义的**跨插件协作协议**。由"正在被拖动的组件"
+ *    （桌宠、悬浮球、拖拽排序…）打在自己或 documentElement/body 上，插件的手势层在
+ *    pointerdown 与每一次轴锁尝试时读它，决定是否整笔让出（上游 2026-09-11 为
+ *    「桌宠拖动冲突」加的，实现见 `sidebar-swipe.js` 的 `dragMarkYields`）。
+ *    它表达的是「别的插件正在拖东西」，dsh 前端里当然找不到，不能进 `dshHooks`。
+ *  - `data-file-viewer-open`：插件自己写入并自己读回。
+ */
+const PLUGIN_OWN = ['data-mobile-nav', 'data-mobile-nav-dragging', 'data-file-viewer-open'];
 
 const die = (msg) => { console.error(`\n✗ ${msg}\n`); process.exit(1); };
 

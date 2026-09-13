@@ -5,22 +5,27 @@
 bundle 原样放在 `android/app/src/main/assets/plugins/dsh-web-mobile-client.js`，由
 `MainActivity` 的 `addDocumentStartJavaScript` + `shouldInterceptRequest` 喂给 WebView。
 
-**默认原则是逐字节保留上游产物**（便于核对来源、升级时直接覆盖）。本文件记录唯一的例外。
+**默认原则是逐字节保留上游产物**（便于核对来源、升级时直接覆盖）。本文件记录全部例外。
 
 ## 基线
 
 | | 值 |
 |---|---|
-| 上游包 | `dsh-web-mobile` **v2.4.0**（npm `latest`，取自包内 `lib/client.js`） |
-| 基线大小 / md5 | 283,504 字节 / `51dacb3ddea04129238646c96cece1ff` |
-| 当前大小 / md5 | 284,056 字节 / `5037d9d78a6eadf5e397a7fe557985f6` |
-| 差异 | 1 个 hunk（仅新增注释 + 注释掉 1 行调用） |
+| 上游包 | `dsh-web-mobile` **v2.4.1**（npm `latest`，取自包内 `lib/client.js`） |
+| 基线大小 / md5 | 288,873 字节 / `52f53e55c49870c6a042b8abfb93281c` |
+| 当前大小 / md5 | 289,694 字节 / `c2908c6b68c9547c47031ff65f7ce416` |
+| 差异 | 2 个 hunk（P1 注释掉 1 行调用；P2 放宽 1 条选择器） |
 
-## 补丁清单（共 1 处）
+> **v2.4.0 → v2.4.1 的上游变更**（与本项目补丁无关，直接随基线继承）：
+> `sidebar-swipe.js` 86 行 —— 抽屉手势让位给可拖动的浮动组件、起始区固定 45%；
+> `session-menu.js` 28 行 —— 删除项在触摸下的 arm 判定；另有把 mobile effect 的
+> 触发条件从 `MOBILE_QUERY` 泛化为可传 `TOUCH_QUERY` 的重构。
+
+## 补丁清单（共 2 处）
 
 ### P1 — 禁用「删除会话」菜单项
 
-**位置**：bundle 内 `index.js` 装配段（上游第 5755 行）。
+**位置**：bundle 内 `index.js` 装配段（上游 v2.4.1 第 5891 行）。
 
 ```js
 // 上游原文
@@ -48,6 +53,41 @@ POST /api/mobile-nav.session.delete  →  HTTP 404  not found     （实测）
 `delete*` 文案、`[data-mobile-nav="session-delete"]` 样式）保持上游原样，但不再被
 执行或使用。插件的抽屉、滑动手势、键盘守卫、响应压缩等其它能力**均未改动**。
 
+### P2 — 后台任务胶囊的窄屏压缩不再要求「同时存在子代理谱系」
+
+**位置**：bundle 内 `effects/aionui-compat.js` 的 `@media (max-width: 559px)` 块。
+
+**上游选择器**：
+
+```css
+header:has([class*="_crumbs"] [class*="_root"])
+  [class*="_headerActions"] [class*="_root"]:not([class*="_switcherRoot"])
+  :has(> button[class*="_trigger"]) [class*="_count"] { display: none !important; }
+```
+
+**现状**：去掉 `:has([class*="_crumbs"] [class*="_root"])` 这个前置守卫，其余不变。
+
+**原因**：上游只在「子代理谱系 + 后台任务」**同时**存在时才压缩后台任务胶囊。真机实测
+（Galaxy S24 Ultra，WebView 视口 384px CSS 宽）两者**只出现其一**时同样挤压，而且更糟：
+会话标题被压成一个字，渲染出来是 `检..`。
+
+机制是两条规则对撞 —— 标题道 `[class*="_crumbs"]` 是 `flex: 1 1 0; min-width: 0`
+（吸收全部挤压），而状态胶囊是 `flex: 0 0 auto; min-width: max-content`（一步不让）。
+胶囊此时占着整行「1 个后台任务运行中」约 150px，标题只剩约 40px。
+
+**为什么这样改是安全的**：压缩手法本身是上游既有的，不是新发明 —— 保留 `triggerDot`
+（运行中的状态点）与下箭头，`aria-label` 仍是完整计数，所以**状态与无障碍信息都没丢**，
+只是把它的适用条件放宽到本该覆盖的那一半场景。
+
+**取证方式**：`adb exec-out screencap`（不依赖 debuggable，release 包也能看真实渲染），
+配合从 dsh 官方产物读出的 `JobListAction` DOM 契约：
+
+```jsx
+<div class="…_root"><button class="…_trigger" aria-label={countLabel}>
+  <StateDot class="…_triggerDot"/><span class="…_count">1 个后台任务运行中</span><IconChevronDownOutline14/>
+</button><ul class="…_menu">…</ul></div>
+```
+
 ## 验证方法
 
 用手机尺寸（384×832、`hasTouch`、触屏 UA）打开真实 dsh 页面，按 App 的方式注入
@@ -60,16 +100,28 @@ bundle，点开任意会话行的「⋯」菜单，然后检查菜单项与补�
 
 两次都无 console 错误，菜单仍是宿主原生的三项。
 
+P2 的验证在真机上看会话头：在「有后台任务运行、无子代理谱系」的状态下，标题应保持
+可读（不再是单字加省略号），胶囊收缩为 `状态点 + 下箭头`。
+
 ## 重新 vendoring 步骤
 
 1. 取上游产物：`npm pack dsh-web-mobile@<version>`，用包内 `lib/client.js` 覆盖
    `android/app/src/main/assets/plugins/dsh-web-mobile-client.js`。
 2. 校验基线 md5 是否等于上表（换版本则更新本表）。
 3. 重新应用 P1：`grep -n "installSessionMenuDelete)(ctx);"` 定位那一行并注释掉。
-4. `node --check` 确认语法通过。
-5. 同步更新 `MainActivity.MOBILE_PLUGIN_REV` 的后缀（`-dsh1` → `-dsh2` → …）：
-   rev 是 WebView 侧的缓存键，内容变了 rev 不变可能命中旧缓存。
-6. 若上游已把该功能做成无需宿主半边，或本项目决定安装宿主半边，则删除本补丁。
+4. 重新应用 P2：`grep -n 'class\*="_count"'` 找到那条选择器，删掉
+   `header:has([class*="_crumbs"] [class*="_root"]) ` 前缀。
+5. `node --check` 确认语法通过。
+   ⚠️ **CSS 整体位于 JS 模板字符串内**：新增注释里**不能出现反引号**，否则会提前
+   终止模板字符串。这一条是实测踩过的 —— `node --check` 会以
+   `SyntaxError: Unexpected identifier` 报出来。
+6. 同步更新 `MainActivity.MOBILE_PLUGIN_REV` 与 `scripts/ui-verify.mjs` 的
+   `PLUGIN_REV`（两处必须一致，`check-mobile-hooks.mjs` 的静态不变量会校验 id，
+   但 rev 的一致性靠这两处手改）：rev 是 WebView 侧的缓存键，内容变了 rev 不变
+   可能命中旧缓存。
+7. 跑 `node scripts/check-mobile-hooks.mjs --contract` —— 重新 vendoring 会改变
+   插件依赖的 dsh 钩子集合，那必须是显式动作。
+8. 若上游已把该功能做成无需宿主半边，或本项目决定安装宿主半边，则删除 P1。
 
 ## 附：会话删除走「外部移除」
 

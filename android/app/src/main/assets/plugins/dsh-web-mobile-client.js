@@ -818,7 +818,7 @@ function createFileViewerMarkerTask() {
 __modules["effects/phone-chrome.js"] = function (require, module, exports) {
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.DESKTOP_QUERY = exports.MOBILE_QUERY = void 0;
+exports.TOUCH_QUERY = exports.DESKTOP_QUERY = exports.MOBILE_QUERY = void 0;
 exports.installMobileEffect = installMobileEffect;
 exports.findFrame = findFrame;
 exports.getFrame = getFrame;
@@ -855,14 +855,22 @@ exports.MOBILE_QUERY = '(max-width: 1023px) and (pointer: coarse)';
  *  guard is the CSS hide block in misc.css.ts — the exact complement of
  *  MOBILE_QUERY — because slot-rendered controls exist at every width. */
 exports.DESKTOP_QUERY = '(min-width: 1024px)';
+/** Pointer-only guard for the ONE feature that has no desktop equivalent:
+ *  the session-delete menu injection. Armed on touch-primary devices at
+ *  EVERY width — a large tablet in landscape (e.g. 1238px) keeps the desktop
+ *  layout but still gets the 「删除会话」 item. Mouse-driven or pointer-less
+ *  windows never arm it, at any width. */
+exports.TOUCH_QUERY = '(pointer: coarse)';
 /**
- * Re-arm a mobile-only DOM effect on every width change. Replaces the
+ * Re-arm a mobile-only DOM effect on every query change. Replaces the
  * repeated matchMedia + change-listener scaffold so all breakpoint strings
- * live in one place.
+ * live in one place. `query` defaults to MOBILE_QUERY; effects that arm on a
+ * different condition (e.g. TOUCH_QUERY) pass their own string instead of
+ * building a private matchMedia scaffold.
  */
-function installMobileEffect(ctx, label, install) {
+function installMobileEffect(ctx, label, install, query = exports.MOBILE_QUERY) {
     ctx.effect(() => {
-        const narrow = window.matchMedia(exports.MOBILE_QUERY);
+        const narrow = window.matchMedia(query);
         let cleanup;
         const arm = () => {
             cleanup?.();
@@ -1528,6 +1536,17 @@ exports.BASE_CSS = `
   box-shadow: 0 8px 30px rgba(0, 0, 0, .22);
   animation: dsh-web-mobile-sheet-in .22s var(--ds-ease-out, ease-in-out);
 }
+/* Wide touch (tablet landscape ≥1024px, pointer coarse): the card would
+   otherwise span the full desktop viewport. Cap and center it with margins
+   (not transform, which the entry animation would override mid-play). */
+@media (min-width: 1024px) and (pointer: coarse) {
+  [data-mobile-nav="delete-dialog"] {
+    left: 0;
+    right: 0;
+    width: 420px;
+    margin-inline: auto;
+  }
+}
 @media (prefers-reduced-motion: reduce) {
   [data-mobile-nav="delete-dialog-backdrop"],
   [data-mobile-nav="delete-dialog"] {
@@ -1536,11 +1555,12 @@ exports.BASE_CSS = `
 }
 
 /* Floating fallback button (hero / blank phases without a session header).
-   The top clears the camera band below the status bar; when the client has
-   set viewport-fit=cover the safe-area inset moves it below the notch too. */
+   Top aligns with the session header's toggle row (that row sits 12px below
+   the frame's safe-area padding); when the client has set viewport-fit=cover
+   the safe-area inset moves it below the notch too. */
 [data-mobile-nav="fab"] {
   position: absolute;
-  top: calc(env(safe-area-inset-top, 0px) + 72px);
+  top: calc(env(safe-area-inset-top, 0px) + 12px);
   left: 10px;
   z-index: 21;
   display: inline-flex;
@@ -2291,7 +2311,13 @@ exports.LAYOUT_CSS = `/* ---------- mobile-only layout (narrow viewport AND touc
     [data-mobile-nav="frame"] [data-phase] header [class*="_crumbs"] {
       padding-right: 8px;
     }
-    [data-mobile-nav="frame"] [data-phase] header:has([class*="_crumbs"] [class*="_root"]) [class*="_headerActions"] [class*="_root"]:not([class*="_switcherRoot"]):has(> button[class*="_trigger"]) [class*="_count"] {
+    /* PATCHED (dsh-handheld) P2 — 去掉上游那条 :has([class*="_crumbs"] [class*="_root"]) 前置守卫。
+       上游只在「子代理谱系 + 后台任务」同时存在时压缩后台任务胶囊；实测（S24 Ultra，384px CSS 宽）
+       两者只出现其一时同样挤压 —— 会话标题被压成一个字（渲染成 检..），而胶囊独占整行
+       「1 个后台任务运行中」。压缩手法本身是上游既有的（保留 triggerDot 与下箭头，aria-label
+       仍是完整计数，状态与无障碍信息都没丢），这里只是把它的适用条件放宽。
+       证据与复现见 docs/vendored-plugin-patches.md 的 P2。 */
+    [data-mobile-nav="frame"] [data-phase] header [class*="_headerActions"] [class*="_root"]:not([class*="_switcherRoot"]):has(> button[class*="_trigger"]) [class*="_count"] {
       display: none !important;
     }
     [data-mobile-nav="frame"] [data-phase] header:has([class*="_crumbs"] [class*="_root"]):has([class*="_headerActions"] [class*="_root"]) [class*="_label"]:has(> svg) {
@@ -3655,7 +3681,12 @@ exports.MISC_CSS = `@media (max-width: 1023px) and (pointer: coarse) {
    windows — the slot renders the buttons at every width, so before this the
    only guard was the width term (2026-08-30 PC leak: split windows and OS
    display scaling dropped the CSS viewport below 1024px and armed the whole
-   mobile shell on desktop). */
+   mobile shell on desktop).
+
+   The session-delete trio (menu item + confirm/error dialog) is the ONE
+   deliberate exception: its effect arms on TOUCH_QUERY (pointer: coarse at
+   every width — large tablets in landscape), so it lives in the pointer-only
+   block below instead of this width arm. */
 
 @media (min-width: 1024px), (pointer: fine), (pointer: none) {
   [data-mobile-nav="toggle"],
@@ -3665,7 +3696,16 @@ exports.MISC_CSS = `@media (max-width: 1023px) and (pointer: coarse) {
   [data-mobile-nav="session-log"],
   [data-mobile-nav="explorer"],
   [data-mobile-nav="preview-full-toggle"],
-  [data-mobile-nav="drawer-actions"],
+  [data-mobile-nav="drawer-actions"] {
+    display: none !important;
+  }
+}
+
+/* Session-delete trio: hide on mouse-driven or pointer-less windows at ANY
+   width. No width term — the injection is armed on touch at every width, so
+   a width arm here would hide the item on wide touch (the device class the
+   injection exists for). */
+@media (pointer: fine), (pointer: none) {
   [data-mobile-nav="session-delete"],
   [data-mobile-nav="delete-dialog-backdrop"],
   [data-mobile-nav="delete-dialog"] {
@@ -3754,15 +3794,19 @@ const overlay_backdrop_fab_ts_1 = require("./effects/overlay-backdrop-fab.js");
 /**
  * Start-zone width as a FRACTION of the viewport width: the pointer counts
  * as "from the left edge" anywhere inside the left (RTL: right) strip this
- * wide. Fifth tuning pass (2026-08-29, user preference "识别区再扩宽到约占
- * 总宽的 45%"): the fixed 96px strip still missed landings beyond it, and
- * the user wants the sloppy, anywhere-in-the-left-half feel of native apps.
+ * wide. The zone STAYS at 45% (2026-09-11 user decision): a brief seventh
+ * pass shrank it to 0.25 for the draggable-widget conflict and was rolled
+ * back the same day — the user keeps the "anywhere in the left half" feel
+ * and the conflict is handled by yield signals instead (the
+ * data-mobile-nav-dragging cooperation mark + the floating-widget positional
+ * heuristic, see dragMarkYields/findFloatingWidget).
  * History of the constant: 24px (hotspot era) → 48px (third pass, fixed
  * "识别成对话内容滚动") → 96px (fourth pass — at that point the zone also
  * finally cleared Chrome Android's EDGE_WIDTH_DP=48dp history-navigation
  * trigger strip, whose strokes the browser claims and pointercancels; the
  * browser gesture itself is suppressed by the root overscroll-behavior-x:
- * none rule in layout.css.ts) → 0.45×viewport (fifth pass, this value).
+ * none rule in layout.css.ts) → 0.45×viewport (fifth pass; brief 0.25
+ * experiment rolled back) — this value.
  * Safety at this width: the release classification (0.16×w travel OR
  * 0.45px/ms velocity) still gates the commit, so widening cannot open on a
  * tap; vertical strokes reset at axis lock (≤8px of prevented movement) and
@@ -4139,6 +4183,80 @@ function onCooldown() {
     return performance.now() < cooldownUntil;
 }
 /**
+ * Draggable-element yield mark (2026-09-11, 桌宠拖动冲突 D 方案的 C 侧):
+ * a dragging component (desktop pet, floating ball, drag-to-reorder, …)
+ * marks itself with `data-mobile-nav-dragging` while its drag is live — on
+ * the element the pointer is holding (or any ancestor), or on
+ * documentElement/body as a global mark when the dragged node moves around
+ * or the dragger prefers not to touch the node tree. The gesture layer
+ * reads the mark at pointerdown AND at every axis-lock attempt before the
+ * stroke locks: a mark present at either point yields the whole stroke (no
+ * drawer arm, no touchmove preventDefault) because the two layers would
+ * otherwise both answer the same pointer stream — the exact bug the probe
+ * reproduces (draggable-conflict-probe pet.t1: a 56px floating ball dragged
+ * rightward inside the fifth-pass 45% zone opened the drawer mid-drag).
+ * Semantics mirror selectionOwnsStroke: the mark must be up by the first
+ * few move events (a pointerdown handler is the natural place); once the
+ * stroke axis-locks the gesture stays committed — a mark appearing
+ * mid-locked-stroke does not unwind an already-armed open follow.
+ */
+function dragMarkYields(event) {
+    if (document.documentElement.hasAttribute('data-mobile-nav-dragging'))
+        return true;
+    if (document.body.hasAttribute('data-mobile-nav-dragging'))
+        return true;
+    return (event.target instanceof Element &&
+        event.target.closest('[data-mobile-nav-dragging]') !== null);
+}
+/** Upper bound (px) of the "small floating widget" positional heuristic.
+ * The real-world reference is dsh-pet's floating ball (kz2Bea_float,
+ * position:fixed, measured 148x160 on the live profile page) — 160 would
+ * sit exactly on that widget's edge; 200 leaves headroom for sibling
+ * plugin widgets while a full-screen overlay (backdrop, sheets, dialogs)
+ * still cannot pass. */
+const FLOATING_WIDGET_MAX_PX = 200;
+/**
+ * Floating-widget positional yield (2026-09-11, 悬浮窗拖动冲突 B 侧): plugins
+ * ship draggable floating widgets (desktop-pet / floating-ball / draggable
+ * panel shapes) that carry NO standard "draggable" DOM mark, yet the user
+ * presses the widget itself — so the stroke's start target sits inside that
+ * widget's layer. Draggable widgets almost always live in a SMALL
+ * freely-positioned layer (position: fixed | absolute, own box ≤ 160px)
+ * hovering above the page, so walk the ancestor chain from the event target:
+ * the first small positioned ancestor counts as a floating widget and the
+ * stroke yields (no arm, no touchmove preventDefault). Pairs with
+ * dragMarkYields (cooperation mark) which needs no shape guessing.
+ * Excluded: anything inside our own frame subtree — the FAB / backdrop /
+ * drawer content carry their own gesture semantics and must never be
+ * misread as floating widgets (the closed-state FAB sits in the start zone).
+ * ponytail: no DOM-standard draggable signal exists; shape ≈ draggable is an
+ * approximation with a known ceiling — a STATIC small positioned element
+ * (e.g. a message badge) also yields, costing a stroke start under a
+ * ≤160px dot; a REAL widget that misses (bigger layer, static positioning)
+ * upgrades via the data-mobile-nav-dragging mark or by raising the cap.
+ */
+function findFloatingWidget(target) {
+    if (target.closest('[data-mobile-nav="frame"]') !== null)
+        return null;
+    let el = target;
+    while (el !== null) {
+        if (el instanceof HTMLElement) {
+            const cs = getComputedStyle(el);
+            if ((cs.position === 'fixed' || cs.position === 'absolute') &&
+                el.offsetWidth <= FLOATING_WIDGET_MAX_PX &&
+                el.offsetHeight <= FLOATING_WIDGET_MAX_PX) {
+                return el;
+            }
+        }
+        el = el.parentElement;
+    }
+    return null;
+}
+function floatingWidgetYields(event) {
+    return (event.target instanceof Element &&
+        findFloatingWidget(event.target) !== null);
+}
+/**
  * Cache the follow geometry for a freshly locked stroke. Runs ONCE per
  * stroke (one getComputedStyle, plus one getBoundingClientRect only for the
  * cold-start fallback); the per-move path afterwards is write-only.
@@ -4445,6 +4563,16 @@ function beginStroke(event, rtl, viewportWidthPx) {
     // never reaches tryLock).
     if (selectionOwnsStroke())
         return false;
+    // A live draggable (data-mobile-nav-dragging, see dragMarkYields) owns the
+    // stroke: yield before any geometric test so the drawer cannot arm for a
+    // drag that starts inside the start zone.
+    if (dragMarkYields(event))
+        return false;
+    // Plugin-shipped draggable floating widgets (pet / floating-ball shapes
+    // without any cooperation mark) yield the same way, via the positional
+    // heuristic — the user pressed the widget itself.
+    if (floatingWidgetYields(event))
+        return false;
     if (!(event.target instanceof Element))
         return false;
     // A stroke beginning inside a genuinely horizontally scrollable container
@@ -4504,6 +4632,14 @@ function tryLock(event) {
     const dy = event.clientY - startY;
     if (Math.max(Math.abs(dx), Math.abs(dy)) < LOCK_PX)
         return false;
+    // Second timing window for the drag mark (same pattern as the selection
+    // check in onPointerMove): the dragger often raises the mark in its own
+    // pointerdown/move handler, i.e. AFTER our beginStroke ran. Re-check at
+    // every lock attempt so the stroke yields before the axis locks.
+    if (dragMarkYields(event) || floatingWidgetYields(event)) {
+        reset();
+        return false;
+    }
     if (Math.abs(dx) <= Math.abs(dy)) {
         // Vertical-dominant: hand the touch back to scrolling.
         reset();
@@ -5020,10 +5156,12 @@ function escapeHtml(value) {
         .replaceAll('"', '&quot;');
 }
 /**
- * Install the mobile session-delete menu machinery. Mobile-only: the whole
- * effect arms under the ≤1023px breakpoint and is a complete no-op on
- * desktop. Returns a disposer (via installMobileEffect) that removes every
- * listener, observer, injected node, and the confirm dialog.
+ * Install the mobile session-delete menu machinery. Touch-gated: the whole
+ * effect arms under TOUCH_QUERY — (pointer: coarse) at EVERY width — so a
+ * large tablet in landscape keeps the desktop layout but still gets the
+ * delete item, while any mouse-driven or pointer-less window stays a
+ * complete no-op. Returns a disposer (via installMobileEffect) that removes
+ * every listener, observer, injected node, and the confirm dialog.
  * @param ctx - client root context.
  */
 function installSessionMenuDelete(ctx) {
@@ -5180,7 +5318,11 @@ function installSessionMenuDelete(ctx) {
                 // mode that left deleted cold sessions lingering as ghost rows.
                 const sessions = ctx.sessions;
                 await sessions.refresh?.();
-                if (wasCurrent)
+                // On the mobile branch the drawer hosts the list, so closing it is
+                // the right follow-up after deleting the current session; on the
+                // desktop layout (wide touch) the same call would collapse the
+                // always-visible sidebar panel, so gate it on the mobile query.
+                if (wasCurrent && window.matchMedia(phone_chrome_ts_1.MOBILE_QUERY).matches)
                     ctx.layout.toggleSidebar();
             });
             frame.appendChild(backdrop);
@@ -5330,7 +5472,7 @@ function installSessionMenuDelete(ctx) {
             closeDialog();
             anchor = null;
         };
-    });
+    }, phone_chrome_ts_1.TOUCH_QUERY);
 }
 };
 __modules["effects/composer-keyboard-guard.js"] = function (require, module, exports) {
@@ -5753,7 +5895,7 @@ function apply(ctx) {
     // Session deletion, injected into each session row's ⋯ menu (beside
     // rename / fork / archive) with a confirm dialog. Mobile-only.
     //
-    // PATCHED (dsh-handheld): DISABLED — the only local change to this bundle.
+    // PATCHED (dsh-handheld) P1 — 本 bundle 的本地改动之一，不是上游代码。
     // Upstream's item POSTs to /api/mobile-nav.session.delete, a route owned by
     // this plugin's HOST half, which this app deliberately never installs (the
     // dsh server stays completely unmodified — see README 「移动端界面适配」).
