@@ -2217,7 +2217,14 @@ exports.LAYOUT_CSS = `/* ---------- mobile-only layout (narrow viewport AND touc
     min-width: max-content;
     max-width: max-content;
     white-space: nowrap !important;
-    position: static;
+    /* P3：这里原本是 position: static，它顺手把弹层的锚点也拆了。
+       胶囊弹层是 dsh 自己的 .QsffPG_menu{position:absolute; top:calc(100% + 5px)}：
+       一旦 _root 不再是定位元素，包含块就上溯到 [data-mobile-nav="frame"]
+       （插件自己给它设了 position: relative，而它整屏高），于是菜单落在
+       y≈屏高 + 5px —— 屏幕外。症状是点胶囊箭头会翻转（open 生效）但菜单永不出现。
+       改回 relative（dsh 原本就是 relative）即可；order/flex/nowrap 与定位无关，
+       保持不动。证据与复现见 docs/vendored-plugin-patches.md 的 P3。 */
+    position: relative;
   }
   [data-mobile-nav="frame"] [data-phase] header [class*="_root"]:not([class*="_switcherRoot"]):has(> button[class*="_trigger"]) > button,
   [data-mobile-nav="frame"] [data-phase] header [class*="_root"]:not([class*="_switcherRoot"]):has(> button[class*="_trigger"]) > button * {
@@ -2334,14 +2341,31 @@ exports.LAYOUT_CSS = `/* ---------- mobile-only layout (narrow viewport AND touc
   }
 
   /* --- Header popovers on mobile (dsh-client-ui-jobs / dsh-client-ui-subagent) --- */
-  /* The official entries sit in the session header actions. Their popovers
-     are anchored to the trigger's left edge, so clamp them to the viewport. */
+  /* P3 让弹层重新锚回触发按钮之后，这里只剩「往哪边展」：
+     把菜单右边缘对齐触发按钮的右边缘。这一侧不会出屏 —— 触发按钮本身就在右对齐的
+     actions 车道里，所以 right: 0 保证整个菜单落在视口内；原来的 left: 8px（相对
+     触发按钮左边缘）在按钮靠近右边缘时会溢出屏幕。 */
   [data-mobile-nav="frame"] [data-phase] header [class*="_menu"] {
-    left: 8px !important;
-    right: auto !important;
+    left: auto !important;
+    right: 0 !important;
     width: min(336px, calc(100vw - 16px));
     max-width: none;
     max-height: min(420px, calc(100dvh - 120px));
+  }
+
+  /* --- P4：没有宿主的「文件浏览」不该出现 ---
+     Files（头部 data-mobile-nav="files" 与抽屉底部 data-mobile-nav="explorer"）
+     只做一件事：给 frame 打上 data-aionui-explorer-open，由第三方 dsh-web-ui /
+     aionui 套件的 explorer 列把它变成浮层。那套件不是 dsh 自带的：
+     2026-09-13 在本机 dsh 安装里 grep data-aionui-explorer-col /
+     data-dsh-market-root / data-dsh-taskboard-entry / gitgraph-chip-anchor
+     全部 0 命中，于是按钮按下去**没有任何反应** —— 一个明晃晃的死按钮。
+     这里用整篇文档做判据：宿主列存在就显示（套件哪天装上都自动恢复），不存在就不显示。
+     为什么判据挂在 html 上而不是 frame 上：套件若把列渲染到 frame 之外（portal），
+     挂在 frame 上会永远判否，按钮就再也回不来了。 */
+  html:not(:has([data-aionui-explorer-col])) [data-mobile-nav="files"],
+  html:not(:has([data-aionui-explorer-col])) [data-mobile-nav="explorer"] {
+    display: none !important;
   }
   /* --- Settings dialog on mobile ---
      Desktop: 800px two-column flex (188px nav + content). Mobile: a

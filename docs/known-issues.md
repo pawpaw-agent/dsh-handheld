@@ -292,3 +292,38 @@ unzip -p app-debug.apk classes6.dex | grep -a -o "onCreate: savedUrl" | wc -l
 ```
 
 因此该包即使 `versionCode` 与 1.11.0 同为 28，也能靠 `onCreate: savedUrl` 是否存在自我标识。
+
+---
+
+## 五、全 UI 走查（2026-09-13，SM-S9280 / Android 16，release 0.1.9）
+
+方法：`uiautomator dump` 取无障碍树拿到每个元素的精确 `bounds`，**把 bounds 画回截图核对
+1:1 对齐**（先验证过坐标空间），再用 `input tap` 驱动；每一步都有截图 + 无障碍树双证据。
+不依赖 debuggable。
+
+### 正常
+
+抽屉（按钮开 / 遮罩关 / 收起）、新会话、会话切换、会话搜索（过滤 + 提示 + 清除）、视图选项
+（分组 / 排序，实时生效）、设置页（通用设置 / 模型 / 插件，含可展开表单）、`⋯` 菜单、
+**文件预览**（会话里的文件链接点开 → 右侧栏文档预览浮层，全屏态带「退出全屏」）、
+原生连接屏 + 诊断面板、BACK 从网页回连接屏。
+
+### 修掉的问题
+
+| # | 现象 | 根因 | 修法 |
+|---|---|---|---|
+| 1 | 点后台任务胶囊，箭头翻转但**菜单在屏幕外** | 插件把胶囊 `_root` 降级为 `position: static`，弹层的包含块上溯到整屏高的 frame，`top: calc(100% + 5px)` 落到屏外 | 插件 P3：`static` → `relative`，clamp 改 `right: 0` |
+| 2 | **导出会话日志提示成功，文件不落地** | `MainActivity` 从未 `setDownloadListener`；Android WebView 对没有 listener 的下载**静默丢弃** | 新增 `enqueueDownload()`：转交 DownloadManager，显式带 Cookie（隧道后面是 cookie 认证），API 29+ 落公共 Downloads |
+| 3 | **文件浏览是死按钮**（头部 + 抽屉两处） | 它只给 frame 打 `data-aionui-explorer-open`，靠第三方 dsh-web-ui/aionui 套件的 explorer 列变浮层；该套件**不是 dsh 自带**，本机 grep `data-aionui-explorer-col` 等 4 个标记全部 0 命中 | 插件 P4：`html:not(:has([data-aionui-explorer-col]))` 时隐藏这两个入口 |
+| 4 | **添加工作区**：手机按下无反应，对话框开在电脑上 | web bundle 挂的是 `directory-picker-auto`，boot 采样判定为 native（回环绑定 + 非 SSH 启动 + 有 DISPLAY/WAYLAND + zenity 在 PATH）→ 在**主机桌面**弹 GTK 对话框 | 主机侧：`~/.dsh/profiles/web/cordis.patch.yml` 禁用 `directory-picker`，改挂 `-browse`（应用内对话框，两边都能用） |
+
+第 4 条的取证最直接：手机按下后主机上出现了
+`zenity --file-selection --directory --title=Select Workspace Directory` 进程；杀掉它，
+手机才弹「无法打开文件夹 / directory picker failed: Command failed: zenity …」。
+
+### 仍未覆盖
+
+- **终端模式**本轮未复测（切用途要重走一次连接、会动到正在用的隧道）；上一次逐项记录见
+  本文开头 2026-09-12 那张表。
+- P4 的「套件装上后按钮回来」这一支本机无法验证（没有套件可装）。
+- `断开连接` 会走 §二 那条路径，本轮刻意没点。

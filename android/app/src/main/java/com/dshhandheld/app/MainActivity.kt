@@ -2,6 +2,7 @@ package com.dshhandheld.app
 
 import android.app.Activity
 import android.app.AlertDialog
+import android.app.DownloadManager
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
@@ -11,6 +12,7 @@ import android.graphics.Typeface
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.os.Environment
 import android.os.Handler
 import android.os.Looper
 import android.text.InputType
@@ -18,7 +20,9 @@ import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
 import android.view.WindowManager
+import android.webkit.CookieManager
 import android.webkit.HttpAuthHandler
+import android.webkit.URLUtil
 import android.webkit.WebChromeClient
 import android.webkit.WebResourceError
 import android.webkit.WebResourceRequest
@@ -226,7 +230,7 @@ class MainActivity : Activity() {
         // P2 放宽后台任务胶囊的压缩条件），补丁内容与重新 vendoring 步骤见
         // docs/vendored-plugin-patches.md。
         const val MOBILE_PLUGIN_ID = "dsh-web-mobile"
-        const val MOBILE_PLUGIN_REV = "dsh-web-mobile-2.4.1-dsh1"
+        const val MOBILE_PLUGIN_REV = "dsh-web-mobile-2.4.1-dsh2"
         const val MOBILE_PLUGIN_URL = "/plugins/??$MOBILE_PLUGIN_ID/client.js&rev=$MOBILE_PLUGIN_REV"
 
         /**
@@ -362,6 +366,13 @@ class MainActivity : Activity() {
                         progressBar?.progress = newProgress
                     }
                 }
+            }
+            // 没有 DownloadListener 时 Android WebView 会**静默丢弃**下载：dsh 的
+            // 「导出会话日志」是同源 URL + `download` 属性，服务端确实发了请求、前端也确实
+            // 弹了「Session 导出已开始下载」，但手机上永远没有文件（2026-09-13 真机取证：
+            // /sdcard/Download 无 dsh-session-*.zip、dumpsys download 为空）。
+            setDownloadListener { url, userAgent, contentDisposition, mimeType, _ ->
+                enqueueDownload(url, userAgent, contentDisposition, mimeType)
             }
         }
         root.addView(webView)
@@ -917,6 +928,57 @@ class MainActivity : Activity() {
         statusView?.text = msg
         statusView?.setTextColor(if (err) COL_ERROR else COL_MUTED)
         statusView?.visibility = if (msg.isBlank()) View.GONE else View.VISIBLE
+    }
+
+    // ── 下载转交 ─────────────────────────────────────────────
+    /**
+     * 把 WebView 拦到的下载交给系统 DownloadManager。
+     *
+     * 两个坑都写在这里，免得下次又被同一处咬：
+     *
+     * 1. **认证**：dsh 跑在 SSH 隧道后面（`http://127.0.0.1:<port>`），认证是 cookie
+     *    （`dsh-auth-*`）。DownloadManager 在 system_server 里取 URL，**不带** WebView 的
+     *    cookie jar，不显式塞 `Cookie` 头就会下到一个 401 的 HTML 页面。
+     * 2. **落点**：API 29+ 的公共 Downloads 目录不需要任何权限（走 MediaStore）；
+     *    API 26–28 写公共目录要 `WRITE_EXTERNAL_STORAGE`，这里退到应用专属外部目录，
+     *    宁可落点差一点也不要为此申请一个存储权限。
+     */
+    private fun enqueueDownload(
+        url: String,
+        userAgent: String?,
+        contentDisposition: String?,
+        mimeType: String?
+    ) {
+        val filename = try {
+            URLUtil.guessFileName(url, contentDisposition, mimeType)
+        } catch (e: Exception) {
+            "dsh-download"
+        }
+        DiagLog.i(TAG, "onDownloadStart: name=$filename mime=$mimeType url=${url.take(140)}")
+        try {
+            val request = DownloadManager.Request(Uri.parse(url)).apply {
+                setMimeType(mimeType ?: "application/octet-stream")
+                setTitle(filename)
+                setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
+                CookieManager.getInstance().getCookie(url)?.takeIf { it.isNotBlank() }?.let {
+                    addRequestHeader("Cookie", it)
+                }
+                userAgent?.takeIf { it.isNotBlank() }?.let { addRequestHeader("User-Agent", it) }
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                    setDestinationInExternalPublicDir(Environment.DIRECTORY_DOWNLOADS, filename)
+                } else {
+                    setDestinationInExternalFilesDir(
+                        this@MainActivity, Environment.DIRECTORY_DOWNLOADS, filename
+                    )
+                }
+            }
+            (getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager).enqueue(request)
+            Toast.makeText(this, "已开始下载 $filename", Toast.LENGTH_LONG).show()
+        } catch (e: Exception) {
+            // 失败要说出来：dsh 前端只会显示「已交给浏览器」，它并不知道有没有落地
+            DiagLog.e(TAG, "下载转交失败：${e.message}")
+            Toast.makeText(this, "下载失败：${e.message ?: "未知错误"}", Toast.LENGTH_LONG).show()
+        }
     }
 
     // ── WebView 直连 ─────────────────────────────────────────

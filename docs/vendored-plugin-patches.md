@@ -21,7 +21,7 @@ bundle 原样放在 `android/app/src/main/assets/plugins/dsh-web-mobile-client.j
 > `session-menu.js` 28 行 —— 删除项在触摸下的 arm 判定；另有把 mobile effect 的
 > 触发条件从 `MOBILE_QUERY` 泛化为可传 `TOUCH_QUERY` 的重构。
 
-## 补丁清单（共 2 处）
+## 补丁清单（共 4 处）
 
 ### P1 — 禁用「删除会话」菜单项
 
@@ -88,6 +88,64 @@ header:has([class*="_crumbs"] [class*="_root"])
 </button><ul class="…_menu">…</ul></div>
 ```
 
+### P3 — 头部弹层（后台任务 / 子代理谱系）不再掉到屏幕外
+
+**位置**：bundle 内 `effects/aionui-compat.js` 会话头区块的两条规则。
+
+**问题**：真机上点后台任务胶囊，箭头会 `⌄`→`⌃` 翻转（说明 React 的 open 状态生效了），
+但**菜单在任何位置都看不见** —— 屏幕外。
+
+**根因是插件自己两条规则对撞**：
+
+```css
+/* 插件 A：把胶囊 root 从定位元素降级为 static */
+header [class*="_root"]:not([class*="_switcherRoot"]):has(> button[class*="_trigger"]) {
+  … position: static;
+}
+/* dsh 原生：弹层按「相对 root 的绝对定位」设计 */
+.QsffPG_root { position: relative }
+.QsffPG_menu { position: absolute; top: calc(100% + 5px); left: 0 }
+```
+
+`_root` 一旦不是定位元素，`_menu` 的包含块就上溯到最近的定位祖先 —— 也就是插件自己设成
+`position: relative` 的 `[data-mobile-nav="frame"]`，而它**整屏高**。于是
+`top: calc(100% + 5px)` 落在 `屏高 + 5px`：屏幕外。`left: 8px`（插件原有的 clamp）
+同样相对 frame，所以横向看着也对不上。
+
+**改法**：
+
+1. `position: static` → `position: relative`（dsh 原本就是 relative），弹层回到触发按钮上；
+2. 原有的 clamp 规则 `left: 8px` → `right: 0`。触发按钮就在右对齐的 actions 车道里，
+   右对齐这一侧永远不会出屏；`left: 8px`（相对按钮左边缘）在按钮靠近右边缘时会溢出。
+
+**为什么这样改是安全的**：`position: relative` 不改变元素在 flex 里的占位（`static` 才是
+初始值，这条本来就是多余的覆盖），其余各条（`order` / `flex` / `nowrap`）与定位无关，
+一个字没动。
+
+**取证**：`adb exec-out screencap` + `uiautomator dump`；修前 `_jobmenu-full.png` 全屏无菜单、
+修后菜单出现在胶囊正下方。
+
+### P4 — 宿主缺席时不显示死掉的「文件浏览」
+
+**位置**：bundle 内 `effects/aionui-compat.js`，紧随头部弹层区块。
+
+**问题**：Files（头部 `data-mobile-nav="files"` 与抽屉底部 `data-mobile-nav="explorer"`）
+只做一件事 —— 给 frame 打上 `data-aionui-explorer-open`，由第三方 **dsh-web-ui / aionui**
+套件的 explorer 列把它变成浮层。那套件**不是 dsh 自带的**：2026-09-13 在本机 dsh 安装里
+grep `data-aionui-explorer-col` / `data-dsh-market-root` / `data-dsh-taskboard-entry` /
+`gitgraph-chip-anchor` **全部 0 命中**。于是按钮按下去没有任何反应 —— 一个明晃晃的死按钮。
+
+**改法**：用整篇文档做判据，宿主列不存在就不渲染这两个入口。
+
+```css
+html:not(:has([data-aionui-explorer-col])) [data-mobile-nav="files"],
+html:not(:has([data-aionui-explorer-col])) [data-mobile-nav="explorer"] { display: none !important; }
+```
+
+判据挂在 `html` 而不是 frame 上：套件若把列渲染到 frame 之外（portal），挂在 frame 上会
+永远判否，按钮就再也回不来了。套件哪天装上，按钮自动回来（这一支**本机无法验证**，
+因为没有套件可装）。
+
 ## 验证方法
 
 用手机尺寸（384×832、`hasTouch`、触屏 UA）打开真实 dsh 页面，按 App 的方式注入
@@ -111,17 +169,22 @@ P2 的验证在真机上看会话头：在「有后台任务运行、无子代�
 3. 重新应用 P1：`grep -n "installSessionMenuDelete)(ctx);"` 定位那一行并注释掉。
 4. 重新应用 P2：`grep -n 'class\*="_count"'` 找到那条选择器，删掉
    `header:has([class*="_crumbs"] [class*="_root"]) ` 前缀。
-5. `node --check` 确认语法通过。
+5. 重新应用 P3：`grep -n "position: static;"` 若命中会话头那条 `_root` 规则，改回
+   `position: relative`；再把头部 `[class*="_menu"]` 的 `left: 8px` 改成 `right: 0`
+   （同时把 `right: auto` 改成 `left: auto`）。
+6. 重新应用 P4：`grep -n "data-aionui-explorer-col"` 找回那条 `html:not(:has(…))` 规则，
+   上游若已自带同类守卫则跳过。
+7. `node --check` 确认语法通过。
    ⚠️ **CSS 整体位于 JS 模板字符串内**：新增注释里**不能出现反引号**，否则会提前
    终止模板字符串。这一条是实测踩过的 —— `node --check` 会以
    `SyntaxError: Unexpected identifier` 报出来。
-6. 同步更新 `MainActivity.MOBILE_PLUGIN_REV` 与 `scripts/ui-verify.mjs` 的
+8. 同步更新 `MainActivity.MOBILE_PLUGIN_REV` 与 `scripts/ui-verify.mjs` 的
    `PLUGIN_REV`（两处必须一致，`check-mobile-hooks.mjs` 的静态不变量会校验 id，
    但 rev 的一致性靠这两处手改）：rev 是 WebView 侧的缓存键，内容变了 rev 不变
    可能命中旧缓存。
-7. 跑 `node scripts/check-mobile-hooks.mjs --contract` —— 重新 vendoring 会改变
+9. 跑 `node scripts/check-mobile-hooks.mjs --contract` —— 重新 vendoring 会改变
    插件依赖的 dsh 钩子集合，那必须是显式动作。
-8. 若上游已把该功能做成无需宿主半边，或本项目决定安装宿主半边，则删除 P1。
+10. 若上游已把该功能做成无需宿主半边，或本项目决定安装宿主半边，则删除 P1。
 
 ## 附：会话删除走「外部移除」
 

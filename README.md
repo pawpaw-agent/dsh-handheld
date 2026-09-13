@@ -336,17 +336,23 @@ node scripts/check-mobile-hooks.mjs
 （`scripts/ui-verify.mjs`，手机视口 + A/B 对照 + 截图）见
 [`docs/mobile-ui-verification.md`](docs/mobile-ui-verification.md)。
 
-> ⚠️ **对上游产物打了两处补丁**（P1、P2）：
+> ⚠️ **对上游产物打了四处补丁**（P1–P4）：
 >
 > - **P1** 摘掉上游 v2.4.0 新增的「删除会话」菜单项 —— 它的宿主半边
 >   （`POST /api/mobile-nav.session.delete`）在「服务端零改动」的前提下不存在，点它只会报
 >   `HTTP 404`。
 > - **P2** 放宽窄屏下后台任务胶囊的压缩条件 —— 上游只在「子代理谱系 + 后台任务」同时存在
 >   时压缩它，实测两者只出现其一时会把会话标题压成一个字（渲染成 `检..`）。
+> - **P3** 修头部弹层的锚点 —— 插件把胶囊 root 降级成 `position: static`，弹层的包含块
+>   于是上溯到整屏高的 frame，点开后台任务菜单会落在屏幕外（箭头会翻转，菜单看不见）。
+> - **P4** 宿主缺席时不显示「文件浏览」 —— 它依赖第三方的 dsh-web-ui/aionui explorer 套件，
+>   本部署没装，按下去没有任何反应。
 >
 > 补丁位置、影响面与重新 vendoring 步骤见
 > [`docs/vendored-plugin-patches.md`](docs/vendored-plugin-patches.md)（该文也写了会话删除的
 > 「外部移除」做法：dsh 官方不在接口里提供物理删除，UI 上只有单向且不回收磁盘的归档）。
+> 2026-09-13 的全 UI 走查结论（哪些正常、修了什么、哪些依赖环境）见
+> [`docs/known-issues.md`](docs/known-issues.md) §五。
 
 ---
 
