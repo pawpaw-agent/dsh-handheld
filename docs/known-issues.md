@@ -338,6 +338,16 @@ unzip -p app-debug.apk classes6.dex | grep -a -o "onCreate: savedUrl" | wc -l
 效果是电脑桌面上弹出文件管理器窗口 —— 手机上按下去什么都不发生。同一条原则：去掉
 （适配层里按类名 `header [class*="_split"]` 隐藏；本 dsh 语料里另两处 `_split` 都不在会话头）。
 
+### 又去掉一个：会话头那枚「⋯」（= 下载 Session 日志）
+
+它由 `dsh-session-log-export` 注册进 `conversation.session.header.utilities` 槽，
+内容是「省略号图标 + 只有一个菜单项的菜单」（`menu.download` = 下载 Session 日志）。
+这枚按钮存在的唯一目的就是它，所以整枚去掉 —— 手机上不再提供会话日志下载入口。
+判据：该插件本版唯一的类名是 `<hash>_moreButton`，全 dsh 安装里只有它一个模块定义这个名字。
+
+（抽屉底部那个「导出会话日志」是旧 vendored 插件加的，已随插件删除；`/export` 斜杠命令仍在，
+那属于宿主自己的能力，不在界面入口之列。）
+
 结论：**手机端「添加工作区」与「文件浏览」都按「做不到就不留」处理**，
 不再依赖任何主机侧改动；2026-09-13 适配层自研后，这两条是自研层的原生行为，
 不再是「打在别人代码上的补丁」。

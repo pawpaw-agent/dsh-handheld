@@ -241,6 +241,17 @@ window.__ModuleLoader__.load({
   [data-handheld="frame"] [data-phase] header [class*="_split"] {
     display: none !important;
   }
+
+  /* (c) 会话头那枚「⋯」整个去掉 —— 它存在的唯一目的就是「下载 Session 日志」：
+     由 dsh-session-log-export 注册进 conversation.session.header.utilities 槽，
+     内容是「省略号图标 + 只有一个菜单项的菜单（menu.download = 下载 Session 日志）」。
+     去掉它 = 手机上不再有会话日志下载入口（抽屉底部那个「导出会话日志」是旧 vendored
+     插件加的，已随插件一起删除）。
+     判据：这个插件本版唯一的类名是 <hash>_moreButton，全 dsh 安装里只有它一个模块
+     定义这个名字（grep -rl _moreButton 命中 1 个文件），所以能精确命中。 */
+  [data-handheld="frame"] [data-phase] header [class*="_moreButton"] {
+    display: none !important;
+  }
 }
 
 /* 宽屏 / 精确指针：这一层整体退场，交给桌面布局。 */
