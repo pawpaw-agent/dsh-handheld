@@ -1102,8 +1102,37 @@ class MainActivity : Activity() {
                 if (token != null) guideLine(2, "② 建立安全通道 ✓ 已连通", state = false)
                 else guideLine(2, "② 建立安全通道 ⚠ 未获取令牌，仍尝试打开", state = null)
                 persistSshConfig(sshHost, sshPort, sshUser, remotePort, auth)
-                sshTokenAck = false
-                connectWeb(base)
+                // 同 origin 恢复：隧道端口没漂、WebView 上那一页还停在同一个 origin 时，
+                // **不重载**。页面自己的重连（SSE/fetch 重试）会接到新隧道上；cookie 在同一
+                // authority 下仍然有效；万一服务端重启过导致 401，onReceivedHttpError 那条
+                // 既有路径会带着新 token 重新走一次 connectWeb（见 handleUnauthorized）。
+                // 断掉的那条流由下面的 offline→online 提示唤起重连，不再需要手动刷新。
+                val loaded = webView?.url
+                val sameOrigin = loaded != null && loaded.startsWith("http") &&
+                    runCatching { android.net.Uri.parse(loaded).let { "${it.scheme}://${it.authority}" } }
+                        .getOrNull() == base
+                if (sameOrigin) {
+                    DiagLog.i(TAG, "connectViaSsh: 同 origin（$base）且页面还在 → 不重载（省流量与视图状态）")
+                    guideLine(3, "③ 打开 dsh 网页 ✓ 已恢复原页面", state = false)
+                    // 与 connectWeb 对齐的两处簿记：prefs[url] 供冷启动自动重连，lastUrl 供
+                    // 401 恢复路径（handleUnauthorized）重新走一次带 token 的加载。
+                    lastUrl = base
+                    prefs.edit().putString("url", base).apply()
+                    showScreen(Screen.WEB)
+                    // 推一下页面自己的重连。dsh 的连接层监听 online/offline 并据此调
+                    // controller.setNetworkAvailable()（见 dsh-client-connection）——但隧道
+                    // 掉线期间浏览器的 navigator.onLine 一直是 true，所以只发 online 是空操作；
+                    // 必须先 offline 再 online 造出那次状态跃迁，重连逻辑才会跑。没有监听者时
+                    // 这两个 dispatch 也无害。
+                    webView?.evaluateJavascript(
+                        "window.dispatchEvent(new Event('offline'));" +
+                            "setTimeout(function(){window.dispatchEvent(new Event('online'));},0);",
+                        null
+                    )
+                } else {
+                    sshTokenAck = false
+                    connectWeb(base)
+                }
                 refreshConnectState()
                 endConnect()
             }
@@ -1644,13 +1673,18 @@ class MainActivity : Activity() {
 
     /** 断开连接：停隧道、清回连 URL、回连接屏。 */
     private fun disconnectCurrent() {
-        DiagLog.i(TAG, "disconnectCurrent: 关隧道 + 删 prefs[url] + 载入 about:blank")
+        // **刻意不把页面清成 about:blank**：页面留着，重新连接时若隧道仍落在同一个 origin
+        // （端口没漂）就能直接恢复，省掉一次整页重载（实测 ≈4.7 MB + SPA 重新拉会话历史）。
+        // 页面在没有隧道时是死的（请求全失败），连接屏盖在上面，没有可交互面。
+        // 「断开」不再等于「丢弃页面」——这一点与后台掉线后回前台的处理（0.1.9 同 origin
+        // 重建不重载）保持一致。
+        DiagLog.i(TAG, "disconnectCurrent: 关隧道 + 删 prefs[url]（保留页面，重连同 origin 可复用），" +
+            "webUrl=${webView?.url}")
         closeCurrentTunnel()
         prefs.edit().remove("url").apply()
         sshTokenAck = false
         unauthorizedCleanTried = false
         webView?.stopLoading()
-        webView?.loadUrl("about:blank")
         showConnectScreen()
         status("已断开")
     }

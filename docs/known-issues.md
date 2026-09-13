@@ -158,6 +158,24 @@ mWakefulness=Dozing
   注：1.11.0 删掉的那个前台服务宿主是 `AgentMonitorService`（dropbox 里 36 条崩溃全是它），
   与隧道保活不是一回事。
 
+### 手动「断开连接 → 重新连接」也不再重载（2026-09-14）
+
+用户报的「断开重连之后还是会重新加载网页」：`disconnectCurrent()` 原本会
+`loadUrl("about:blank")` 把页面丢掉，重连时 `connectViaSsh` 无条件 `connectWeb(base)`
+→ 整页重载（实测日志：`disconnectCurrent: … 载入 about:blank` → `connectWeb: url=…` →
+`onPageFinished: 正式页面加载完成`）。
+
+改法（与上面 0.1.9「同 origin 重建不重载」同一条思路）：
+
+1. `disconnectCurrent()` **不再清成 about:blank**，只 `stopLoading()` —— 页面留着，连接屏盖在上面；
+2. `connectViaSsh()` 里如果隧道仍落在**同一个 origin** 且 WebView 上那页还在同 origin，
+   就只切回网页、不重载；同时补齐 `lastUrl` / `prefs[url]` 两处簿记（401 恢复与冷启动自动重连要用）；
+3. 顺手推一下页面的重连：`dsh-client-connection` 监听 `online/offline` 并据此调
+   `controller.setNetworkAvailable()`；隧道掉线期间 `navigator.onLine` 一直是 true，
+   所以只发 `online` 是空操作 —— 必须先 `offline` 再 `online` 造出状态跃迁。
+
+端口漂了（origin 变了）仍然照旧重载：服务端 cookie 名含 authority，必然失效，得重走 token 交换。
+
 ### 整页重载的流量代价（0.1.9 实测）
 
 用户反馈「每次都要重新加载网页浪费太多流量」，于是量了一次冷加载（临时 dsh 实例，不动在用的那个）：
