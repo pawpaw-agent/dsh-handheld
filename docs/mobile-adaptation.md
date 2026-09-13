@@ -72,10 +72,11 @@ dsh 哪天改了这些，CI 的 `Mobile adaptation contract` 会红，而不是�
   `aria-label` 上（状态与无障碍信息都没丢，只是不再霸占标题宽度）。
 - **浮层住在抽屉里，但只借住 DOM**：设置对话框由宿主注册进 `sidebar.settings` 槽，
   所以它在 DOM 上是侧栏的后代；但它 `position: fixed`、盖满整屏，视觉上是视口级的。
-  这条「借住」关系有两个坑，1.0.11 都堵上了：① 抽屉收起时的 `pointer-events: none`
+  这条「借住」关系有两个坑，1.0.11 / 1.0.12 都堵上了：① 抽屉收起时的 `pointer-events: none`
   会把对话框一起冻住（它是继承属性）→ 抽屉里只要有 `[role=dialog][aria-modal]`，
-  整列就把指针要回来；② 「抽屉里点一下就收起来」的启发式会把对话框里的一次点击
-  当成"选完了" → 浮层（dialog / menu / listbox）里的点击不参与这条启发式。
+  整列就把指针要回来；② 「抽屉里点一下就收起来」的启发式会把「关对话框」的那一笔
+  （对话框里的文字、以及**作为面板兄弟的遮罩**）当成"选完了" → 抽屉里有模态时整条
+  启发式让位，判据按祖先范围而不是 `target.closest`。
   详见 `docs/known-issues.md` §五。
 - **BACK = Esc**：手机上关掉一个铺满整屏的页面，用户的直觉是系统返回键。页面里有模态时
   BACK 先派发一次 Escape（dsh 的模态在 document 上监听 Escape），240ms 后复查，
