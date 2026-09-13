@@ -56,9 +56,13 @@ window.__ModuleLoader__.load({
 @media ${MOBILE_QUERY} {
   /* ---------- 1. 外壳压成单列 ----------
      宿主默认是「侧栏 | 中栏 | 右栏」三轨网格，窄屏下侧栏缩成 56px 窄条、展开时把中栏
-     挤到只剩一条。手机上不需要窄条：两轨归零，中栏吃满，侧栏改由下面画成浮层。 */
+     挤到只剩一条。手机上不需要窄条：两轨归零，中栏吃满，侧栏改由下面画成浮层。
+     padding-top 补安全区：App 是 edge-to-edge 的，WebView 画在状态栏/刘海下面，
+     不加这一条头部内容会顶到状态栏里（真机第一次装实测：标题落在 y≈10 CSS px）。 */
   [data-handheld="frame"] {
+    box-sizing: border-box !important;
     grid-template-columns: minmax(0, 1fr) 0 0 !important;
+    padding-top: env(safe-area-inset-top, 0px) !important;
   }
 
   /* ---------- 2. 侧栏 = 左抽屉 ----------
@@ -113,11 +117,12 @@ window.__ModuleLoader__.load({
     padding-right: 8px !important;
   }
   /* 目录按钮注册在动作道里（宿主没有「左端」插槽），但手机上它该在左上角 ——
-     所以绝对定位到头部左边缘，再给标题行让出等宽的内边距。 */
+     所以绝对定位到头部左边缘，再给标题行让出等宽的内边距。
+     这里只写 12px：安全区已经由 frame 的 padding-top 让出来了，再算一次会double。 */
   [data-handheld="frame"] [data-phase] header [data-handheld="toggle"] {
     position: absolute !important;
     left: 8px !important;
-    top: calc(env(safe-area-inset-top, 0px) + 12px) !important;
+    top: 12px !important;
     z-index: 2 !important;
     display: inline-flex;
     align-items: center;
