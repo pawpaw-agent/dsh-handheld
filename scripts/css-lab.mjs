@@ -120,6 +120,8 @@ const main = async () => {
                drawerBtn: disp('[data-handheld=\"toggle\"]'),
                splitDisp: disp('[class*=\"_split\"]'),
                moreDisp: disp('[class*=\"_moreButton\"]'),
+               cornerRight: (function(){ var c=q('[class*=\"_headerCorner\"]'); if(!c) return null; var r=c.getBoundingClientRect(); return Math.round(r.right); })(),
+               viewport: de.clientWidth,
                menu: (function(){ var m=q('[class*=\"_menu\"]'); if(!m) return null; var r=m.getBoundingClientRect();
                  return {l:Math.round(r.left), t:Math.round(r.top), r:Math.round(r.right), b:Math.round(r.bottom)}; })(),
                chip: (function(){ var c=q('[class*=\"_trigger\"]'); if(!c) return null; var r=c.getBoundingClientRect();

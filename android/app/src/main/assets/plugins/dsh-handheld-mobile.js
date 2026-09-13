@@ -113,8 +113,11 @@ window.__ModuleLoader__.load({
      话，后台任务胶囊会把标题挤成一个字。 */
   [data-handheld="frame"] [data-phase] header {
     position: relative !important;
-    padding-left: 8px !important;
-    padding-right: 8px !important;
+    /* 刻意不动 header 的左右内边距：宿主是 padding:10px 28px 0 20px，而右端那条
+       动作道 ._headerCorner 自带 margin-right:-16px（让图标与右栏边缘对齐），
+       两者相抵后右边距只剩 12px。我们若把 padding-right 压到 8px，相抵就变成 -8px ——
+       右侧栏按钮会被顶到屏幕边缘外（当地探针实测 cornerRight 392 > 视口 384）。
+       左边距同理交给宿主：绝对定位的目录按钮在 left:8px，标题行的内边距单独加。 */
   }
   /* 目录按钮注册在动作道里（宿主没有「左端」插槽），但手机上它该在左上角 ——
      所以绝对定位到头部左边缘，再给标题行让出等宽的内边距。
@@ -136,8 +139,10 @@ window.__ModuleLoader__.load({
     color: var(--dsw-alias-label-secondary, inherit);
     -webkit-tap-highlight-color: transparent;
   }
+  /* 标题行给绝对定位的目录按钮（left:8px + 28px 宽）让出左边距：宿主本来的
+     header padding-left 是 20px，再加 20px = 40px，与按钮右缘留 4px 间隙。 */
   [data-handheld="frame"] [data-phase] header > :first-child {
-    padding-left: 34px !important;
+    padding-left: 20px !important;
   }
   [data-handheld="frame"] [data-phase] header [class*="_titleRow"] {
     min-width: 0 !important;
