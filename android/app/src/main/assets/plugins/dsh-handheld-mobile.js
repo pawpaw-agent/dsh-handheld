@@ -234,9 +234,17 @@ window.__ModuleLoader__.load({
 
       react.useEffect(function () {
         var node = ref.current;
-        // shell.overlay 槽的内容渲染在 frame > overlayLayer 里，往上两层就是 frame。
-        var frame =
-          node && node.parentElement ? node.parentElement.parentElement : null;
+        // shell.overlay 槽的内容渲染在外壳浮层里，但**槽运行时可能再加一层包裹**，
+        // 所以不能写死「往上两层」。改为向上找第一个「直接含有侧栏列」的祖先 ——
+        // 那按定义就是外壳网格（frame）。2026-09-13 真机第一次装就是因为写死了两层，
+        // 标记打到了包裹节点上，于是整套 CSS 静默失效（抽屉不生效、rail 还在）。
+        var frame = null;
+        for (var el = node; el && el !== document.body; el = el.parentElement) {
+          if (el.querySelector && el.querySelector(':scope > [class*="_sidebarCol"]')) {
+            frame = el;
+            break;
+          }
+        }
         if (!frame) return undefined;
         frame.setAttribute("data-handheld", "frame");
 
@@ -335,6 +343,40 @@ window.__ModuleLoader__.load({
           );
         });
       }, "dsh-handheld-mobile: shell overlay");
+
+      // ── 标记兜底：整套 CSS 都以 [data-handheld="frame"] 为前提，不能把它绑在
+      //    槽能不能渲染上。这里独立盯着 DOM，框架一出现就补标记（已经打过就跳过）。 ──
+      ctx.effect(function () {
+        var frame = null;
+        var raf = 0;
+        var disposed = false;
+        var mark = function () {
+          if (disposed) return;
+          var col = document.querySelector('[class*="_sidebarCol"]');
+          var next = col === null ? null : col.parentElement;
+          if (next !== null) {
+            frame = next;
+            if (frame.getAttribute("data-handheld") !== "frame") {
+              frame.setAttribute("data-handheld", "frame");
+            }
+          }
+        };
+        var schedule = function () {
+          if (raf !== 0 || disposed) return;
+          raf = window.requestAnimationFrame(function () {
+            raf = 0;
+            mark();
+          });
+        };
+        var observer = new MutationObserver(schedule);
+        observer.observe(document.documentElement, { childList: true, subtree: true });
+        mark();
+        return function () {
+          disposed = true;
+          observer.disconnect();
+          if (raf !== 0) window.cancelAnimationFrame(raf);
+        };
+      }, "dsh-handheld-mobile: frame marker");
 
       // ── 会话头里的目录按钮 ──────────────────────────────────
       ctx.effect(function () {

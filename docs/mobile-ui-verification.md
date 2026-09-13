@@ -32,7 +32,7 @@ dsh 哪天改了属性名或那几层结构，适配就**静默失效** —— �
 
 ```sh
 # fixture 页面（用真实 class 名搭的最小结构）+ 真实的 dsh 组件 CSS
-node /tmp/shot.mjs --page file:///tmp/fixture/fixture.html \
+node scripts/css-lab.mjs --page file:///tmp/fixture/fixture.html \
   --css /tmp/fixture/our.css [--open 1] [--hero 1] --out /tmp/fixture/shot.png
 ```
 
