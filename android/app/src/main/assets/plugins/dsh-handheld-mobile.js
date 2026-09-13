@@ -108,8 +108,31 @@ window.__ModuleLoader__.load({
      标题道（_crumbs）可压缩并省略，动作道（_headerActions）保持原样 —— 实测反过来的
      话，后台任务胶囊会把标题挤成一个字。 */
   [data-handheld="frame"] [data-phase] header {
+    position: relative !important;
     padding-left: 8px !important;
     padding-right: 8px !important;
+  }
+  /* 目录按钮注册在动作道里（宿主没有「左端」插槽），但手机上它该在左上角 ——
+     所以绝对定位到头部左边缘，再给标题行让出等宽的内边距。 */
+  [data-handheld="frame"] [data-phase] header [data-handheld="toggle"] {
+    position: absolute !important;
+    left: 8px !important;
+    top: calc(env(safe-area-inset-top, 0px) + 12px) !important;
+    z-index: 2 !important;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 28px;
+    height: 28px;
+    padding: 0;
+    border: 0;
+    border-radius: 50%;
+    background: transparent;
+    color: var(--dsw-alias-label-secondary, inherit);
+    -webkit-tap-highlight-color: transparent;
+  }
+  [data-handheld="frame"] [data-phase] header > :first-child {
+    padding-left: 34px !important;
   }
   [data-handheld="frame"] [data-phase] header [class*="_titleRow"] {
     min-width: 0 !important;
