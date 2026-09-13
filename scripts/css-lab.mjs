@@ -124,6 +124,9 @@ const main = async () => {
                viewport: de.clientWidth,
                dlgW: (function(){ var d=q('[role=\"dialog\"][aria-modal=\"true\"]'); return d ? Math.round(d.getBoundingClientRect().width) : null; })(),
                dlgNavDir: (function(){ var n=q('[role=\"dialog\"][aria-modal=\"true\"] > nav'); return n ? getComputedStyle(n).flexDirection : null; })(),
+               navListDisp: (function(){ var l=q('[role=\"dialog\"][aria-modal=\"true\"] [class*=\"_navList\"]'); return l ? getComputedStyle(l).display : null; })(),
+               navCellRight: (function(){ var cs=document.querySelectorAll('[role=\"dialog\"][aria-modal=\"true\"] [class*=\"_navCell\"]'); if(!cs.length) return null; var r=cs[cs.length-1].getBoundingClientRect(); return Math.round(r.right); })(),
+               navCellCount: (function(){ return document.querySelectorAll('[role=\"dialog\"][aria-modal=\"true\"] [class*=\"_navCell\"]').length; })(),
                dlgContentW: (function(){ var c=q('[role=\"dialog\"][aria-modal=\"true\"] > [class*=\"_content\"]'); return c ? Math.round(c.getBoundingClientRect().width) : null; })(),
                menu: (function(){ var m=q('[class*=\"_menu\"]'); if(!m) return null; var r=m.getBoundingClientRect();
                  return {l:Math.round(r.left), t:Math.round(r.top), r:Math.round(r.right), b:Math.round(r.bottom)}; })(),

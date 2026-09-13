@@ -268,7 +268,9 @@ window.__ModuleLoader__.load({
      calc(100vw - 48px) ≈ 336px，内容列被压到 ~100px —— 真机实测每个字一行
      （「选择新会话的默认权限模式」竖着排成 12 行）。
 
-     改成：面板铺满 + 导航从左侧竖栏变成顶部横向 tab 条。
+     改成：面板铺满 + 导航从左侧竖栏变成**顶部 2x2 网格**。
+     选 2x2 而不是横滑 tab 条：360px 视口下 4 个 tab 横排会被切掉（真机上第 4 个显示成
+     「Agent 预…」），横滑是隐藏成本；2x2 四个全在视野里、一次点击，代价只是多占约 76px。
      判据用语义结构而不是哈希类名：面板是 [role=dialog][aria-modal=true]:has(> nav)，
      导航就是它下面那个 <nav>，内容列是 _content / _options。
      作用域挂在 html:has([data-handheld="frame"]) 而不是 frame 上：这个对话框是 fixed
@@ -283,31 +285,26 @@ window.__ModuleLoader__.load({
   }
   html:has([data-handheld="frame"]) [role="dialog"][aria-modal="true"] > nav {
     flex: none !important;
-    flex-direction: row !important;
-    align-items: center !important;
     width: auto !important;
-    gap: 6px !important;
-    padding: 10px 12px 4px !important;
-    overflow-x: auto !important;
-    overscroll-behavior-x: contain;
-    scrollbar-width: none;
+    padding: 8px 10px 4px !important;
+    overflow: visible !important;
   }
-  html:has([data-handheld="frame"]) [role="dialog"][aria-modal="true"] > nav::-webkit-scrollbar {
-    display: none;
-  }
-  /* 「设置」那行标题在窄屏不占位（横向 tab 条自己说明是什么） */
+  /* 「设置」那行标题在窄屏不占位（网格自己说明是什么） */
   html:has([data-handheld="frame"]) [role="dialog"][aria-modal="true"] > nav > :first-child {
     display: none !important;
   }
+  /* 4 个分区 = 2x2 网格：全部可见、一次点击、不横滑、不折行 */
   html:has([data-handheld="frame"]) [role="dialog"][aria-modal="true"] > nav > [class*="_navList"] {
-    flex-direction: row !important;
+    display: grid !important;
+    grid-template-columns: 1fr 1fr !important;
     gap: 4px !important;
     min-width: 0;
   }
   html:has([data-handheld="frame"]) [role="dialog"][aria-modal="true"] > nav [class*="_navCell"] {
     flex: none !important;
-    height: 36px !important;
-    padding: 7px 12px !important;
+    width: 100% !important;
+    height: 34px !important;
+    padding: 6px 10px !important;
     white-space: nowrap;
   }
   /* 内容列铺满，内边距收紧 */
