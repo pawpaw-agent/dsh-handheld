@@ -126,8 +126,31 @@ dsh 哪天改了这些，CI 的 `Mobile adaptation contract` 会红，而不是�
 另有一个**本地渲染回环**用于快速迭代 CSS（这个沙箱里 Chromium 发不出 HTTP，所以用
 fixture 页面 + 真实的 dsh 组件 CSS，`file://` 加载）：见 `docs/mobile-ui-verification.md`。
 
+## 它与 App 的原生通道（1.0.15 起）
+
+适配层多做了一件事：**把「这一轮生成结束了」告诉 App** —— 任务完成通知的触发源。
+
+| | |
+|---|---|
+| 判据 | dsh 的「深度求索中…」指示器：`dsh-client-ui-chat` 的 `div[class*="_turnStatus"][role=status]`。它随 `running` 挂载/卸载，我们盯**从有到无**的那次跃迁 |
+| 通道 | `window.dshNative.postMessage(...)` —— WebView 的 `addWebMessageListener`（`androidx.webkit`），origin 只放行隧道实际会用的两个（`SshTunnel.PORT_CANDIDATES`），**只进不出**（App 不向页面发指令） |
+| 消息 | `{"type":"turn-start"}`、`{"type":"turn-done","title":…,"ms":…}` |
+| 没有桥时 | 静默跳过 —— 同一份 bundle 在桌面浏览器里只是不通知，不影响适配 |
+
+三条不显然的实现约束（都写在代码注释里）：
+
+1. **不能用 `requestAnimationFrame` 节流**（上面那个标记兜底 effect 用了没事，标记丢了只是不好看）：
+   页面在后台时 rAF 不跑，而我们要捕获的恰恰是「用户在别的 App 里」时发生的那次结束。
+   改成「记住上次找到的节点 + `isConnected`（O(1)）判断它还在不在」。
+2. **不能用定时器判「输出停了」**：后台的 `setTimeout`/`setInterval` 会被节流到分钟级，
+   而 `MutationObserver` 回调是微任务，跟着 JS 任务走，不受节流影响。
+3. **`webView.pauseTimers()` 与这个功能直接冲突**：它是全局的（"layout, parsing, and
+   JavaScript timers"），而「结束了」这个信号要靠页面重新渲染出来。所以
+   `MainActivity.onPause()` 只在页面空闲时才暂停定时器（判据是 `DshApp.pageBusy`，
+   由 `turn-start`/`turn-done` 维护）—— 代价是生成期间后台多耗一点电。
+
 ## 版本与缓存
 
 `MainActivity.MOBILE_PLUGIN_REV` 是 WebView 侧的缓存键：**内容变了必须换 rev**，否则可能
 命中旧缓存。CI 断言 App 常量与 bundle 内的 `id` 一致（`check-mobile-hooks.mjs` 的静态
-不变量）。当前为 `dsh-handheld-mobile-1.0.14`。
+不变量）。当前为 `dsh-handheld-mobile-1.0.15`。

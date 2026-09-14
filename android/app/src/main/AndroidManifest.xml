@@ -6,6 +6,9 @@
          并在内存压力下被优先杀掉。见 TunnelService 的类注释。 -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+    <!-- 「任务完成时提醒我」（Notifier）：Android 13+ 的运行时权限，只在用户打开那个
+         开关时才请求（连接屏「通知」卡）。不申请它的话，通知发出去也不会显示。 -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
     <application
         android:name=".DshApp"

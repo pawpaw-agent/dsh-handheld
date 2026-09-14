@@ -556,6 +556,93 @@ window.__ModuleLoader__.load({
         };
       }, "dsh-handheld-mobile: frame marker");
 
+      // ── 任务完成 → 通知 App ──────────────────────────────────
+      //
+      // 判据是 dsh 自己那个「深度求索中…」指示器：dsh-client-ui-chat 的 ChatView 里
+      //   div[class*="_turnStatus"][role=status][aria-live=polite] {t("chat.deepDiving")}
+      // 它在 `running` 为真时挂载、结束就卸载，所以我们盯的是**它从有到无**的那一次跃迁。
+      // 类名 `_turnStatus` 全安装唯一（只有 dsh-client-ui-chat 定义它），不依赖文案语种。
+      //
+      // 三条不显然的实现约束：
+      //  1. **不能用 requestAnimationFrame 节流**（上面那个标记兜底 effect 用了，它没事，
+      //     因为标记丢了也只是不好看）：页面在后台时 rAF 根本不跑，而我们要捕获的恰恰是
+      //     「用户在别的 App 里」时发生的结束事件。这里改成：记住上一次找到的节点，
+      //     用 `isConnected`（O(1)）判断它还在不在，不在才重新查询。
+      //     流式输出时节点一直在，代价就只有一次 isConnected。
+      //  2. **不用定时器去判「输出停了」**：后台的 setTimeout/setInterval 会被节流到分钟级，
+      //     而 MutationObserver 回调是微任务，跟着 JS 任务走，不受节流影响。
+      //  3. 太短的「一轮」（< 1.5s）不算数：切会话等操作会让指示器闪现一下，
+      //     那不该变成一条通知。
+      ctx.effect(function () {
+        var TURN_STATUS = '[class*="_turnStatus"]';
+        var MIN_TURN_MS = 1500;
+        var found = null;
+        var running = false;
+        var startedAt = 0;
+        var disposed = false;
+
+        var now = function () {
+          return window.performance && window.performance.now
+            ? window.performance.now()
+            : Date.now();
+        };
+
+        /** 会话标题：优先用会话头，取不到就退回 document.title。 */
+        var sessionLabel = function () {
+          try {
+            var header = document.querySelector('[data-handheld="frame"] [data-phase] header');
+            var host = header === null
+              ? null
+              : (header.querySelector('[class*="_crumbs"]') || header);
+            var text = host === null ? "" : String(host.textContent || "");
+            text = text.replace(/\s+/g, " ").trim();
+            if (text !== "") return text.slice(0, 60);
+          } catch (e) { /* 取不到就用兜底 */ }
+          return String(document.title || "").slice(0, 60);
+        };
+
+        /** 发一条给原生侧；没有桥（桌面浏览器 / 老版本 App）就什么都不做。 */
+        var post = function (payload) {
+          var bridge = window.dshNative;
+          if (!bridge || typeof bridge.postMessage !== "function") return;
+          try {
+            bridge.postMessage(JSON.stringify(payload));
+          } catch (e) { /* 通道坏了不该影响页面 */ }
+        };
+
+        var check = function () {
+          if (disposed) return;
+          var present = found !== null && found.isConnected;
+          if (!present) {
+            found = document.querySelector(TURN_STATUS);
+            present = found !== null;
+          }
+          var at = now();
+          if (present) {
+            if (!running) {
+              running = true;
+              startedAt = at;
+              post({ type: "turn-start" });
+            }
+            return;
+          }
+          // 指示器不在了：只有在「我们确实见过它」时才算一次结束
+          if (!running) return;
+          running = false;
+          var ms = Math.round(at - startedAt);
+          if (ms < MIN_TURN_MS) return;
+          post({ type: "turn-done", title: sessionLabel(), ms: ms });
+        };
+
+        var observer = new MutationObserver(check);
+        observer.observe(document.documentElement, { childList: true, subtree: true });
+        check();
+        return function () {
+          disposed = true;
+          observer.disconnect();
+        };
+      }, "dsh-handheld-mobile: turn watcher");
+
       // ── 会话头里的目录按钮 ──────────────────────────────────
       ctx.effect(function () {
         return slots.inject("conversation.session.header.actions", function () {

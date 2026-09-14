@@ -8,6 +8,8 @@ import android.content.MutableContextWrapper
 import android.os.Build
 import android.webkit.WebView
 import androidx.annotation.RequiresApi
+import androidx.webkit.WebViewCompat
+import androidx.webkit.WebViewFeature
 import com.dshhandheld.diag.DiagLog
 import com.dshhandheld.protocol.SshTunnel
 import java.io.File
@@ -29,10 +31,10 @@ import java.util.concurrent.CopyOnWriteArrayList
  *   （nativeLibraryDir/libdbclient.so、filesDir），SshTunnel 自身无 Context，
  *   由这里注入（方案 B：进程式隧道与终端共用）。
  *
- * 后台行为：**没有前台服务**（原本的 agent 完成通知已在 1.11.0 移除，改由服务端
- * 经微信推送）。退到后台后进程降为 cached，可能被系统回收 → 回到 App 会冷启动
- * 重连一次；因为本地端口固定为 3080，WebView 的 origin 稳定，localStorage 里的
- * 会话/工作区状态不会因此丢失。
+ * 后台行为：**有前台服务**（[com.dshhandheld.app.TunnelService]，0.1.8 起）—— 进程不进
+ * cached 队列，既不冻结也不容易被低内存杀手挑中，隧道看门狗因此有机会自愈。
+ * 历史上这里写过「没有前台服务、完成通知改由服务端经微信推送」：那条路 2026-09-14
+ * 已被 App 自己的任务完成通知取代（[Notifier] + 页面消息通道 [attachPageBridge]）。
  */
 class DshApp : Application() {
 
@@ -74,7 +76,107 @@ class DshApp : Application() {
         DiagLog.i(TAG, "obtainWebView: 首次创建")
         val w = MutableContextWrapper(activity)
         retainedWebViewContext = w
-        return WebView(w).also { retainedWebView = it }
+        return WebView(w).also { view ->
+            retainedWebView = view
+            attachPageBridge(view)
+        }
+    }
+
+    // ── 页面 → App 的消息通道（任务完成通知的触发源）──────────────────────
+    /**
+     * 注册 WebView 消息通道。
+     *
+     * **只在这里注册一次**：WebView 是跨 Activity 保活的（见类注释），而
+     * `addWebMessageListener` 是**累加**的 —— 挂在 Activity 里注册，每次重建都会多一层
+     * 监听，同一条消息发 N 次、通知也发 N 条。
+     *
+     * 通道名与页面约定：`window.dshNative.postMessage(JSON.stringify({type, ...}))`。
+     * 允许的 origin 只有隧道实际会用的那两个（`SshTunnel.PORT_CANDIDATES`）——
+     * 这是个**只进不出**的通道（App 不向页面发指令），但也没必要让任意 origin 都能进来。
+     */
+    private fun attachPageBridge(view: WebView) {
+        if (!WebViewFeature.isFeatureSupported(WebViewFeature.WEB_MESSAGE_LISTENER)) {
+            DiagLog.w(TAG, "WebView 不支持 WEB_MESSAGE_LISTENER，任务完成通知不会触发")
+            return
+        }
+        val origins = SshTunnel.PORT_CANDIDATES.map { "http://127.0.0.1:$it" }.toSet()
+        try {
+            WebViewCompat.addWebMessageListener(
+                view, PAGE_BRIDGE, origins
+            ) { _, message, origin, isMainFrame, _ ->
+                if (!isMainFrame) return@addWebMessageListener
+                onPageMessage(message.data, origin?.toString())
+            }
+            DiagLog.i(TAG, "已注册页面消息通道 $PAGE_BRIDGE（允许 origin：$origins）")
+        } catch (e: Exception) {
+            DiagLog.w(TAG, "注册页面消息通道失败：${e.javaClass.simpleName}: ${e.message}")
+        }
+    }
+
+    /**
+     * 页面来的一条消息。
+     *
+     * 目前只有一种：`{"type":"turn-done","title":"<会话标题>","ms":<这一轮跑了多久>}` ——
+     * 由 `assets/plugins/dsh-handheld-mobile.js` 在「深度求索中…」消失时发出。
+     *
+     * 三道闸门决定要不要真的弹通知：用户开关 → 是否在前台 → 系统权限（后者在 [Notifier]）。
+     */
+    private fun onPageMessage(data: String?, origin: String?) {
+        if (data.isNullOrBlank()) return
+        val json = runCatching { org.json.JSONObject(data) }.getOrNull()
+        if (json == null) {
+            DiagLog.w(TAG, "页面消息不是 JSON（来自 $origin）：${data.take(80)}")
+            return
+        }
+        when (json.optString("type")) {
+            "turn-start" -> {
+                pageBusy = true
+                DiagLog.i(TAG, "页面报告：一轮生成开始（pageBusy=true）")
+            }
+            "turn-done" -> {
+                pageBusy = false
+                val title = json.optString("title").takeIf { it.isNotBlank() }
+                val ms = json.optLong("ms", 0L)
+                val on = prefs.getBoolean(PREF_NOTIF_TURN, false)
+                val foreground = visibleActivities.get() > 0
+                DiagLog.i(TAG, "页面报告：一轮生成结束（${ms}ms，标题=$title，开关=$on，前台=$foreground）")
+                when {
+                    !on -> Unit
+                    foreground -> DiagLog.i(TAG, "App 在前台，不发通知")
+                    else -> Notifier.turnDone(this, title)
+                }
+            }
+            else -> DiagLog.w(TAG, "未知的页面消息：${json.optString("type")}")
+        }
+    }
+
+    /**
+     * 页面是否正在生成。
+     *
+     * 由页面的 `turn-start` / `turn-done` 消息维护；[MainActivity.onPause] 用它决定要不要
+     * `pauseTimers()` —— 生成期间暂停定时器会把「结束了」这个信号一起推迟，通知就永远不会响。
+     */
+    @Volatile
+    var pageBusy: Boolean = false
+        private set
+
+    // ── 前台判定 ────────────────────────────────────────────────────────
+    /**
+     * 当前有几个 Activity 处于 started 状态（0 = 用户在别的 App 或熄屏）。
+     *
+     * 用**计数**而不是布尔：Activity 切换时 `B.onStart` 早于 `A.onStop`，
+     * 布尔会被后到的 `A.onStop` 抹成「不在前台」。
+     */
+    private val visibleActivities = java.util.concurrent.atomic.AtomicInteger(0)
+
+    fun onActivityStarted() {
+        val n = visibleActivities.incrementAndGet()
+        DiagLog.i(TAG, "Activity started（可见数 $n）")
+    }
+
+    fun onActivityStopped() {
+        val n = visibleActivities.updateAndGet { if (it > 0) it - 1 else 0 }
+        DiagLog.i(TAG, "Activity stopped（可见数 $n）")
     }
 
     /**
@@ -365,9 +467,26 @@ class DshApp : Application() {
         )
     }
 
-    private companion object {
-        const val TAG = "DshApp"
+    companion object {
+        private const val TAG = "DshApp"
         /** 新拨号前最多等多久让上一次「断开」把旧 owner 收完（正常 <100ms）。 */
-        const val CLOSE_JOIN_MS = 5_000L
+        private const val CLOSE_JOIN_MS = 5_000L
+
+        /** 页面注入的桥对象名：页面侧写 `window.dshNative.postMessage(...)`。 */
+        private const val PAGE_BRIDGE = "dshNative"
+
+        /**
+         * 「任务完成时提醒我」开关的偏好键。
+         *
+         * 定义在这里（而不是 MainActivity）是因为**读写分居两处**：开关在连接屏，
+         * 判断在 [onPageMessage]。键名写两遍就会漂移成「开了没反应」。
+         */
+        const val PREF_NOTIF_TURN = "notif_turn_done"
+
+        /** 普通偏好文件名（开关不是凭据，不必走 SecurePrefs）。 */
+        const val PREFS = "dsh-handheld"
     }
+
+    /** 普通偏好；与 MainActivity 共用同一个文件，键名见 [PREF_NOTIF_TURN]。 */
+    private val prefs by lazy { getSharedPreferences(PREFS, MODE_PRIVATE) }
 }

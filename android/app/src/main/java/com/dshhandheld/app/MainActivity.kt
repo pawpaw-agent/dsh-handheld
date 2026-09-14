@@ -113,6 +113,11 @@ class MainActivity : Activity() {
     private var connectScroll: ScrollView? = null
     private var connectContent: LinearLayout? = null
 
+    // 通知开关（连接屏「任务完成时提醒我」）：权限回调要回来改它，故留一份引用。
+    private var notifSwitchView: android.widget.Switch? = null
+    private var notifSwitchListener: android.widget.CompoundButton.OnCheckedChangeListener? = null
+    private var refreshNotifHintView: (() -> Unit)? = null
+
     // ①②③ 连接进度行（引导流程；null = 界面未构造/非引导状态）
     private var stepGuideLine1: TextView? = null
     private var stepGuideLine2: TextView? = null
@@ -306,6 +311,8 @@ class MainActivity : Activity() {
         const val UA_MARKER = "DshHandheld/1.0"
         const val DEFAULT_PORT = "3080"
         const val REQ_PICK_KEY = 2001
+        /** POST_NOTIFICATIONS 的运行时申请（连接屏「任务完成时提醒我」开关）。 */
+        const val REQ_NOTIF = 2003
         /** WebView 内 <input type=file> 的文件选择请求（与私钥导入分开）。 */
         const val REQ_WEB_FILE = 2002
 
@@ -361,7 +368,7 @@ class MainActivity : Activity() {
         // id 必须与那个 bundle 内的 `id: "dsh-handheld-mobile"` 一致，改不得（CI 有断言）。
         // rev 只是 WebView 侧的缓存键：内容变更必须换 rev，否则可能命中旧缓存。
         const val MOBILE_PLUGIN_ID = "dsh-handheld-mobile"
-        const val MOBILE_PLUGIN_REV = "dsh-handheld-mobile-1.0.14"
+        const val MOBILE_PLUGIN_REV = "dsh-handheld-mobile-1.0.15"
         const val MOBILE_PLUGIN_URL = "/plugins/??$MOBILE_PLUGIN_ID/client.js&rev=$MOBILE_PLUGIN_REV"
 
         /**
@@ -382,7 +389,7 @@ class MainActivity : Activity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        prefs = getSharedPreferences("dsh-handheld", Context.MODE_PRIVATE)
+        prefs = getSharedPreferences(DshApp.PREFS, Context.MODE_PRIVATE)
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.KITKAT &&
             (applicationInfo.flags and android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE) != 0) {
@@ -1072,6 +1079,79 @@ class MainActivity : Activity() {
             addView(theForm, rowParams(width = ViewGroup.LayoutParams.MATCH_PARENT))
         }, rowParams(top = dp(24), width = ViewGroup.LayoutParams.MATCH_PARENT))
 
+        // ── 2b 通知卡 ──────────────────────────────────────────
+        // 任务完成提醒的开关。放在连接屏而不是藏进诊断页：这是用户唯一会主动进设置的屏幕，
+        // 而「要不要被打扰」是用户自己的决定 —— 默认关闭，打开了才去要权限。
+        val notifSwitch = android.widget.Switch(this@MainActivity).apply {
+            isChecked = prefs.getBoolean(DshApp.PREF_NOTIF_TURN, false)
+        }
+        notifSwitchView = notifSwitch
+        val notifHint = UiKit.text(this@MainActivity, "", 11f, COL_MUTED)
+
+        fun refreshNotifHint() {
+            val allowed = Notifier.allowed(this@MainActivity)
+            notifHint.text = when {
+                !notifSwitch.isChecked -> "关闭：生成结束时不提醒。"
+                !allowed -> "没有通知权限，提醒不会生效（点开关重新申请，或到系统设置里开启）。"
+                else -> "dsh 生成结束时提醒你 —— 只在 App 不在前台时才发。"
+            }
+            notifHint.setTextColor(if (notifSwitch.isChecked && !allowed) COL_ERROR else COL_MUTED)
+        }
+        refreshNotifHintView = { refreshNotifHint() }
+
+        /** 打开：权限齐了就落盘，缺权限则先去申请（结果在 onRequestPermissionsResult 处理）。 */
+        fun enableTurnNotif() {
+            prefs.edit().putBoolean(DshApp.PREF_NOTIF_TURN, true).apply()
+            Notifier.ensureChannels(this@MainActivity, Notifier.CHANNEL_TURN)
+            status("已开启任务完成提醒")
+            refreshNotifHint()
+            DiagLog.i(TAG, "通知开关：开（系统允许=${Notifier.allowed(this@MainActivity)}）")
+        }
+
+        // 监听器要留一份引用：权限被拒时得先摘掉它再拨回开关，否则拨回这一下又会触发「关闭」分支
+        val notifListener = android.widget.CompoundButton.OnCheckedChangeListener { _, checked ->
+            if (checked) {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+                    checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) !=
+                    android.content.pm.PackageManager.PERMISSION_GRANTED
+                ) {
+                    DiagLog.i(TAG, "通知开关：先申请 POST_NOTIFICATIONS")
+                    requestPermissions(
+                        arrayOf(android.Manifest.permission.POST_NOTIFICATIONS), REQ_NOTIF
+                    )
+                } else {
+                    enableTurnNotif()
+                }
+            } else {
+                prefs.edit().putBoolean(DshApp.PREF_NOTIF_TURN, false).apply()
+                Notifier.cancelTurn(this@MainActivity)
+                status("已关闭任务完成提醒")
+                refreshNotifHint()
+                DiagLog.i(TAG, "通知开关：关")
+            }
+        }
+        notifSwitch.setOnCheckedChangeListener(notifListener)
+        notifSwitchListener = notifListener
+        refreshNotifHint()
+
+        content.addView(LinearLayout(this@MainActivity).apply {
+            orientation = LinearLayout.VERTICAL
+            setBackgroundResource(R.drawable.bg_card)
+            setPadding(dp(16), dp(14), dp(16), dp(16))
+            addView(LinearLayout(this@MainActivity).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+                addView(LinearLayout(this@MainActivity).apply {
+                    orientation = LinearLayout.VERTICAL
+                    addView(UiKit.text(this@MainActivity, "任务完成时提醒我", 14f, COL_TEXT))
+                    addView(notifHint, rowParams(top = dp(6), width = ViewGroup.LayoutParams.MATCH_PARENT))
+                }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+                addView(notifSwitch, LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.WRAP_CONTENT, dp(48)
+                ).apply { gravity = Gravity.CENTER_VERTICAL })
+            }, rowParams(width = ViewGroup.LayoutParams.MATCH_PARENT))
+        }, rowParams(top = dp(14), width = ViewGroup.LayoutParams.MATCH_PARENT))
+
         // ── 3 贴底动作区 ───────────────────────────────────────
         val actionZone = LinearLayout(this@MainActivity).apply {
             orientation = LinearLayout.VERTICAL
@@ -1232,6 +1312,35 @@ class MainActivity : Activity() {
         } catch (_: Exception) {
             status("无法打开文件选择器")
         }
+    }
+
+    /**
+     * 通知权限的结果。
+     *
+     * 被拒时要把开关**拨回去**：开关停在「开」而权限没给，用户下次会以为提醒坏了。
+     * 拨回去之前先摘掉监听器 —— 否则这一次 `isChecked = false` 又会触发一遍「关闭」分支。
+     */
+    override fun onRequestPermissionsResult(
+        requestCode: Int, permissions: Array<out String>, grantResults: IntArray
+    ) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        if (requestCode != REQ_NOTIF) return
+        val granted = grantResults.isNotEmpty() &&
+            grantResults[0] == android.content.pm.PackageManager.PERMISSION_GRANTED
+        DiagLog.i(TAG, "POST_NOTIFICATIONS 结果：granted=$granted")
+        val sw = notifSwitchView ?: return
+        if (granted) {
+            prefs.edit().putBoolean(DshApp.PREF_NOTIF_TURN, true).apply()
+            Notifier.ensureChannels(this, Notifier.CHANNEL_TURN)
+            status("已开启任务完成提醒")
+        } else {
+            prefs.edit().putBoolean(DshApp.PREF_NOTIF_TURN, false).apply()
+            sw.setOnCheckedChangeListener(null)
+            sw.isChecked = false
+            sw.setOnCheckedChangeListener(notifSwitchListener)
+            status("没有通知权限，提醒未开启", err = true)
+        }
+        refreshNotifHintView?.invoke()
     }
 
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
@@ -1842,6 +1951,23 @@ class MainActivity : Activity() {
     }
 
     /**
+     * 可见性计数（[DshApp.onActivityStarted]）—— 决定「页面报告任务完成时要不要弹通知」。
+     *
+     * 用 onStart/onStop 而不是 onResume/onPause：后者在**权限对话框、系统弹窗**盖上来时也会
+     * 触发（那一刻用户其实还在这一屏上，只是被系统对话框挡住），会把「前台」误判成「后台」，
+     * 于是自己刚点的开关立刻给自己发一条通知。
+     */
+    override fun onStart() {
+        super.onStart()
+        (application as? DshApp)?.onActivityStarted()
+    }
+
+    override fun onStop() {
+        (application as? DshApp)?.onActivityStopped()
+        super.onStop()
+    }
+
+    /**
      * 回到前台时用**真流量探针**重新确认隧道，必要时重建。
      *
      * 为什么必须有这一步：熄屏一段时间后整个进程会被 Android 冻结（实测
@@ -1964,7 +2090,14 @@ class MainActivity : Activity() {
     override fun onPause() {
         super.onPause()
         DiagLog.i(TAG, "onPause")
-        webView?.onPause(); webView?.pauseTimers()
+        webView?.onPause()
+        // 页面正在生成时**不暂停定时器**：pauseTimers 是全局的（"layout, parsing, and
+        // JavaScript timers"），而「这一轮结束了」这个信号要靠页面里的 React 重新渲染出来
+        // —— 定时器一停，渲染与观察者都可能推迟到用户回到 App 才跑，任务完成通知就永远不会响。
+        // 代价是后台时多耗一点电，所以只在真有活干的时候让路（空闲即暂停）。
+        val busy = (application as? DshApp)?.pageBusy == true
+        if (busy) DiagLog.i(TAG, "onPause: 页面正在生成，保留定时器（任务完成通知依赖它）")
+        else webView?.pauseTimers()
     }
 
     @Deprecated("Deprecated in Java")

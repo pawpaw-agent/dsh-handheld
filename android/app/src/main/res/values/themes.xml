@@ -12,5 +12,10 @@
         <item name="android:windowFullscreen">true</item>
         <item name="android:windowLightStatusBar">false</item>
         <item name="android:windowLightNavigationBar">false</item>
+        <!-- 平台控件的选中色。Theme.Material 默认是青绿，而全 App 是黑白色调 ——
+             连接屏那个「任务完成时提醒我」开关打开后会是一块青绿，与设计语言打架。
+             压回白色；其余控件（分段、单选）有自己的 drawable，不受影响。 -->
+        <item name="android:colorAccent">#F5F5F7</item>
+        <item name="android:colorControlActivated">#F5F5F7</item>
     </style>
 </resources>

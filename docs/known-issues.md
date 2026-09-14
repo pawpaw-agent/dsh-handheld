@@ -607,3 +607,50 @@ ScrollView（可滚动）
   而校验失败不会落盘，所以重启即回到正确值。
 - **首轮 CI 只报一条编译错误**：`buildDiagText` 里还留着 `connectStep`。改名时按
   `ConnectStep`（枚举）搜过，漏了 `connectStep`（字段）—— 大小写不同的标识符要分别搜。
+
+## 八、任务完成通知（0.1.11 / 2026-09-14）：App 自己发，不再靠服务端推送
+
+### 为什么
+
+`DshApp` 的类注释里留着这段历史：**原本的 agent 完成通知已在 1.11.0 移除，改由服务端
+经微信推送**。也就是说，想在手机上知道「dsh 干完活了」，得让电脑把消息发到微信、再由微信
+叫你 —— 要服务端配合，消息还要绕出 App 再绕回来。现在改回 App 自己发。
+
+### 怎么做的
+
+```
+页面（适配插件 1.0.15）
+  MutationObserver 盯 dsh 的「深度求索中…」指示器（_turnStatus）
+    出现 → postMessage({type:"turn-start"})
+    消失 → postMessage({type:"turn-done", title, ms})
+        ↓  WebView 消息通道（androidx.webkit 的 addWebMessageListener，
+           origin 只放行 127.0.0.1:3080 / 13080；在 DshApp 里注册一次，不随 Activity 重建叠加）
+DshApp.onPageMessage
+  三道闸门：用户开关 → 是否在前台 → 系统权限（Notifier.allowed）
+        ↓
+Notifier.turnDone → 渠道 dsh-turn（IMPORTANCE_DEFAULT），点开回到 App
+```
+
+开关在连接屏「任务完成时提醒我」（默认关闭，打开时才申请 `POST_NOTIFICATIONS`）。
+**为什么默认关闭**：这个 App 之前的立场是「除了隧道保活不发任何通知」，通知属于打扰，
+让用户自己决定要不要。
+
+三条不显然的地方（都写进代码注释了）：
+
+1. **`onPause` 里的 `webView.pauseTimers()` 与这个功能直接冲突**。它是全局的（"layout,
+   parsing, and JavaScript timers"），而「这一轮结束了」这个信号要靠页面重新渲染出来 ——
+   定时器一停，渲染与观察者都可能推迟到用户回到 App 才跑，通知永远不会响。
+   现在只**在页面空闲时**暂停（`DshApp.pageBusy`，由 `turn-start`/`turn-done` 维护）。
+2. **后台不能用 rAF / 定时器**：rAF 在后台根本不跑，`setTimeout` 被节流到分钟级。
+   判据改成 `MutationObserver`（微任务，跟着 JS 任务走）+ `isConnected`（O(1)）。
+3. **通知权限是全 App 一次性的**：用户为了任务完成提醒批准之后，隧道那条常驻通知
+   （`IMPORTANCE_MIN`，静默）也会跟着出现在通知栏里 —— 系统规则，不能只批一半。
+
+### 怎么验证（真机）
+
+1. 连接屏打开「任务完成时提醒我」→ 系统权限对话框 → 允许
+2. 回网页，发一条会跑十几秒的消息，**立刻按 HOME**（App 进后台）
+3. 等这一轮结束，通知栏应出现「dsh 做完了 / <会话标题>」
+4. 反向：留在 App 前台做同样的事 —— **不应该**有通知（`turn-done` 会记进
+   `DiagLog`：「App 在前台，不发通知」）
+5. 取证不必看屏幕：`adb shell dumpsys notification --noredact | grep -A3 dsh-turn`
