@@ -1192,6 +1192,20 @@ class MainActivity : Activity() {
             ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
         ))
 
+        // 键盘弹起时把动作区顶上去。
+        //
+        // 不能只靠 manifest 的 `adjustResize`：本 Activity 关了 `decorFitsSystemWindows`
+        // （沉浸全屏的前提），「系统自动把窗口缩到键盘之上」就不再是框架的职责，各版本
+        // 行为不一致。这里直接消费 IME inset —— 窗口已经缩过时这个值是 0，不会重复位移，
+        // 所以两种行为下都对。
+        androidx.core.view.ViewCompat.setOnApplyWindowInsetsListener(root) { v, insets ->
+            v.setPadding(
+                0, 0, 0,
+                insets.getInsets(androidx.core.view.WindowInsetsCompat.Type.ime()).bottom
+            )
+            insets
+        }
+
         // ── 初始相位 ───────────────────────────────────────────
         // 配置齐全 → 折叠（这一屏每天只是「看一眼 + 点一下」）；缺东西 → 摊开，
         // 别让用户对着一个「修改 ›」猜里面缺什么。
@@ -1721,7 +1735,8 @@ class MainActivity : Activity() {
             append(DiagLog.lastExitSummary ?: "（无记录：首次运行，或系统低于 Android 11）")
             append("\n\n── 当前状态 ──\n")
             append("版本       ").append(pkgVer()).append('\n')
-            append("屏幕       ").append(screen).append(" / ").append(connectStep).append('\n')
+            append("屏幕       ").append(screen).append(" / ").append(connectPhase)
+                .append(" failed=").append(connectFailed).append('\n')
             append("隧道       ").append(t?.localBaseUrl ?: "（无）")
             if (t != null) append("   健康=").append(t.isHealthy())
             append('\n')
