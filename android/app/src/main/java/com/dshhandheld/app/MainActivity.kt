@@ -1041,11 +1041,14 @@ class MainActivity : Activity() {
             gravity = Gravity.CENTER_VERTICAL
             isClickable = true
             isFocusable = true
+            // 左列也给 48dp 并让内容居中：展开时左列只剩一行标签（11sp ≈ 15dp），
+            // 不这么做它贴顶、右边的「收起」居中，两者会差出 15dp —— 真机截图里一眼可见。
             addView(LinearLayout(this@MainActivity).apply {
                 orientation = LinearLayout.VERTICAL
+                gravity = Gravity.CENTER_VERTICAL
                 addView(label("连接设置"))
                 addView(summary, rowParams(top = dp(6), width = ViewGroup.LayoutParams.MATCH_PARENT))
-            }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+            }, LinearLayout.LayoutParams(0, dp(48), 1f))
             addView(settingsToggle, LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.WRAP_CONTENT, dp(48)
             ).apply { gravity = Gravity.CENTER_VERTICAL })
