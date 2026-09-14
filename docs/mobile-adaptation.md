@@ -37,8 +37,10 @@ App 启动 → WebView 加载 dsh 页面
 |---|---|
 | `data-phase` | 判断会话处于哪个阶段（`hero` / `active` / `settling` / `inert`）：hero 阶段没有会话头，浮动入口在那时出现 |
 | `data-sidebar-collapsed` | **抽屉的开合信号**：宿主窄屏下的 `!narrowExpanded`，我们不自己维护开合状态 |
+| `data-sidebar-right-panel` | 右侧边栏面板（取值 `fullscreen` / `push`）：手机上它只要打开就必然是 fullscreen |
+| `data-sidebar-right-mode` | 右侧边栏那个「全屏 / 退出全屏」按钮：手机上它与「收起」是同一个动作，隐藏（见下） |
 
-除这两个属性，还依赖三个结构（类名是哈希前缀，用 `[class*=…]` 匹配）：
+除这些属性，还依赖三个结构（类名是哈希前缀，用 `[class*=…]` 匹配）：
 
 ```
 div[class*="_frame"]                     外壳网格：侧栏 | 中栏 | 右栏（还有 _overlayLayer）
@@ -83,6 +85,14 @@ dsh 哪天改了这些，CI 的 `Mobile adaptation contract` 会红，而不是�
   一次 Escape（dsh 的模态在 document 上监听 Escape），240ms 后复查，模态还在就往下走；
   ② 抽屉开着就点我们自己的遮罩收起它（开合的真相始终在页面侧）；③ 都没有才走原来的语义
   （网页历史 → 连接屏 → 退到后台）。每一级都要求「真的做到了」才停，绝不让 BACK 变成空操作。
+- **右侧边栏在手机上只有一个出口**（1.0.14）。宿主自己算的是
+  `autoFullscreen = viewportWidth < 768`、`fullscreen = autoFullscreen || mode === "fullscreen"`，
+  所以 384px 的视口里右侧边栏**只要打开就是全屏**；而面板右上那个「全屏 / 退出全屏」按钮的
+  onClick 是 `if (fullscreen && autoFullscreen) setExpanded(false)` —— 手机上它和
+  「收起右侧边栏」**完全是同一个动作**（真机复现：点它，面板直接关掉），唯一多出来的效果是
+  把持久化的 mode 写成 `push`，会在用户回到电脑上打开同一个 dsh 时改变面板的初始形态。
+  按「做不到 / 重复的入口不留」把那个按钮隐藏（`data-sidebar-right-panel=fullscreen` 时），
+  判据用宿主写的两个 `data-*` 而不是 aria-label 的语种。
 - **做不到的入口不留**：凡是「动作发生在电脑上」的入口，手机上按了都没反应，一律隐藏 ——
   ① 工作区标题行的 `+`（目录选择器判成 native，对话框开在电脑桌面）；
   ② 会话头右上角的「在 文件管理器 中打开工作目录」（`open-in-app`：宿主探测本机应用，
@@ -120,4 +130,4 @@ fixture 页面 + 真实的 dsh 组件 CSS，`file://` 加载）：见 `docs/mobi
 
 `MainActivity.MOBILE_PLUGIN_REV` 是 WebView 侧的缓存键：**内容变了必须换 rev**，否则可能
 命中旧缓存。CI 断言 App 常量与 bundle 内的 `id` 一致（`check-mobile-hooks.mjs` 的静态
-不变量）。当前为 `dsh-handheld-mobile-1.0.13`。
+不变量）。当前为 `dsh-handheld-mobile-1.0.14`。

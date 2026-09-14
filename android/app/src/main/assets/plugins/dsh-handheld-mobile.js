@@ -346,6 +346,22 @@ window.__ModuleLoader__.load({
   html:has([data-handheld="frame"]) [role="dialog"][aria-modal="true"] [class*="_options"] {
     padding: 0 14px 18px !important;
   }
+
+  /* ---------- 9. 右侧边栏：手机上的「退出全屏」是第二个收起按钮 ----------
+     宿主（dsh-client-ui-sidebar-right）自己算的：
+         const autoFullscreen = viewportWidth < 768;
+         const fullscreen = autoFullscreen || surface?.layout.mode === "fullscreen";
+     本机视口 384px，所以右侧边栏**只要打开就必然是 fullscreen**；而那个模式按钮的
+     onClick 是「if (fullscreen && autoFullscreen) actions.setExpanded(sessionId, false)」
+     —— 手机上它和「收起右侧边栏」是同一个动作（真机复现：点它，面板直接关掉，
+     与点收起没有区别），唯一多出来的效果是把持久化的 mode 写成 "push"，会在用户
+     回到电脑上打开同一个 dsh 时改变面板的初始形态。
+     一个按钮、两种写法、零信息量 —— 去掉它（这一屏只剩「收起」一个出口）。
+     判据用宿主自己写的两个 data-* 钩子，不用 aria-label 的语种：面板
+     [data-sidebar-right-panel="fullscreen"]、按钮 [data-sidebar-right-mode]。 */
+  [data-sidebar-right-panel="fullscreen"] button[data-sidebar-right-mode] {
+    display: none !important;
+  }
 }
 
 /* 宽屏 / 精确指针：这一层整体退场，交给桌面布局。 */
