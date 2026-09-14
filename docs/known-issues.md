@@ -461,3 +461,42 @@ FATAL EXCEPTION：0。
   本文开头 2026-09-12 那张表。
 - P4 的「套件装上后按钮回来」这一支本机无法验证（没有套件可装）。
 - `断开连接` 会走 §二 那条路径，本轮刻意没点。
+
+## 六、逻辑审计（2026-09-14）：不靠谱的地方与处置
+
+方法：三个人分头读 —— 一个审并发/进程生命周期（`SshTunnel` / `TunnelService` / `DshApp`），
+一个审适配层与验证脚本，我自己通读 `MainActivity`（1924 行）。**每条结论都回读代码或真机验证过**，
+最后单列「查了但排除」，免得下次重复怀疑同一批。
+
+### 已修（本轮）
+
+| # | 问题 | 证据 | 修法 |
+|---|---|---|---|
+| A1 | `rebuildTunnel` 在 `onUi { }` 里调 `autoFetchToken(t)` → 主线程跑最多 4 条 SSH 命令（`execOnce` 每条默认 8s）= **最长 32s 冻结 / ANR** | `MainActivity.kt:1631`（原）；同函数另三个调用点都在后台线程 | 令牌在 worker 线程取好再回主线程重载。负对照：脚本扫「`onUi` 体内出现阻塞调用」修复前命中 1 处、修复后 0 处 |
+| A2 | `ensureTunnel` 把**整段拨号**放在 `synchronized(tunnelLock)` 里，而主线程的「断开连接」→ `closeTunnel()` 要拿同一把锁 → 拨号期间点断开，主线程卡几十秒（ANR） | `DshApp.kt` 原 `222-258` vs `262-269`；拨号最坏 3×15s + 探针 4.5s | 拆两把锁：`tunnelLock` 只做字段级短临界区（主线程可安全拿）、`dialLock` 串行化拨号且长阻塞只在后台；新增 `dialGeneration`（拨号期间断开 → 丢弃这次结果，「断开」必须赢）与 `pendingClose`（回收丢后台，下次拨号前 join，端口稳定仍成立） |
+| A3(半) | 探针要跑 1.5–4.5s，迟到的那条回调会把用户刚「断开连接」的隧道又建回来（断开被逆转、`prefs["url"]` 被写回） | `MainActivity.kt:1578-1597` + `beginConnect`(`1795`) 与 `disconnectCurrent`(`1848`) 无互斥、无代数 | 回调先比对「我探的那条隧道还是当前这条吗」，不是就丢弃。A2 的 `dialGeneration` 挡住另一半（拨号结果不发布） |
+
+### 待修（按建议顺序）
+
+| # | 问题 | 位置 | 后果 |
+|---|---|---|---|
+| A4 | `persistSshConfig(...)` 写在 `onUi { }` 里（Activity 销毁就永不执行），落盘还是空 catch | `MainActivity.kt:1204-1208`、`1273-1279` | 拨号期间 Activity 被销毁 → 隧道已发布但 `ssh_json` 没落盘 → 下次冷启动走「无 ssh 配置」分支，可能停在指向死端口的旧页面上；`revalidateTunnel` 只查隧道健康、**从不比对 origin**，没有恢复路径 |
+| A5 | 前台服务与隧道状态两个方向都不同步：失败路径不 `stop`（假「已连接到 X」常驻）；复用分支不补 `start`（首次在后台拨号被 Android 12+ 拒后**永远不再保活**） | `DshApp.kt:226-229 / 245-249 / 267`、`TunnelService.kt:112-116` | 通知说谎 + 进程优先级与设计意图相反 |
+| B1 | 适配层 15 个 `[class*="_…"]` 判据**没有任何金丝雀**；契约只守 2 个 `data-*`。其中 8 个是短子串（`_split`/`_count`/`_content`/`_menu`/`_close`/`_trigger`/`_options`/`_frame`），在 dsh 里各命中 4–11 个模块 | `scripts/mobile-hooks-contract.json`、`check-mobile-hooks.mjs:100` | 上游一次重命名或新增同类名元素 = 静默错杀/失效，CI 全绿 |
+| B2 | `MutationObserver`（`subtree: true`）永不停；标记打上后仍每帧一次全 DOM 查询 | `dsh-handheld-mobile.js` 标记兜底 effect | 流式输出时白烧 CPU |
+| B3 | `addDocumentStartJavaScript` 每次 Activity 重建都加一份（WebView 保活 → N 份累积） | `MainActivity.kt:324-337`（返回值丢弃） | N 份脚本白跑；功能上仍只补一条 entry（`defineProperty` 覆盖式重定义），但依赖「最后一次定义生效」这一微妙性质 |
+| B4 | 验证工具的「绿」比说的弱：`css-lab.mjs` 只打印不判定（文档却写成「断言」）；`ui-verify` / `device-ui-verify` 不在 CI 跑（标记已过期过一次）；CI 的 `--contract` 只保证「插件与契约一致」，**不保证钩子仍在 dsh 里**；完整检查用子串计数（`data-phase` 会被 `data-phase-count` 满足），且扫到注释也算 | `scripts/*` | 适配层最怕的那类失效恰好不在覆盖范围内 |
+| B5 | `device-tunnel-verify.mjs` 的「日志里没有 bind 失败」在没有日志时判 ✓（`log=''` → 0 次），而紧邻那条却严格区分「无法判定 → –」 | `scripts/device-tunnel-verify.mjs:131-134` | 最常见的取证条件下静默变绿 |
+| B6 | `mobile-bootstrap.js` 的占位符是**直接拼进双引号 JS 字面量**，两侧只查「有没有残留」 | `assets/plugins/mobile-bootstrap.js:31-43` | 值里出现 `"` 或 `\` → 整段 bootstrap 变 SyntaxError、`__DSH_BOOT__` 不再被钩住、插件静默不加载（`new Function(bootstrap)` 一行就能当哨兵） |
+
+### 查了但排除（不要再怀疑）
+
+- **跨进程幽灵 dbclient 占着 3080**：真机 `am force-stop` 实测 —— 子进程随 App 一起消失
+  （`ps -A` 里没有 dbclient），随后冷启动日志仍是 `base=http://127.0.0.1:3080`，**没有漂移**。
+- **`close()` 漏杀刚 `pb.start()` 的进程**：`connectOnce` 在 `waitForLocal` 之后有 `started`
+  复查 + `reap`（`SshTunnel.kt:320-324`），漏网进程百毫秒级被回收；两条独立推演都到同一结论。
+- **看门狗抢注导致端口漂移**：理论窗口存在，但 dbclient **认证完才 bind `-L`**（0.5–3s），
+  回收在 ~100ms 内发生 → 实际到不了。
+- **`isPortFree` 的试绑竞态**：后果只是「白拆一次隧道」，不单列。
+- **Activity 泄漏**：`MutableContextWrapper` 换入换出、观察者 `CopyOnWriteArrayList` + `onDestroy`
+  移除，均正确。
