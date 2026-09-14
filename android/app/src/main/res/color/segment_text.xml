@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 分段控件（看网页/开终端、密码/私钥）的字色。
+     必须用 selector 而不是给 RadioButton 挂 OnCheckedChangeListener：
+     RadioGroup 添加子控件时会用自己内部的监听器**覆盖**子控件上已有的监听器
+     （AOSP `RadioGroup.PassThroughHierarchyChangeListener.onChildViewAdded`），
+     挂在子控件上的变色回调等于没挂 —— 选中的那一段会是白字白底（看不见）。 -->
+<selector xmlns:android="http://schemas.android.com/apk/res/android">
+    <item android:state_checked="true" android:color="#0A0A0E" />
+    <item android:color="#F5F5F7" />
+</selector>

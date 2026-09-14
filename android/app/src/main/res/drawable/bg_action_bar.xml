@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 连接屏贴底动作区的底：纯色（挡住下面滚过去的内容）+ 顶部一条发丝线，
+     让"可滚动的上面"和"固定的下面"有一条可见的分界。 -->
+<layer-list xmlns:android="http://schemas.android.com/apk/res/android">
+    <item>
+        <shape android:shape="rectangle">
+            <solid android:color="#0A0A0E" />
+        </shape>
+    </item>
+    <item android:gravity="top" android:height="1dp">
+        <shape android:shape="rectangle">
+            <solid android:color="#1FFFFFFF" />
+        </shape>
+    </item>
+</layer-list>

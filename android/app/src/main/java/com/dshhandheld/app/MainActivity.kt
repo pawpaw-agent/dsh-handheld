@@ -9,6 +9,7 @@ import android.content.Context
 import android.content.Intent
 import android.content.res.ColorStateList
 import android.graphics.Typeface
+import android.graphics.drawable.GradientDrawable
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
@@ -40,6 +41,7 @@ import android.widget.RadioGroup
 import android.widget.ScrollView
 import android.widget.TextView
 import android.widget.Toast
+import androidx.core.widget.doAfterTextChanged
 import androidx.webkit.WebViewCompat
 import androidx.webkit.WebViewFeature
 import com.dshhandheld.protocol.SshTunnel
@@ -91,16 +93,30 @@ class MainActivity : Activity() {
     private var pendingAuth: HttpAuthHandler? = null
     private var statusView: TextView? = null
     private var sshKeyPathInput: EditText? = null
-    private var disconnectButton: Button? = null
-    private var backToWebButton: Button? = null
 
-    // Step3 连接进度行（引导流程；null = 界面未构造/非引导状态）
+    // ── 连接屏（状态优先版）的引用：见 [createConnectView] ────────────────
+    /** 贴底动作区那一个主按钮（文案与动作随相位/隧道状态变）。 */
+    private var connectMainBtn: Button? = null
+    /** 「断开连接」文字链（隧道活着才显示；旧版是与主按钮同权重的整宽按钮）。 */
+    private var disconnectLink: TextView? = null
+    /** 状态块：色点 + 一句话 + 目标行。 */
+    private var heroDot: View? = null
+    private var heroTitle: TextView? = null
+    private var heroSub: TextView? = null
+    /** ①②③ 进度行容器（连接中，以及刚失败还没重试时显示）。 */
+    private var progressBlock: View? = null
+    /** 连接设置卡：摘要行（折叠时）+ 展开/收起动作 + 表单本体。 */
+    private var settingsSummary: TextView? = null
+    private var settingsAction: TextView? = null
+    private var formBody: View? = null
+    /** 表单滚动容器：校验失败要把对应的输入框滚进视野，需要它算偏移。 */
+    private var connectScroll: ScrollView? = null
+    private var connectContent: LinearLayout? = null
+
+    // ①②③ 连接进度行（引导流程；null = 界面未构造/非引导状态）
     private var stepGuideLine1: TextView? = null
     private var stepGuideLine2: TextView? = null
     private var stepGuideLine3: TextView? = null
-    private var stepGuideCard: View? = null
-    private var stepGuideStep2: View? = null
-    private var step1Card: LinearLayout? = null
 
     /** 连接进行中守卫：防连点「连接」并发多个隧道/多次设置回调。 */
     private val connecting = AtomicBoolean(false)
@@ -157,16 +173,41 @@ class MainActivity : Activity() {
     private enum class Screen { CONNECT, WEB }
 
     /**
-     * 连接屏内部的三步（三张卡片互斥显示）。
+     * 连接屏内部的相位（0.1.10 起由「三步向导」改为「状态优先」）。
      *
-     * 此前 `step1Card` / `stepGuideStep2` / `stepGuideCard` 的 visibility 由 **5 处**
-     * 各自设置，其中 `showConnectScreen()` 与 `guideBackToStep2()` 的差异（前者复位进度行、
-     * 后者不复位）只体现在代码里而没有名字。现在只由 [showStep] 一处决定。
+     * 旧版是三张互斥显示的卡片（选模式 / 填表 / 连接中），用户要按「下一步」走完流程；
+     * 现在只有一条主线：状态块常在，表单收进可折叠的「连接设置」卡，主按钮随相位换文案。
+     *
+     * 取值不是「用户走到哪一步」而是「这一屏现在该长什么样」：
+     *  - [IDLE]   常态：看状态 + 一个主按钮（表单折叠）
+     *  - [EDIT]   用户主动在改配置（表单展开）
+     *  - [CONNECTING] 正在连（进度行 + 主按钮变「取消连接」）
      */
-    private enum class ConnectStep { MODE, CREDENTIALS, CONNECTING }
+    private enum class ConnectPhase { IDLE, EDIT, CONNECTING }
 
     private var screen = Screen.CONNECT
-    private var connectStep = ConnectStep.MODE
+    private var connectPhase = ConnectPhase.IDLE
+
+    /**
+     * 上一次连接尝试是否以失败告终。
+     *
+     * 它**不是**一个独立相位：失败后主按钮要回到「连上并打开…」（＝重试），但 ①②③ 里那条
+     * 红色的失败原因得留在屏幕上给用户看。用一个布尔把它与相位解耦，比加一个
+     * `FAILED` 相位再在两个相位间同步按钮文案简单。
+     */
+    private var connectFailed = false
+
+    /**
+     * 连接尝试计数：每次「连接 / 取消 / 断开」自增。
+     *
+     * 拨号线程与它的 `onUi` 回调要拿它比对 —— 用户取消之后，那条仍在飞的拨号会走到
+     * 「隧道建立失败」分支，把 `已取消连接` 覆盖成 `隧道建立失败（检查 SSH…）`，
+     * 甚至在极端时序下把界面切回网页。作废靠代数，不靠取消标志位。
+     */
+    private var connectAttempt = 0
+
+    /** 连接屏当前选的是「看网页」还是「开终端」。 */
+    private var webMode = true
 
     /**
      * 切到某一屏。**唯一**改动连接屏可见性的地方。
@@ -182,20 +223,71 @@ class MainActivity : Activity() {
     }
 
     /**
-     * 切到连接屏内的某一步。
+     * 切相位。**唯一**改动「表单展开/收起、进度行显示与否」的地方。
      *
      * @param resetGuide 是否把 ①②③ 进度行复位。只有「主动回到连接屏」（[showConnectScreen]）
-     *   需要复位——Step3 是上一轮连接的残留，不复位会出现「连接中…」却早已连上的矛盾画面；
-     *   而在 Step3 与本步之间来回切换时（[guideBackToStep2]）**不能**复位，否则刚跑出来的
-     *   「✓ 已连上」会被抹掉。
+     *   需要复位——进度行是上一轮连接的残留，不复位会出现「连接中…」却早已连上的矛盾画面；
+     *   而在连接中与常态之间来回时**不能**复位，否则刚跑出来的「✓ 已连上」会被抹掉。
      */
-    private fun showStep(step: ConnectStep, resetGuide: Boolean = false) {
-        if (connectStep != step) DiagLog.i(TAG, "connectStep: $connectStep → $step（resetGuide=$resetGuide）")
-        connectStep = step
-        step1Card?.visibility = if (step == ConnectStep.MODE) View.VISIBLE else View.GONE
-        stepGuideStep2?.visibility = if (step == ConnectStep.CREDENTIALS) View.VISIBLE else View.GONE
-        stepGuideCard?.visibility = if (step == ConnectStep.CONNECTING) View.VISIBLE else View.GONE
+    private fun showPhase(phase: ConnectPhase, resetGuide: Boolean = false) {
+        if (connectPhase != phase) DiagLog.i(TAG, "connectPhase: $connectPhase → $phase（resetGuide=$resetGuide）")
+        connectPhase = phase
+        // 开始改配置就不该再挂着上一轮的红字：那条 ① 行说的是「这次尝试失败了」，
+        // 用户已经在动手改，它只会误导。
+        if (phase == ConnectPhase.EDIT) connectFailed = false
         if (resetGuide) resetGuideLines()
+        syncConnectUi()
+    }
+
+    /**
+     * 把连接屏三块（状态块 / 表单 / 主按钮）按当前事实重画一遍。
+     *
+     * 单一入口：此前「主按钮文案」「按钮可见性」「状态文案」由 4 处各自设置，
+     * 于是出现了「连接中却显示回到网页」（那一下会切到上一轮的页面，而隧道正在重建）。
+     * 现在所有分支都只读事实（相位、失败标志、隧道、页面），不记忆上一次画了什么。
+     */
+    private fun syncConnectUi() {
+        val tunneled = (application as DshApp).sshTunnel != null
+        val pageAlive = webView?.url?.startsWith("http") == true
+        val connecting = connectPhase == ConnectPhase.CONNECTING && !connectFailed
+
+        formBody?.visibility = if (connectPhase == ConnectPhase.EDIT) View.VISIBLE else View.GONE
+        settingsSummary?.visibility = if (connectPhase == ConnectPhase.EDIT) View.GONE else View.VISIBLE
+        settingsAction?.text = if (connectPhase == ConnectPhase.EDIT) "收起" else "修改 ›"
+        progressBlock?.visibility =
+            if (connectPhase == ConnectPhase.CONNECTING || connectFailed) View.VISIBLE else View.GONE
+
+        val (title, dotColor) = when {
+            connecting -> "连接中…" to UiKit.WARN
+            connectFailed -> "连不上你的电脑" to COL_ERROR
+            tunneled -> "已连上电脑" to UiKit.OK
+            else -> "未连接" to COL_DIM
+        }
+        heroTitle?.text = title
+        heroDot?.background = GradientDrawable().apply {
+            shape = GradientDrawable.OVAL
+            setColor(dotColor)
+        }
+        heroSub?.text = heroSubtitle(tunneled)
+
+        connectMainBtn?.text = when {
+            connecting -> "取消连接"
+            !webMode -> "打开终端"
+            tunneled && pageAlive -> "打开 dsh 网页"
+            else -> "连上并打开 dsh 网页"
+        }
+        disconnectLink?.visibility = if (tunneled) View.VISIBLE else View.GONE
+    }
+
+    /** 状态块下面那行小字：隧道活着就报实际在用的本地基址，否则报「上次连的是谁」。 */
+    private fun heroSubtitle(tunneled: Boolean): String {
+        if (tunneled) {
+            val base = (application as DshApp).sshTunnel?.localBaseUrl
+            if (!base.isNullOrBlank()) return base
+        }
+        val saved = SshConfig.load(prefs) ?: return "还没配置过"
+        if (!saved.isComplete) return "还没配置过"
+        return "${saved.user}@${saved.host}:${saved.port}  →  ${saved.remoteHost}:${saved.remotePort}"
     }
 
     private companion object {
@@ -525,34 +617,60 @@ class MainActivity : Activity() {
         val app = application as DshApp
         // 用户可能已在连接屏手动点了「连接」：自动恢复不抢占
         if (!beginConnect()) { DiagLog.i(TAG, "autoConnectSsh: 连接进行中，让位给手动连接"); return }
-        status("自动重建 SSH 隧道…")
+        val attempt = ++connectAttempt
+        connectFailed = false
+        // 自动恢复也走「连接中」相位：这样主按钮显示「取消连接」——
+        // 否则用户看着一个「连上并打开」的按钮，点下去只会得到「正在连接中，请稍候」。
+        status("")
         showScreen(Screen.CONNECT)
+        guideStep3Show()
+        guideLine(1, "① 检查电脑 正在恢复连接…", state = true)
         DiagLog.i(TAG, "autoConnectSsh: 冷启动恢复 " +
             "${savedSsh.user}@${savedSsh.host}:${savedSsh.port} → " +
-            "远端 ${savedSsh.remoteHost}:${savedSsh.remotePort} auth=${savedSsh.authType}")
+            "远端 ${savedSsh.remoteHost}:${savedSsh.remotePort} auth=${savedSsh.authType} attempt=$attempt")
         Thread {
             if (savedSsh.usesKey && savedSsh.keyPath.isBlank()) {
                 DiagLog.w(TAG, "autoConnectSsh: 私钥路径为空，放弃自动恢复")
-                onUi { status("私钥路径为空，请到连接屏重新填写"); endConnect() }
+                onUi {
+                    if (connectAttempt != attempt) return@onUi
+                    connectFailed = true
+                    status("私钥路径为空，请到连接屏重新填写")
+                    endConnect()
+                }
                 return@Thread
             }
             // 非强制：后台服务可能已经用同一份配置建好了隧道，直接复用（不必重拨）
             val tunnel = app.ensureTunnel(savedSsh, force = false)
             val base = tunnel?.localBaseUrl
-            DiagLog.i(TAG, "autoConnectSsh: ensureTunnel(force=false) → base=$base")
+            DiagLog.i(TAG, "autoConnectSsh: ensureTunnel(force=false) → base=$base attempt=$attempt")
             // 失败先退：隧道没起来就不再干跑 token 探测（4×8s 白等）
             if (tunnel == null || base == null) {
                 DiagLog.w(TAG, "autoConnectSsh: 隧道未建立，回连接屏等用户手动重试")
-                onUi { status("自动连接失败，请在连接屏手动重试"); refreshConnectState(); endConnect() }
+                onUi {
+                    if (connectAttempt != attempt) {
+                        DiagLog.i(TAG, "autoConnectSsh: 这次尝试已被取消/取代，丢弃失败回调")
+                        return@onUi
+                    }
+                    connectFailed = true
+                    status("自动连接失败，请在连接屏手动重试")
+                    refreshConnectState()
+                    endConnect()
+                }
                 return@Thread
             }
             // 自动获取最新 token（服务重启后旧 token 失效；失败静默回退）
             autoFetchToken(tunnel)
             onUi {
+                if (connectAttempt != attempt) {
+                    DiagLog.i(TAG, "autoConnectSsh: 这次尝试已被取消/取代，不切屏")
+                    return@onUi
+                }
+                connectFailed = false
                 // lastUrl 与 prefs["url"] 由 connectWeb 自己写，这里不必再来一遍。
                 showScreen(Screen.WEB)
                 sshTokenAck = false
                 connectWeb(base)
+                showPhase(ConnectPhase.IDLE)
                 refreshConnectState()
                 endConnect()
             }
@@ -560,40 +678,70 @@ class MainActivity : Activity() {
     }
 
     // ── 连接屏 UI ─────────────────────────────────────────────
+    /**
+     * 连接屏（状态优先版，0.1.10 推倒重来）。
+     *
+     * 三块，自上而下：
+     *  1. **状态块** —— 一个色点 + 一句话 + 一行目标。回答「现在是什么情况」；
+     *     连接中 / 刚失败时，下面展开 ①②③ 进度行。
+     *  2. **连接设置卡** —— 全部输入框收在里面，默认折叠成一行摘要。
+     *  3. **贴底动作区** —— 网页/终端 + 一个主按钮 + 一条「断开连接」文字链。
+     *
+     * 为什么推倒：旧版是「选模式 → 填表 → 连接中」三步向导，三张卡片互斥显示；而
+     * 「回到网页 / 断开连接 / 状态条」是三张卡片之外的常驻成员，于是**连接中同时看到
+     * 三个同权重的整宽按钮**（返回修改 / 回到网页 / 断开连接），主操作要靠读文案才分得清 ——
+     * 而且那一下「回到网页」指向的是上一轮的页面（隧道正在重建，页面此时是死的）。
+     * 更根本的是优先级反了：这一屏每天的实际用法是「看一眼连上没有 / 点一下进网页」，
+     * 9 个输入框却摊在最前面。现在按使用频率排：状态与主按钮常在，配置收进折叠卡。
+     *
+     * 动作区挂在**根布局底部**（而不是随卡片流走）：拇指够得着；软键盘弹起时
+     * （manifest 里 `adjustResize`）它被顶到键盘上方，不会盖住正在编辑的输入框。
+     */
     private fun createConnectView(): View {
-        val scroll = ScrollView(this).apply {
-            setBackgroundColor(COL_BG)
-            isFillViewport = true
-        }
-        val outer = LinearLayout(this).apply {
+        val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            gravity = Gravity.CENTER
-            setPadding(dp(16), dp(14), dp(16), dp(14))
+            setBackgroundColor(COL_BG)
         }
-        scroll.addView(outer, FrameLayout.LayoutParams(
-            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT
+
+        val scroll = ScrollView(this).apply { isFillViewport = true }
+        connectScroll = scroll
+        root.addView(scroll, LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f
         ))
 
-        val card = LinearLayout(this).apply {
+        val content = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setBackgroundResource(R.drawable.bg_card)
-            setPadding(dp(20), dp(22), dp(20), dp(18))
-            layoutParams = LinearLayout.LayoutParams(dp(320), ViewGroup.LayoutParams.WRAP_CONTENT)
+            setPadding(dp(20), dp(18), dp(20), dp(24))
         }
-        outer.addView(card)
+        connectContent = content
+        scroll.addView(content, FrameLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
+        ))
 
-        // 三种文本角色（原先是三个几乎同构的局部工厂，只有字号/字色/粗体/字距不同）
-        fun label(text: String): TextView =
-            UiKit.text(this@MainActivity, text, 11f, COL_DIM, letterSpacing = 0.12f)
+        // ── 控件工厂 ───────────────────────────────────────────
+        fun label(text: String, field: EditText? = null): TextView =
+            UiKit.text(this@MainActivity, text, 11f, COL_DIM, letterSpacing = 0.12f).apply {
+                // labelFor 把「电脑地址」这个标签接到下面的输入框上。旧版只有 hint：
+                // 一旦填上内容 hint 就消失，读屏与视力不佳的用户只剩一个「编辑框」。
+                if (field != null) labelFor = field.id
+            }
+
+        fun hint(text: String): TextView = UiKit.text(this@MainActivity, text, 11f, COL_MUTED)
+
+        /** 就地错误行：默认 GONE（不占位），校验失败时贴在对应输入框下面。 */
+        fun errorLine(): TextView =
+            UiKit.text(this@MainActivity, "", 11f, COL_ERROR).apply { visibility = View.GONE }
 
         fun input(hint: String, prefill: String = "", pwd: Boolean = false, number: Boolean = false): EditText =
             EditText(this@MainActivity).apply {
+                id = View.generateViewId()
                 this.hint = hint
-                textSize = 14f
+                textSize = 15f
                 setTextColor(COL_TEXT)
                 setHintTextColor(COL_HINT)
                 setBackgroundResource(R.drawable.bg_input)
-                setPadding(dp(12), dp(10), dp(12), dp(10))
+                setPadding(dp(14), 0, dp(14), 0)
+                gravity = Gravity.CENTER_VERTICAL
                 setSingleLine(true)
                 setHorizontallyScrolling(true)
                 when {
@@ -610,7 +758,7 @@ class MainActivity : Activity() {
             RadioButton(this).apply {
                 id = View.generateViewId()
                 this.text = text
-                textSize = 12f
+                textSize = 13f
                 isChecked = initial
                 buttonDrawable = null
                 gravity = Gravity.CENTER
@@ -619,18 +767,20 @@ class MainActivity : Activity() {
                 setMinWidth(0)
                 setMinimumWidth(0)
                 setMinEms(0)
-                setMaxEms(5)
+                setMaxEms(6)
                 setPadding(dp(4), dp(10), dp(4), dp(10))
                 setBackgroundResource(R.drawable.bg_segment)
-                setTextColor(if (initial) COL_ACCENT_TEXT else COL_TEXT)
-                setOnCheckedChangeListener { _, checked ->
-                    setTextColor(if (checked) COL_ACCENT_TEXT else COL_TEXT)
-                }
+                // 字色跟选中态走的是 selector（见 res/color/segment_text.xml）：
+                // RadioGroup 添加子控件时会覆盖子控件自己的 OnCheckedChangeListener，
+                // 靠回调改字色在组里是失效的 —— 选中那一段会变成白字白底。
+                setTextColor(
+                    this@MainActivity.resources.getColorStateList(
+                        R.color.segment_text, this@MainActivity.theme
+                    )
+                )
             }
 
-        /**
-         * 密码行：输入框 + 显示/隐藏切换（避免密码框永远黑点）。
-         */
+        /** 密码行：输入框 + 显示/隐藏切换（避免密码框永远黑点）。 */
         fun pwdRow(field: EditText): View {
             // 按钮要在自己的点击回调里改自己的文案，所以先建后挂监听。
             val showBtn = UiKit.button(this@MainActivity, "显示", UiKit.Style.SECONDARY, textSize = 12f) {}
@@ -646,261 +796,64 @@ class MainActivity : Activity() {
             }
             return LinearLayout(this@MainActivity).apply {
                 orientation = LinearLayout.HORIZONTAL
-                addView(field, LinearLayout.LayoutParams(0, dp(42), 1f).apply { marginEnd = dp(6) })
-                addView(showBtn, LinearLayout.LayoutParams(dp(56), dp(42)))
+                addView(field, LinearLayout.LayoutParams(0, dp(46), 1f).apply { marginEnd = dp(8) })
+                addView(showBtn, LinearLayout.LayoutParams(dp(64), dp(46)))
             }
         }
 
-        // ── 头部 ──────────────────────────────────────────────
-        val headerRow = LinearLayout(this@MainActivity).apply {
+        // ── 1 品牌行 + 状态块 ──────────────────────────────────
+        val brandRow = LinearLayout(this@MainActivity).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
         }
-        headerRow.addView(ImageView(this@MainActivity).apply {
+        brandRow.addView(ImageView(this@MainActivity).apply {
             setImageResource(R.drawable.ic_launcher_foreground)
-            layoutParams = LinearLayout.LayoutParams(dp(32), dp(32))
+            layoutParams = LinearLayout.LayoutParams(dp(30), dp(30))
         })
-        headerRow.addView(LinearLayout(this@MainActivity).apply {
+        brandRow.addView(LinearLayout(this@MainActivity).apply {
             orientation = LinearLayout.VERTICAL
-            addView(TextView(this@MainActivity).apply {
-                text = "DSH Handheld"
-                textSize = 18f
+            addView(UiKit.text(this@MainActivity, "DSH Handheld", 17f, COL_TITLE).apply {
                 typeface = Typeface.create("sans-serif-light", Typeface.NORMAL)
-                setTextColor(COL_TITLE)
             })
-            addView(TextView(this@MainActivity).apply {
-                text = "DeepSeek Harness · 手机端"
-                textSize = 10f
-                setTextColor(COL_MUTED)
-            }, LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT
-            ).apply { topMargin = dp(1) })
+            addView(UiKit.text(this@MainActivity, "DeepSeek Harness · 手机端", 10f, COL_MUTED),
+                rowParams(top = dp(2)))
         }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply {
             marginStart = dp(10)
         })
-        // 诊断入口放在头部：隧道坏掉时，这一屏正是唯一还能操作的地方
-        headerRow.addView(UiKit.text(this@MainActivity, "诊断", 12f, COL_DIM).apply {
-            setPadding(dp(8), dp(6), 0, dp(6))
+        // 诊断入口留在常显的品牌行：隧道坏掉时这一屏是唯一还能操作的地方。
+        // 触摸高度给到 48dp —— 旧版是 12sp 文字 + 6dp 内边距（≈30dp），偏小。
+        brandRow.addView(UiKit.text(this@MainActivity, "诊断", 12f, COL_DIM).apply {
+            gravity = Gravity.CENTER
+            isClickable = true
+            setPadding(dp(12), 0, 0, 0)
             setOnClickListener { showDiagPage() }
-        })
-        card.addView(headerRow, rowParams(top = dp(2), width = ViewGroup.LayoutParams.MATCH_PARENT))
+        }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, dp(48)))
+        content.addView(brandRow, rowParams(width = ViewGroup.LayoutParams.MATCH_PARENT))
 
-        // ── 三步连接引导：选模式 → 填连接信息 → 连接中 ──────────────────
-        // 关键字段引用保留为类字段（连接流程/状态钩子复用）
-        var step2Card: LinearLayout? = null   // 填信息
-        var step3Card: LinearLayout? = null   // 连接中
-        var connectMainBtn: Button? = null    // 底部主按钮（每步复用）
-        var webMode = true
-        // 预填用：这里**不做完整性校验**（地址填了、账号还没填也要把地址带出来）
-        val savedSsh = SshConfig.load(prefs)
-
-        // 步骤容器（后续在 card 内按顺序 addView）
-        fun stepLabel(text: String): TextView =
-            UiKit.text(this@MainActivity, text, 13f, COL_TITLE, bold = true)
-
-        fun stepHint(text: String): TextView =
-            UiKit.text(this@MainActivity, text, 11f, COL_MUTED)
-
-        // ── Step 1：你想做什么 ─────────────────────────────────────────
-        step1Card = LinearLayout(this@MainActivity).apply { orientation = LinearLayout.VERTICAL }
-        step1Card!!.addView(stepLabel("你想做什么？"), rowParams(width = ViewGroup.LayoutParams.MATCH_PARENT))
-        step1Card!!.addView(stepHint("手机连上你电脑上的 DeepSeek Harness。"), rowParams(top = dp(2), width = ViewGroup.LayoutParams.MATCH_PARENT))
-
-        fun modeCard(text: String, sub: String): Pair<LinearLayout, (Boolean) -> Unit> {
-            val title = TextView(this@MainActivity).apply {
-                this.text = text
-                textSize = 14f
-                typeface = Typeface.DEFAULT_BOLD
-                setTextColor(COL_TEXT)
-                setIncludeFontPadding(false)
-                setSingleLine(true)
+        val dot = View(this@MainActivity).apply {
+            background = GradientDrawable().apply {
+                shape = GradientDrawable.OVAL
+                setColor(COL_DIM)
             }
-            val desc = TextView(this@MainActivity).apply {
-                this.text = sub
-                textSize = 10f
-                setTextColor(COL_MUTED)
-                setIncludeFontPadding(false)
-                setSingleLine(true)
-            }
-            val card = LinearLayout(this@MainActivity).apply {
-                orientation = LinearLayout.VERTICAL
-                gravity = Gravity.CENTER
-                isClickable = true
-                isFocusable = true
-                setPadding(dp(10), dp(12), dp(10), dp(10))
-                setBackgroundResource(R.drawable.bg_mode_card_off)
-                addView(title)
-                addView(desc, LinearLayout.LayoutParams(
-                    ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT
-                ).apply { topMargin = dp(2) })
-            }
-            val paint = { on: Boolean ->
-                card.setBackgroundResource(if (on) R.drawable.bg_mode_card_on else R.drawable.bg_mode_card_off)
-                title.setTextColor(if (on) COL_ACCENT_TEXT else COL_TEXT)
-                desc.setTextColor(if (on) 0x55000000.toInt() else COL_MUTED)
-            }
-            return card to paint
         }
-        val (webModeCard, paintWeb) = modeCard("看 dsh 网页", "浏览会话、聊天")
-        val (termModeCard, paintTerm) = modeCard("打开终端", "远程敲命令")
-        fun selectMode(web: Boolean) {
-            webMode = web
-            paintWeb(web)
-            paintTerm(!web)
-            // 主按钮文案跟模式：创建早于 connectMainBtn，故用可空调用
-            connectMainBtn?.text = if (web) "连上并打开 dsh 网页" else "连上并打开终端"
-        }
-        webModeCard.setOnClickListener { selectMode(true) }
-        termModeCard.setOnClickListener { selectMode(false) }
-        val modeRow = LinearLayout(this@MainActivity).apply {
+        heroDot = dot
+        val title = UiKit.text(this@MainActivity, "未连接", 22f, COL_TEXT, bold = true)
+        heroTitle = title
+        content.addView(LinearLayout(this@MainActivity).apply {
             orientation = LinearLayout.HORIZONTAL
-            addView(webModeCard, LinearLayout.LayoutParams(0, dp(64), 1f).apply { marginEnd = dp(6) })
-            addView(termModeCard, LinearLayout.LayoutParams(0, dp(64), 1f).apply { marginStart = dp(6) })
-        }
-        step1Card!!.addView(modeRow, rowParams(top = dp(10), width = ViewGroup.LayoutParams.MATCH_PARENT))
-        selectMode(true)
-        // 小字：避免选择负担
-        step1Card!!.addView(stepHint("· 看 dsh 网页：管理和浏览电脑上的 dsh 界面\n· 打开终端：远程敲命令，像在电脑前一样"),
-            rowParams(top = dp(8), width = ViewGroup.LayoutParams.MATCH_PARENT))
-        step1Card!!.addView(UiKit.button(this@MainActivity, "下一步", UiKit.Style.PRIMARY) {
-            showStep(ConnectStep.CREDENTIALS)
-        }, rowParams(top = dp(12), height = dp(46), width = ViewGroup.LayoutParams.MATCH_PARENT))
+            gravity = Gravity.CENTER_VERTICAL
+            addView(dot, LinearLayout.LayoutParams(dp(9), dp(9)).apply {
+                gravity = Gravity.CENTER_VERTICAL
+                marginEnd = dp(10)
+            })
+            addView(title)
+        }, rowParams(top = dp(26), width = ViewGroup.LayoutParams.MATCH_PARENT))
 
-        // ── Step 2：连接信息 ───────────────────────────────────────────
-        step2Card = LinearLayout(this@MainActivity).apply { orientation = LinearLayout.VERTICAL }
-        step2Card!!.addView(stepLabel("连接信息"), rowParams(width = ViewGroup.LayoutParams.MATCH_PARENT))
-        step2Card!!.addView(stepHint("你电脑上运行 dsh 的地址和登录账号。"),
-            rowParams(top = dp(2), width = ViewGroup.LayoutParams.MATCH_PARENT))
+        val sub = UiKit.text(this@MainActivity, "", 12f, COL_MUTED)
+        heroSub = sub
+        content.addView(sub, rowParams(top = dp(9), width = ViewGroup.LayoutParams.MATCH_PARENT))
 
-        step2Card!!.addView(label("电脑地址"), rowParams(top = dp(14), width = ViewGroup.LayoutParams.MATCH_PARENT))
-        val sshHostInput = input("IP 地址", savedSsh?.host ?: "")
-        val sshPortInput = input("22", savedSsh?.port?.toString() ?: "22", number = true)
-        val sshHostRow = LinearLayout(this@MainActivity).apply {
-            orientation = LinearLayout.HORIZONTAL
-            addView(sshHostInput, LinearLayout.LayoutParams(0, dp(42), 3f).apply { marginEnd = dp(8) })
-            addView(sshPortInput, LinearLayout.LayoutParams(0, dp(42), 1f))
-        }
-        step2Card!!.addView(sshHostRow, rowParams(top = dp(6), width = ViewGroup.LayoutParams.MATCH_PARENT))
-        step2Card!!.addView(stepHint("端口一般用 22，不用改。"), rowParams(top = dp(4), width = ViewGroup.LayoutParams.MATCH_PARENT))
-
-        step2Card!!.addView(label("登录账号"), rowParams(top = dp(12), width = ViewGroup.LayoutParams.MATCH_PARENT))
-        val sshUserInput = input("用户名", savedSsh?.user ?: "")
-        step2Card!!.addView(sshUserInput, rowParams(top = dp(6), width = ViewGroup.LayoutParams.MATCH_PARENT))
-
-        // 登录方式（主区常显）：密码 / 私钥 —— 选哪个就显示哪一套字段
-        step2Card!!.addView(label("登录方式"), rowParams(top = dp(12), width = ViewGroup.LayoutParams.MATCH_PARENT))
-        val authPassBtn = segment("密码", true)
-        val authKeyBtn = segment("私钥", false)
-        val authGroup = RadioGroup(this@MainActivity).apply {
-            orientation = RadioGroup.HORIZONTAL
-            addView(authPassBtn, LinearLayout.LayoutParams(0, dp(36), 1f).apply { marginEnd = dp(6) })
-            addView(authKeyBtn, LinearLayout.LayoutParams(0, dp(36), 1f).apply { marginStart = dp(6) })
-        }
-        step2Card!!.addView(authGroup, rowParams(top = dp(6), width = ViewGroup.LayoutParams.MATCH_PARENT))
-
-        // 密码分支：标题 + 输入框打包，随登录方式整体显隐
-        //（此前标题无条件显示、输入框单独 GONE，选私钥后主区会剩一个空标题）
-        val sshPassInput = input("密码", savedSsh?.password ?: "", pwd = true)
-        val passRow = pwdRow(sshPassInput)
-        val passBlock = LinearLayout(this@MainActivity).apply {
-            orientation = LinearLayout.VERTICAL
-            addView(label("电脑登录密码"), rowParams(width = ViewGroup.LayoutParams.MATCH_PARENT))
-            addView(passRow, rowParams(top = dp(6), width = ViewGroup.LayoutParams.MATCH_PARENT))
-        }
-        step2Card!!.addView(passBlock, rowParams(top = dp(10), width = ViewGroup.LayoutParams.MATCH_PARENT))
-
-        // 私钥分支
-        val keyPathInput = input("点「导入」选文件，或直接填路径", savedSsh?.keyPath ?: "")
-        keyPathInput.isFocusable = true
-        sshKeyPathInput = keyPathInput
-        val browseKeyBtn = UiKit.button(this@MainActivity, "导入", UiKit.Style.SECONDARY, textSize = 12f) {
-            pickSshKey()
-        }
-        val keyPathRow = LinearLayout(this@MainActivity).apply {
-            orientation = LinearLayout.HORIZONTAL
-            addView(keyPathInput, LinearLayout.LayoutParams(0, dp(42), 1f).apply { marginEnd = dp(6) })
-            addView(browseKeyBtn, LinearLayout.LayoutParams(dp(56), dp(42)))
-        }
-        val keyPassInput = input("没有就留空", savedSsh?.keyPass ?: "", pwd = true)
-        val keyPassRow = pwdRow(keyPassInput)
-        val keyBlock = LinearLayout(this@MainActivity).apply {
-            orientation = LinearLayout.VERTICAL
-            addView(label("私钥路径"), rowParams(width = ViewGroup.LayoutParams.MATCH_PARENT))
-            addView(keyPathRow, rowParams(top = dp(6), width = ViewGroup.LayoutParams.MATCH_PARENT))
-            addView(label("私钥口令（可选）"), rowParams(top = dp(12), width = ViewGroup.LayoutParams.MATCH_PARENT))
-            addView(keyPassRow, rowParams(top = dp(6), width = ViewGroup.LayoutParams.MATCH_PARENT))
-        }
-        step2Card!!.addView(keyBlock, rowParams(top = dp(10), width = ViewGroup.LayoutParams.MATCH_PARENT))
-
-        // 认证方式切换：两套字段整体显隐（无折叠区，不会出现「字段藏在别处」的状态）
-        val savedAuthType = savedSsh?.authType ?: SshConfig.AUTH_PASSWORD
-        if (savedAuthType == SshConfig.AUTH_KEY) authKeyBtn.isChecked = true
-        fun syncAuthFields() {
-            val key = authKeyBtn.isChecked
-            passBlock.visibility = if (key) View.GONE else View.VISIBLE
-            keyBlock.visibility = if (key) View.VISIBLE else View.GONE
-        }
-        authGroup.setOnCheckedChangeListener { _, _ ->
-            syncAuthFields()
-            // 切登录方式后旧的校验错误会跟当前状态矛盾（如已是密码模式却提示「请填写私钥路径」）
-            status("")
-        }
-        syncAuthFields()
-
-        // dsh 端口：dsh 网页在你电脑上的端口
-        step2Card!!.addView(label("dsh 端口"), rowParams(top = dp(12), width = ViewGroup.LayoutParams.MATCH_PARENT))
-        val sshTargetPortInput = input(
-            "3080",
-            (savedSsh?.remotePort ?: DEFAULT_PORT.toInt()).toString(),
-            number = true
-        )
-        step2Card!!.addView(sshTargetPortInput, rowParams(top = dp(6), width = ViewGroup.LayoutParams.MATCH_PARENT))
-        step2Card!!.addView(stepHint("dsh 网页的端口，默认 3080，一般不用改。"),
-            rowParams(top = dp(4), width = ViewGroup.LayoutParams.MATCH_PARENT))
-
-        // Step 2 底部：上一步 + 主按钮（文案跟模式）
-        val step2Nav = LinearLayout(this@MainActivity).apply { orientation = LinearLayout.HORIZONTAL }
-        step2Nav.addView(UiKit.button(this@MainActivity, "上一步", UiKit.Style.SECONDARY, textSize = 12f) {
-            showStep(ConnectStep.MODE)
-        }, LinearLayout.LayoutParams(dp(88), dp(46)).apply { marginEnd = dp(6) })
-        connectMainBtn = UiKit.button(
-            this@MainActivity,
-            if (webMode) "连上并打开 dsh 网页" else "连上并打开终端",
-            UiKit.Style.PRIMARY
-        ) {
-            sshTokenAck = false
-
-            // 校验
-            val sh = sshHostInput.text.toString().trim()
-            val su = sshUserInput.text.toString().trim()
-            val sport = sshPortInput.text.toString().trim().toIntOrNull()?.coerceIn(1, 65535) ?: 22
-            val target = sshTargetPortInput.text.toString().trim().ifEmpty { DEFAULT_PORT }
-                .toIntOrNull()?.coerceIn(1, 65535) ?: 3080
-            if (sh.isBlank() || su.isBlank()) { status("请填写电脑地址和登录账号", true); guideBackToStep2(); return@button }
-            val auth = if (authKeyBtn.isChecked) {
-                val path = keyPathInput.text.toString().trim()
-                if (path.isBlank()) { status("请填写私钥路径，或点「导入」选文件", true); guideBackToStep2(); return@button }
-                val keyFile = File(path)
-                if (!keyFile.exists()) { status("私钥文件不存在：$path", true); guideBackToStep2(); return@button }
-                SshTunnel.Auth.KeyPair(keyFile, keyPassInput.text.toString().ifEmpty { null })
-            } else {
-                if (sshPassInput.text.toString().isEmpty()) { status("请填写电脑登录密码", true); guideBackToStep2(); return@button }
-                SshTunnel.Auth.Password(sshPassInput.text.toString())
-            }
-            if (!webMode) {
-                persistSshConfig(sh, sport, su, target, auth)
-                startActivity(Intent(this@MainActivity, TuiActivity::class.java))
-                return@button
-            }
-            if (!beginConnect()) { guideBackToStep2(); return@button }
-            guideLine(1, "① 检查电脑 正在连接…", state = true)
-            connectViaSsh(sh, sport, su, target, auth)
-        }
-        step2Nav.addView(connectMainBtn!!, LinearLayout.LayoutParams(0, dp(46), 1f))
-        step2Card!!.addView(step2Nav, rowParams(top = dp(14), width = ViewGroup.LayoutParams.MATCH_PARENT))
-
-        // ── Step 3：连接中 ─────────────────────────────────────────────
-        // 行内容由类级 guideLine* 更新（connectViaSsh/autoConnectSsh/onPageFinished 共用）
+        // ①②③ 进度行：连接中与「刚失败还没重试」时显示（失败原因要留在屏幕上）
         fun guideRow(text: String): TextView =
             UiKit.text(this@MainActivity, text, 13f, COL_MUTED).apply { setIncludeFontPadding(false) }
         val line1 = guideRow("① 检查电脑 等待连接…")
@@ -909,75 +862,342 @@ class MainActivity : Activity() {
         stepGuideLine1 = line1
         stepGuideLine2 = line2
         stepGuideLine3 = line3
+        val progress = LinearLayout(this@MainActivity).apply {
+            orientation = LinearLayout.VERTICAL
+            visibility = View.GONE
+            addView(line1, rowParams(width = ViewGroup.LayoutParams.MATCH_PARENT))
+            addView(line2, rowParams(top = dp(9), width = ViewGroup.LayoutParams.MATCH_PARENT))
+            addView(line3, rowParams(top = dp(9), width = ViewGroup.LayoutParams.MATCH_PARENT))
+        }
+        progressBlock = progress
+        content.addView(progress, rowParams(top = dp(18), width = ViewGroup.LayoutParams.MATCH_PARENT))
 
-        step3Card = LinearLayout(this@MainActivity).apply { orientation = LinearLayout.VERTICAL }
-        step3Card!!.addView(stepLabel("连接中…"), rowParams(width = ViewGroup.LayoutParams.MATCH_PARENT))
-        step3Card!!.addView(line1, rowParams(top = dp(12), width = ViewGroup.LayoutParams.MATCH_PARENT))
-        step3Card!!.addView(line2, rowParams(top = dp(8), width = ViewGroup.LayoutParams.MATCH_PARENT))
-        step3Card!!.addView(line3, rowParams(top = dp(8), width = ViewGroup.LayoutParams.MATCH_PARENT))
-        step3Card!!.addView(UiKit.button(this@MainActivity, "返回修改", UiKit.Style.SECONDARY, textSize = 12f) {
-            guideBackToStep2()
-        }, rowParams(top = dp(14), width = ViewGroup.LayoutParams.MATCH_PARENT))
-        stepGuideCard = step3Card
-        stepGuideStep2 = step2Card
+        // ── 2 连接设置卡（默认折叠）────────────────────────────
+        // 预填用：这里**不做完整性校验**（地址填了、账号还没填也要把地址带出来）
+        val savedSsh = SshConfig.load(prefs)
 
-        // ── 组装：header → step1 → step2 → step3 ──────────────────────
-        card.addView(step1Card, rowParams(top = dp(16), width = ViewGroup.LayoutParams.MATCH_PARENT))
-        card.addView(step2Card!!.apply { visibility = View.GONE }, rowParams(top = dp(16), width = ViewGroup.LayoutParams.MATCH_PARENT))
-        card.addView(step3Card!!.apply { visibility = View.GONE }, rowParams(top = dp(16), width = ViewGroup.LayoutParams.MATCH_PARENT))
+        val theForm = LinearLayout(this@MainActivity).apply {
+            orientation = LinearLayout.VERTICAL
+            visibility = View.GONE
+        }
+        formBody = theForm
 
-        card.addView(spacer(dp(10)))
+        // 电脑地址 + 端口：各自带可见标签。端口预填 22 之后它的 hint 不再显示，
+        // 「靠 hint 说明字段含义」在预填场景下是失效的。
+        val sshHostInput = input("192.168.0.1", savedSsh?.host ?: "")
+        val sshPortInput = input("22", savedSsh?.port?.toString() ?: "22", number = true)
+        theForm.addView(LinearLayout(this@MainActivity).apply {
+            orientation = LinearLayout.HORIZONTAL
+            addView(LinearLayout(this@MainActivity).apply {
+                orientation = LinearLayout.VERTICAL
+                addView(label("电脑地址", sshHostInput))
+                addView(sshHostInput, rowParams(top = dp(7), height = dp(46),
+                    width = ViewGroup.LayoutParams.MATCH_PARENT))
+            }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 3f).apply {
+                marginEnd = dp(8)
+            })
+            addView(LinearLayout(this@MainActivity).apply {
+                orientation = LinearLayout.VERTICAL
+                addView(label("端口", sshPortInput))
+                addView(sshPortInput, rowParams(top = dp(7), height = dp(46),
+                    width = ViewGroup.LayoutParams.MATCH_PARENT))
+            }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+        }, rowParams(top = dp(16), width = ViewGroup.LayoutParams.MATCH_PARENT))
+        val errHost = errorLine()
+        theForm.addView(errHost, rowParams(top = dp(6), width = ViewGroup.LayoutParams.MATCH_PARENT))
+        theForm.addView(hint("你电脑的地址；端口一般用 22。"),
+            rowParams(top = dp(6), width = ViewGroup.LayoutParams.MATCH_PARENT))
 
-        // 状态条（全局错误/连接进度；Step3 行内也有状态）
-        statusView = TextView(this@MainActivity).apply {
+        val sshUserInput = input("用户名", savedSsh?.user ?: "")
+        theForm.addView(label("登录账号", sshUserInput),
+            rowParams(top = dp(16), width = ViewGroup.LayoutParams.MATCH_PARENT))
+        theForm.addView(sshUserInput, rowParams(top = dp(7), height = dp(46),
+            width = ViewGroup.LayoutParams.MATCH_PARENT))
+        val errUser = errorLine()
+        theForm.addView(errUser, rowParams(top = dp(6), width = ViewGroup.LayoutParams.MATCH_PARENT))
+
+        // 登录方式（主区常显）：密码 / 私钥 —— 选哪个就显示哪一套字段
+        theForm.addView(label("登录方式"), rowParams(top = dp(16), width = ViewGroup.LayoutParams.MATCH_PARENT))
+        val authPassBtn = segment("密码", true)
+        val authKeyBtn = segment("私钥", false)
+        val authGroup = RadioGroup(this@MainActivity).apply {
+            orientation = RadioGroup.HORIZONTAL
+            addView(authPassBtn, LinearLayout.LayoutParams(0, dp(40), 1f).apply { marginEnd = dp(6) })
+            addView(authKeyBtn, LinearLayout.LayoutParams(0, dp(40), 1f).apply { marginStart = dp(6) })
+        }
+        theForm.addView(authGroup, rowParams(top = dp(7), width = ViewGroup.LayoutParams.MATCH_PARENT))
+
+        // 密码分支：标题 + 输入框打包，随登录方式整体显隐
+        //（此前标题无条件显示、输入框单独 GONE，选私钥后主区会剩一个空标题）
+        val sshPassInput = input("密码", savedSsh?.password ?: "", pwd = true)
+        val passRow = pwdRow(sshPassInput)
+        val errPass = errorLine()
+        val passBlock = LinearLayout(this@MainActivity).apply {
+            orientation = LinearLayout.VERTICAL
+            addView(label("电脑登录密码", sshPassInput), rowParams(top = dp(12),
+                width = ViewGroup.LayoutParams.MATCH_PARENT))
+            addView(passRow, rowParams(top = dp(7), width = ViewGroup.LayoutParams.MATCH_PARENT))
+            addView(errPass, rowParams(top = dp(6), width = ViewGroup.LayoutParams.MATCH_PARENT))
+        }
+        theForm.addView(passBlock, rowParams(width = ViewGroup.LayoutParams.MATCH_PARENT))
+
+        // 私钥分支
+        val keyPathInput = input("点「导入」选文件，或直接填路径", savedSsh?.keyPath ?: "")
+        keyPathInput.isFocusable = true
+        sshKeyPathInput = keyPathInput
+        val browseKeyBtn = UiKit.button(this@MainActivity, "导入", UiKit.Style.SECONDARY, textSize = 12f) {
+            pickSshKey()
+        }
+        val errKey = errorLine()
+        val keyPassInput = input("没有就留空", savedSsh?.keyPass ?: "", pwd = true)
+        val keyPassRow = pwdRow(keyPassInput)
+        val keyBlock = LinearLayout(this@MainActivity).apply {
+            orientation = LinearLayout.VERTICAL
+            addView(label("私钥路径", keyPathInput), rowParams(top = dp(12),
+                width = ViewGroup.LayoutParams.MATCH_PARENT))
+            addView(LinearLayout(this@MainActivity).apply {
+                orientation = LinearLayout.HORIZONTAL
+                addView(keyPathInput, LinearLayout.LayoutParams(0, dp(46), 1f).apply { marginEnd = dp(8) })
+                addView(browseKeyBtn, LinearLayout.LayoutParams(dp(64), dp(46)))
+            }, rowParams(top = dp(7), width = ViewGroup.LayoutParams.MATCH_PARENT))
+            addView(errKey, rowParams(top = dp(6), width = ViewGroup.LayoutParams.MATCH_PARENT))
+            addView(label("私钥口令（可选）", keyPassInput), rowParams(top = dp(12),
+                width = ViewGroup.LayoutParams.MATCH_PARENT))
+            addView(keyPassRow, rowParams(top = dp(7), width = ViewGroup.LayoutParams.MATCH_PARENT))
+        }
+        theForm.addView(keyBlock, rowParams(width = ViewGroup.LayoutParams.MATCH_PARENT))
+
+        fun syncAuthFields() {
+            val key = authKeyBtn.isChecked
+            passBlock.visibility = if (key) View.GONE else View.VISIBLE
+            keyBlock.visibility = if (key) View.VISIBLE else View.GONE
+        }
+        // 预选：保存的是私钥方式就切到私钥（此时监听器还没挂，不会触发回调）
+        if ((savedSsh?.authType ?: SshConfig.AUTH_PASSWORD) == SshConfig.AUTH_KEY) {
+            authKeyBtn.isChecked = true
+        }
+        syncAuthFields()
+
+        // dsh 端口：dsh 网页在你电脑上的端口
+        val sshTargetPortInput = input(
+            "3080",
+            (savedSsh?.remotePort ?: DEFAULT_PORT.toInt()).toString(),
+            number = true
+        )
+        theForm.addView(label("dsh 端口", sshTargetPortInput),
+            rowParams(top = dp(16), width = ViewGroup.LayoutParams.MATCH_PARENT))
+        theForm.addView(sshTargetPortInput, rowParams(top = dp(7), height = dp(46),
+            width = ViewGroup.LayoutParams.MATCH_PARENT))
+        theForm.addView(hint("dsh 网页的端口，默认 3080。"),
+            rowParams(top = dp(6), width = ViewGroup.LayoutParams.MATCH_PARENT))
+
+        val summary = UiKit.text(this@MainActivity, "", 13f, COL_TEXT)
+        settingsSummary = summary
+        val settingsToggle = UiKit.text(this@MainActivity, "修改 ›", 12f, COL_MUTED)
+        settingsAction = settingsToggle
+
+        /** 折叠时那一行摘要：直接读输入框的当前值，不做第二份真相。 */
+        fun updateSummary() {
+            val host = sshHostInput.text.toString().trim()
+            val user = sshUserInput.text.toString().trim()
+            val port = sshTargetPortInput.text.toString().trim().ifEmpty { DEFAULT_PORT }
+            val auth = if (authKeyBtn.isChecked) "私钥" else "密码"
+            summary.text = if (host.isBlank() && user.isBlank()) {
+                "还没配置"
+            } else {
+                buildList<String> {
+                    add((if (user.isBlank()) "" else "$user@") + host.ifBlank { "（地址未填）" })
+                    add(auth)
+                    // 端口只在**不是默认值**时露出来：默认 3080 写出来只是噪音，
+                    // 而 README 承诺「连接屏不暴露端口这类术语」—— 收起状态下更该守住。
+                    if (port != DEFAULT_PORT) add("dsh 端口 $port")
+                }.joinToString(" · ")
+            }
+        }
+        updateSummary()
+
+        // 切登录方式：两套字段整体显隐 + 清掉与新模式矛盾的错误提示
+        authGroup.setOnCheckedChangeListener { _, _ ->
+            syncAuthFields()
+            errPass.visibility = View.GONE
+            errKey.visibility = View.GONE
+            updateSummary()
+        }
+
+        // 输入即清错：不然改好了还挂着红字，用户会以为没生效
+        fun clearOnEdit(field: EditText, err: TextView) {
+            field.doAfterTextChanged {
+                if (err.visibility == View.VISIBLE) err.visibility = View.GONE
+                field.setBackgroundResource(R.drawable.bg_input)
+            }
+        }
+        clearOnEdit(sshHostInput, errHost)
+        clearOnEdit(sshUserInput, errUser)
+        clearOnEdit(sshPassInput, errPass)
+        clearOnEdit(keyPathInput, errKey)
+
+        val settingsHeader = LinearLayout(this@MainActivity).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            isClickable = true
+            isFocusable = true
+            addView(LinearLayout(this@MainActivity).apply {
+                orientation = LinearLayout.VERTICAL
+                addView(label("连接设置"))
+                addView(summary, rowParams(top = dp(6), width = ViewGroup.LayoutParams.MATCH_PARENT))
+            }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+            addView(settingsToggle, LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, dp(48)
+            ).apply { gravity = Gravity.CENTER_VERTICAL })
+            setOnClickListener {
+                val next =
+                    if (connectPhase == ConnectPhase.EDIT) ConnectPhase.IDLE else ConnectPhase.EDIT
+                showPhase(next)
+                if (next == ConnectPhase.IDLE) updateSummary()
+            }
+        }
+        content.addView(LinearLayout(this@MainActivity).apply {
+            orientation = LinearLayout.VERTICAL
+            setBackgroundResource(R.drawable.bg_card)
+            setPadding(dp(16), dp(14), dp(16), dp(16))
+            addView(settingsHeader, rowParams(width = ViewGroup.LayoutParams.MATCH_PARENT))
+            addView(theForm, rowParams(width = ViewGroup.LayoutParams.MATCH_PARENT))
+        }, rowParams(top = dp(24), width = ViewGroup.LayoutParams.MATCH_PARENT))
+
+        // ── 3 贴底动作区 ───────────────────────────────────────
+        val actionZone = LinearLayout(this@MainActivity).apply {
+            orientation = LinearLayout.VERTICAL
+            setBackgroundResource(R.drawable.bg_action_bar)
+            setPadding(dp(20), dp(12), dp(20), dp(18))
+        }
+
+        // 状态条（全局提示；字段级错误走输入框下面那几行）
+        val status = TextView(this@MainActivity).apply {
             textSize = 12f
             setTextColor(COL_MUTED)
             gravity = Gravity.CENTER
-            minHeight = dp(28)
+            minHeight = dp(30)
             setBackgroundResource(R.drawable.bg_status_pill)
-            setPadding(dp(14), dp(4), dp(14), dp(4))
+            setPadding(dp(14), dp(5), dp(14), dp(5))
             visibility = View.GONE
         }
-        card.addView(statusView, rowParams(top = dp(10), width = ViewGroup.LayoutParams.MATCH_PARENT))
+        statusView = status
+        actionZone.addView(status, rowParams(width = ViewGroup.LayoutParams.MATCH_PARENT))
 
-        // 回到网页（隧道还活着、WebView 里还有页面时才显示）：
-        // 从网页按返回后再点一下就能回去，不必重建隧道（重建会换本地端口）
-        backToWebButton = UiKit.button(this@MainActivity, "回到网页", UiKit.Style.PRIMARY, textSize = 12f) {
-            if (webView?.url?.startsWith("http") == true) {
-                showScreen(Screen.WEB)
-            } else {
-                // WebView 已空（如断开后）→ 有隧道就重新加载，没有则提示重连
-                val url = lastUrl
-                val tunneled = (application as DshApp).sshTunnel != null
-                if (tunneled && !url.isNullOrBlank()) {
-                    sshTokenAck = false
-                    connectWeb(url)
-                } else {
-                    status("网页已关闭，请重新连接", true)
-                }
+        // 看网页 / 开终端：不再是独立一步，而是决定主按钮做什么
+        val webModeBtn = segment("看 dsh 网页", true)
+        val termModeBtn = segment("打开终端", false)
+        val modeGroup = RadioGroup(this@MainActivity).apply {
+            orientation = RadioGroup.HORIZONTAL
+            addView(webModeBtn, LinearLayout.LayoutParams(0, dp(40), 1f).apply { marginEnd = dp(6) })
+            addView(termModeBtn, LinearLayout.LayoutParams(0, dp(40), 1f).apply { marginStart = dp(6) })
+        }
+        actionZone.addView(modeGroup, rowParams(top = dp(10), width = ViewGroup.LayoutParams.MATCH_PARENT))
+        modeGroup.setOnCheckedChangeListener { _, _ ->
+            webMode = webModeBtn.isChecked
+            syncConnectUi()
+        }
+
+        /** 校验失败：红框 + 红字贴在字段下面 + 把它滚进视野 + 聚焦（软键盘跟着弹）。 */
+        fun fail(field: EditText, err: TextView, msg: String) {
+            err.text = msg
+            err.visibility = View.VISIBLE
+            field.setBackgroundResource(R.drawable.bg_input_error)
+            scrollFieldIntoView(field)
+        }
+
+        /**
+         * 主按钮的动作 —— 四种情况全在这一处判定：
+         * 取消连接 / 回网页（隧道与页面都在）/ 打开终端 / 连上并打开。
+         */
+        fun onPrimaryAction() {
+            val app = application as DshApp
+            val tunneled = app.sshTunnel != null
+            val pageAlive = webView?.url?.startsWith("http") == true
+
+            if (connectPhase == ConnectPhase.CONNECTING && !connectFailed) {
+                cancelConnect()
+                return
             }
+            // 隧道与页面都在（且要的是网页）→ 直接回网页：不重连、不重载、不动 token，
+            // 也就不该被表单校验拦下。
+            if (webMode && tunneled && pageAlive) {
+                DiagLog.i(TAG, "连接屏：回网页（隧道活着、页面在）")
+                showScreen(Screen.WEB)
+                return
+            }
+
+            // 重试前把上一轮的错误痕迹全抹掉（红字 + 红框），否则改好了还留着红框
+            listOf(
+                errHost to sshHostInput, errUser to sshUserInput,
+                errPass to sshPassInput, errKey to keyPathInput
+            ).forEach { (err, field) ->
+                err.visibility = View.GONE
+                field.setBackgroundResource(R.drawable.bg_input)
+            }
+            status("")
+
+            val sh = sshHostInput.text.toString().trim()
+            val su = sshUserInput.text.toString().trim()
+            val sport = sshPortInput.text.toString().trim().toIntOrNull()?.coerceIn(1, 65535) ?: 22
+            val target = sshTargetPortInput.text.toString().trim().ifEmpty { DEFAULT_PORT }
+                .toIntOrNull()?.coerceIn(1, 65535) ?: 3080
+            if (sh.isBlank()) { fail(sshHostInput, errHost, "请填写电脑地址"); return }
+            if (su.isBlank()) { fail(sshUserInput, errUser, "请填写登录账号"); return }
+            val auth = if (authKeyBtn.isChecked) {
+                val path = keyPathInput.text.toString().trim()
+                if (path.isBlank()) {
+                    fail(keyPathInput, errKey, "请填写私钥路径，或点「导入」选文件"); return
+                }
+                val keyFile = File(path)
+                if (!keyFile.exists()) { fail(keyPathInput, errKey, "私钥文件不存在：$path"); return }
+                SshTunnel.Auth.KeyPair(keyFile, keyPassInput.text.toString().ifEmpty { null })
+            } else {
+                val pw = sshPassInput.text.toString()
+                if (pw.isEmpty()) { fail(sshPassInput, errPass, "请填写电脑登录密码"); return }
+                SshTunnel.Auth.Password(pw)
+            }
+            updateSummary()
+            if (!webMode) {
+                persistSshConfig(sh, sport, su, target, auth)
+                DiagLog.i(TAG, "连接屏：打开终端（终端自己建连接，不经这里的隧道）")
+                startActivity(Intent(this@MainActivity, TuiActivity::class.java))
+                return
+            }
+            if (!beginConnect()) { status("正在连接中，请稍候…"); return }
+            connectAttempt++
+            connectFailed = false
+            guideLine(1, "① 检查电脑 正在连接…", state = true)
+            connectViaSsh(sh, sport, su, target, auth, connectAttempt)
         }
-        card.addView(backToWebButton!!, rowParams(top = dp(10), height = dp(36), width = ViewGroup.LayoutParams.MATCH_PARENT))
-        backToWebButton!!.visibility = View.GONE
 
-        // 断开连接（仅隧道运行时显示）
-        disconnectButton = UiKit.button(this@MainActivity, "断开连接", UiKit.Style.ERROR, textSize = 12f) {
-            disconnectCurrent()
+        val main = UiKit.button(this@MainActivity, "", UiKit.Style.PRIMARY, textSize = 15f) {
+            onPrimaryAction()
         }
-        card.addView(disconnectButton!!, rowParams(top = dp(10), height = dp(36), width = ViewGroup.LayoutParams.MATCH_PARENT))
-        disconnectButton!!.visibility = View.GONE
+        connectMainBtn = main
+        actionZone.addView(main, rowParams(top = dp(10), height = dp(54),
+            width = ViewGroup.LayoutParams.MATCH_PARENT))
 
-
-        // 上次连接摘要（单行，非空时显示）
-        savedSsh?.takeIf { it.host.isNotBlank() }?.let {
-            card.addView(UiKit.singleLineText(
-                this@MainActivity,
-                "上次连接: ${it.user}@${it.host}:${it.port} → ${it.remoteHost}:${it.remotePort}",
-                10f, COL_DIM, Gravity.CENTER
-            ), rowParams(top = dp(10), width = ViewGroup.LayoutParams.MATCH_PARENT))
+        // 断开连接：只有隧道活着才出现，且退化成一条文字链 ——
+        // 它不该跟主按钮抢同一个位置（旧版三个整宽按钮并排，主操作要靠读文案分辨）。
+        val link = UiKit.text(this@MainActivity, "断开连接", 13f, COL_ERROR).apply {
+            gravity = Gravity.CENTER
+            isClickable = true
+            setPadding(0, dp(16), 0, dp(8))
+            setOnClickListener { disconnectCurrent() }
         }
+        disconnectLink = link
+        actionZone.addView(link, rowParams(width = ViewGroup.LayoutParams.MATCH_PARENT))
+        root.addView(actionZone, LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
+        ))
 
-        return scroll
+        // ── 初始相位 ───────────────────────────────────────────
+        // 配置齐全 → 折叠（这一屏每天只是「看一眼 + 点一下」）；缺东西 → 摊开，
+        // 别让用户对着一个「修改 ›」猜里面缺什么。
+        connectPhase = if (savedConfigUsable()) ConnectPhase.IDLE else ConnectPhase.EDIT
+        syncConnectUi()
+        return root
     }
 
     private fun pickSshKey() {
@@ -1170,42 +1390,74 @@ class MainActivity : Activity() {
     }
 
     // ── SSH 隧道（纯 WebView 用）─────────────────────────────
-    private fun connectViaSsh(sshHost: String, sshPort: Int, sshUser: String, remotePort: Int, auth: SshTunnel.Auth) {
-        status("SSH 隧道建立中… $sshUser@$sshHost")
+    /**
+     * 手动连接（强制重建隧道）。
+     *
+     * @param attempt 调用方（[MainActivity.onPrimaryAction] 里那个局部函数）自增后的尝试计数。
+     *   两个 `onUi` 回调都拿它与 [connectAttempt] 比对：用户中途按了「取消连接」时，
+     *   这次拨号的结果必须作废 —— 否则回程会把「已取消连接」覆盖成「隧道建立失败」，
+     *   极端时序下还会把界面切回网页。
+     */
+    private fun connectViaSsh(
+        sshHost: String,
+        sshPort: Int,
+        sshUser: String,
+        remotePort: Int,
+        auth: SshTunnel.Auth,
+        attempt: Int,
+    ) {
+        // 状态条让位给状态块与 ①②③：这一屏上「正在连接」由状态块那句 + 主按钮的
+        // 「取消连接」表达，状态条只负责报错与一次性提示，这里先把上一轮的残留清掉。
+        status("")
         guideStep3Show()
         val app = application as DshApp
         val cfg = buildSshConfig(sshHost, sshPort, sshUser, remotePort, auth)
         DiagLog.i(TAG, "connectViaSsh: 手动连接（强制重建）$sshUser@$sshHost:$sshPort → 远端 $remotePort " +
-            "auth=${if (auth is SshTunnel.Auth.KeyPair) "key" else "password"}")
+            "auth=${if (auth is SshTunnel.Auth.KeyPair) "key" else "password"} attempt=$attempt")
         Thread {
             // 用户明确点了连接 → 强制重建（可能正是一条他自己觉得有问题的隧道）
             val tunnel = app.ensureTunnel(cfg, force = true)
             val base = tunnel?.localBaseUrl
-            DiagLog.i(TAG, "connectViaSsh: ensureTunnel(force=true) → base=$base")
+            DiagLog.i(TAG, "connectViaSsh: ensureTunnel(force=true) → base=$base attempt=$attempt")
             // 失败先退：隧道没起来就不再干跑 token 探测（4×8s 白等）
             if (tunnel == null || base == null) {
-                DiagLog.w(TAG, "connectViaSsh: 隧道建立失败")
+                DiagLog.w(TAG, "connectViaSsh: 隧道建立失败（attempt=$attempt）")
                 onUi {
-                    status("隧道建立失败（检查 SSH 主机/端口/用户/认证）")
+                    if (connectAttempt != attempt) {
+                        DiagLog.i(TAG, "connectViaSsh: 这次尝试已被取消/取代（attempt=$attempt " +
+                            "当前=$connectAttempt），丢弃失败回调")
+                        return@onUi
+                    }
+                    connectFailed = true
+                    status("连不上你的电脑")
                     // 提示词跟登录方式：私钥用户看到「检查密码」会懵
                     val what = if (auth is SshTunnel.Auth.KeyPair) "私钥" else "密码"
                     guideLine(1, "① 检查电脑 ✗ 连不上你的电脑（检查地址/账号/$what）", state = null)
                     guideLine(2, "② 建立安全通道 未开始", state = true)
                     // ensureTunnel 已把旧隧道关掉，这里必须刷新，否则
-                    // 「回到网页 / 断开连接」会留在屏幕上指向一个已死的隧道
+                    // 「断开连接」会留在屏幕上指向一个已死的隧道
                     refreshConnectState()
                     endConnect()
                 }
                 return@Thread
             }
-            onUi { guideLine(1, "① 检查电脑 ✓ 已连上电脑", state = false) }
+            onUi {
+                if (connectAttempt != attempt) return@onUi
+                guideLine(1, "① 检查电脑 ✓ 已连上电脑", state = false)
+            }
             // 自动获取最新 token（服务重启后旧 token 失效；失败静默回退）
             val token = autoFetchToken(tunnel)
             onUi {
+                if (connectAttempt != attempt) {
+                    DiagLog.i(TAG, "connectViaSsh: 这次尝试已被取消/取代（attempt=$attempt " +
+                        "当前=$connectAttempt），不切屏、不重载")
+                    return@onUi
+                }
                 DiagLog.i(TAG, "connectViaSsh: token=${if (token != null) "已获取" else "未获取（仍尝试打开）"}")
                 if (token != null) guideLine(2, "② 建立安全通道 ✓ 已连通", state = false)
                 else guideLine(2, "② 建立安全通道 ⚠ 未获取令牌，仍尝试打开", state = null)
                 persistSshConfig(sshHost, sshPort, sshUser, remotePort, auth)
+                connectFailed = false
                 // 同 origin 恢复：隧道端口没漂、WebView 上那一页还停在同一个 origin 时，
                 // **不重载**。页面自己的重连（SSE/fetch 重试）会接到新隧道上；cookie 在同一
                 // authority 下仍然有效；万一服务端重启过导致 401，onReceivedHttpError 那条
@@ -1237,6 +1489,9 @@ class MainActivity : Activity() {
                     sshTokenAck = false
                     connectWeb(base)
                 }
+                // 连上了就离开「连接中」相位：留在里面会让状态块继续写着「连接中…」、
+                // 主按钮写着「取消连接」，而用户下一次从网页按返回回到这一屏时会看到它们。
+                showPhase(ConnectPhase.IDLE)
                 refreshConnectState()
                 endConnect()
             }
@@ -1606,6 +1861,9 @@ class MainActivity : Activity() {
 
     /** [revalidateTunnel] 的续作：探针判定隧道已死后重建（已在 UI 线程持好连接守卫）。 */
     private fun rebuildTunnel(cfg: SshConfig) {
+        // 与 connectViaSsh 同一套代数守卫：重建要跑好几秒，这期间用户可能已经
+        // 「回连接屏 → 断开连接」，那一下必须赢（否则迟到的回调会把页面又切回来）。
+        val attempt = connectAttempt
         Thread {
             val app = application as DshApp
             // 必须在 ensureTunnel(force=true) **之前**取：它会 close() 旧隧道并把 localBaseUrl 置空
@@ -1616,7 +1874,13 @@ class MainActivity : Activity() {
             // 去反推 t 非空依赖编译器的智能转换，写明确一点不吃亏。
             if (t == null || base == null) {
                 DiagLog.w(TAG, "rebuildTunnel: 重建失败")
-                onUi { status("重连失败，请回连接屏手动重试"); refreshConnectState(); endConnect() }
+                onUi {
+                    if (connectAttempt != attempt) {
+                        DiagLog.i(TAG, "rebuildTunnel: 期间用户已断开/取消，丢弃失败回调")
+                        return@onUi
+                    }
+                    status("重连失败，请回连接屏手动重试"); refreshConnectState(); endConnect()
+                }
                 return@Thread
             }
             // origin 变了 → cookie 名含 authority，必然失效 → 得重新取令牌。
@@ -1630,6 +1894,10 @@ class MainActivity : Activity() {
                 autoFetchToken(t)
             }
             onUi {
+                if (connectAttempt != attempt) {
+                    DiagLog.i(TAG, "rebuildTunnel: 期间用户已断开/取消，不切屏、不重载")
+                    return@onUi
+                }
                 if (sameOrigin) {
                     // **同 origin 重建：不重载页面。** 这是省流量的关键一笔。
                     //
@@ -1820,12 +2088,10 @@ class MainActivity : Activity() {
 
     private fun endConnect() { connecting.set(false) }
 
-    // ── 引导流 Step3 状态（类级：connectViaSsh/autoConnectSsh/onPageFinished 共用）────
+    // ── 引导流进度行（类级：connectViaSsh/autoConnectSsh/onPageFinished 共用）────
+    /** 进入「连接中」：相位 + ① 行文案一起复位。 */
     private fun guideStep3Show() {
-        showStep(ConnectStep.CONNECTING)
-        guideLine(1, "① 检查电脑 正在连接…", state = true)
-        guideLine(2, "② 建立安全通道", state = true)
-        guideLine(3, "③ 打开 dsh 网页", state = true)
+        showPhase(ConnectPhase.CONNECTING, resetGuide = true)
     }
     /** 引导行统一按 ①②③ 编号（1 起）；此前映射是 0 基、调用方传 1 基，
      *  导致「① 检查电脑」被写进第二行、② 行永远不更新。 */
@@ -1853,13 +2119,61 @@ class MainActivity : Activity() {
             }
         )
     }
-    private fun guideBackToStep2() {
-        showStep(ConnectStep.CREDENTIALS)
+    /**
+     * 把控件滚进视野。
+     *
+     * 用在「校验失败 → 指出是哪个输入框」：错误行贴在字段下面，但字段可能在折叠区里、
+     * 也可能在屏幕外，不滚过去等于只报了个看不见的错。
+     */
+    private fun scrollFieldIntoView(target: View) {
+        val sc = connectScroll ?: return
+        val content = connectContent ?: return
+        var y = 0
+        var cur: View? = target
+        while (cur != null && cur !== content) {
+            y += cur.top
+            cur = cur.parent as? View
+        }
+        val to = (y - dp(90)).coerceAtLeast(0)
+        sc.post {
+            sc.smoothScrollTo(0, to)
+            target.requestFocus()
+        }
     }
 
     /** 关闭并释放当前 SSH 隧道（无则 no-op）。所有权在 DshApp，这里只是转发。 */
     private fun closeCurrentTunnel() {
         (application as DshApp).closeTunnel()
+    }
+
+    /**
+     * 保存的配置够不够「直接连」：地址、账号在，且认证材料齐。
+     *
+     * 用它决定连接屏初始是折叠还是摊开 —— 判据是**配置本身**，不是「上次展开过吗」：
+     * 少一个要持久化的状态，也少一类「展开了却是空的」故障。
+     */
+    private fun savedConfigUsable(): Boolean {
+        val c = SshConfig.load(prefs) ?: return false
+        if (!c.isComplete) return false
+        return if (c.usesKey) c.keyPath.isNotBlank() else c.password.isNotEmpty()
+    }
+
+    /**
+     * 取消进行中的连接。
+     *
+     * 与 [disconnectCurrent] 的差别只有一处：**不动 prefs["url"]** —— 用户取消的是一次尝试，
+     * 不是要丢掉「上次打开的是哪个页面」。两者都要 `connectAttempt++`：那条仍在飞的拨号
+     * 会以「隧道建立失败」回来，不作废它就会把「已取消连接」覆盖成一条吓人的报错。
+     */
+    private fun cancelConnect() {
+        DiagLog.i(TAG, "cancelConnect: 用户取消连接（作废在飞的拨号 attempt=$connectAttempt）")
+        connectAttempt++
+        connectFailed = false
+        closeCurrentTunnel()
+        sshTokenAck = false
+        endConnect()
+        showPhase(ConnectPhase.IDLE)
+        status("已取消连接")
     }
 
     /** 断开连接：停隧道、清回连 URL、回连接屏。 */
@@ -1871,6 +2185,8 @@ class MainActivity : Activity() {
         // 重建不重载）保持一致。
         DiagLog.i(TAG, "disconnectCurrent: 关隧道 + 删 prefs[url]（保留页面，重连同 origin 可复用），" +
             "webUrl=${webView?.url}")
+        connectAttempt++
+        connectFailed = false
         closeCurrentTunnel()
         prefs.edit().remove("url").apply()
         sshTokenAck = false
@@ -1880,29 +2196,40 @@ class MainActivity : Activity() {
         status("已断开")
     }
 
-    /** 按隧道状态刷新连接屏上的按钮与提示。 */
+    /**
+     * 按隧道/页面状态刷新连接屏。
+     *
+     * 自身**不碰控件**：全部交给 [syncConnectUi] 一处重画。此前主按钮文案、两个按钮的可见性、
+     * 状态条文案由 4 处各自设置，于是出现「连接中却显示回到网页」——那一下会切到上一轮的页面，
+     * 而隧道正在重建。
+     */
     private fun refreshConnectState() {
+        syncConnectUi()
         val tunneled = (application as DshApp).sshTunnel != null
-        disconnectButton?.visibility = if (tunneled) View.VISIBLE else View.GONE
-        backToWebButton?.visibility =
-            if (tunneled && webView?.url?.startsWith("http") == true) View.VISIBLE else View.GONE
-        // 「回到网页 / 断开连接」的可见性此前不可观测：连接失败后按钮残留
-        // （指向死隧道）就是这类问题，只能靠截图发现。
-        DiagLog.i(TAG, "refreshConnectState: tunneled=$tunneled webUrl=${webView?.url} " +
-            "backToWeb=${backToWebButton?.visibility == View.VISIBLE} " +
-            "disconnect=${disconnectButton?.visibility == View.VISIBLE}")
-        // 回到连接屏时清掉残留的进度文案（「连接中… http://127.0.0.1:端口」既过时又是术语）。
-        // 隧道不在时不覆盖调用方刚设的错误提示。
-        if (tunneled) status("已连上电脑")
+        // 按钮可见性此前不可观测：连接失败后按钮残留（指向死隧道）就是这类问题，只能靠截图发现。
+        DiagLog.i(TAG, "refreshConnectState: phase=$connectPhase failed=$connectFailed tunneled=$tunneled " +
+            "webUrl=${webView?.url} primary=${connectMainBtn?.text} " +
+            "disconnect=${disconnectLink?.visibility == View.VISIBLE}")
+        // 隧道活着时状态块已经写着「已连上电脑」，状态条再写一遍就是同一句话说两次；
+        // 这里只清掉残留的进度文案（如「连接中… http://…」既过时又是术语）。
+        // 失败提示不能清：那时 tunneled=false。
+        if (tunneled && !connectFailed) status("")
     }
 
-    /** 回到连接屏统一收口：一律停在 Step 2，并复位 Step3 的进度行。
-     *  Step3 是上一轮连接的残留，直接显示会出现「连接中…」却早已连上的矛盾画面。 */
+    /**
+     * 回到连接屏统一收口：回常态 + 复位进度行。
+     *
+     * 相位按**配置是否齐全**决定（缺东西就摊开表单），不再无条件停在「填表」那一步 ——
+     * 旧版无论配置齐不齐都停 Step 2，于是「按返回键回到连接屏」看到的是一张 9 行的表。
+     */
     private fun showConnectScreen() {
-        DiagLog.i(TAG, "showConnectScreen: 回连接屏 Step2（tunnel=${(application as DshApp).sshTunnel != null}）")
-        showStep(ConnectStep.CREDENTIALS, resetGuide = true)
+        connectFailed = false
+        DiagLog.i(TAG, "showConnectScreen: 回连接屏（tunnel=${(application as DshApp).sshTunnel != null}）")
+        showPhase(
+            if (savedConfigUsable()) ConnectPhase.IDLE else ConnectPhase.EDIT,
+            resetGuide = true
+        )
         showScreen(Screen.CONNECT)
-        refreshConnectState()
     }
 
     private fun resetGuideLines() {
@@ -1930,8 +2257,6 @@ class MainActivity : Activity() {
             }
         }, 5000)
     }
-
-    private fun spacer(h: Int) = View(this).apply { layoutParams = LinearLayout.LayoutParams(1, h) }
 
     /** 纵向排列最常用的 LayoutParams；定义在 UiKit（此前本文件里有两份逐字相同的副本）。 */
     private fun rowParams(top: Int = 0, width: Int = ViewGroup.LayoutParams.WRAP_CONTENT,

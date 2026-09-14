@@ -31,6 +31,15 @@ object UiKit {
     const val ACCENT_TEXT = 0xFF0A0A0E.toInt()
     const val ERROR = 0xFFFF6B6B.toInt()
 
+    /**
+     * 连接屏状态点的两个状态色（0.1.10 起引入）。
+     *
+     * 全 App 只有这一处**刻意**用了彩色：状态块要在半秒内回答「连上没有」，
+     * 而黑白灰里表达「好 / 进行中」只能靠读文案。除此之外一切仍是黑白。
+     */
+    const val OK = 0xFF5EE6A8.toInt()
+    const val WARN = 0xFFF5C86B.toInt()
+
     /** 终端键排的按下态颜色（Termux 同款青蓝，用于高亮锁定的修饰键）。 */
     const val TEXT_ACTIVE = 0xFF80DEEA.toInt()
 
@@ -109,18 +118,5 @@ object UiKit {
         setTextColor(color)
         if (bold) typeface = android.graphics.Typeface.DEFAULT_BOLD
         if (letterSpacing != 0f) this.letterSpacing = letterSpacing
-    }
-
-    /** 单行、可横向滚动的小字（用于「上次连接」摘要这类超长一行）。 */
-    fun singleLineText(
-        context: Context,
-        content: String,
-        size: Float,
-        color: Int,
-        gravity: Int
-    ): TextView = text(context, content, size, color).apply {
-        this.gravity = gravity
-        maxLines = 1
-        setHorizontallyScrolling(true)
     }
 }
