@@ -993,7 +993,12 @@ class MainActivity : Activity() {
 
         val summary = UiKit.text(this@MainActivity, "", 13f, COL_TEXT)
         settingsSummary = summary
-        val settingsToggle = UiKit.text(this@MainActivity, "修改 ›", 12f, COL_MUTED)
+        // gravity=CENTER_VERTICAL 是**必须**的：这个 TextView 高 48dp（为触摸目标），
+        // 而 TextView 默认把文字画在顶部 —— 不设它，「收起 / 修改 ›」会比左边的
+        // 标题高出约 16dp。真机截图上先看到的就是这个错位（第一版只改了左列，不够）。
+        val settingsToggle = UiKit.text(this@MainActivity, "修改 ›", 12f, COL_MUTED).apply {
+            gravity = Gravity.CENTER_VERTICAL
+        }
         settingsAction = settingsToggle
 
         /** 折叠时那一行摘要：直接读输入框的当前值，不做第二份真相。 */
