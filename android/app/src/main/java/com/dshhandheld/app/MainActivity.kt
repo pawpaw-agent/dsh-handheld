@@ -238,6 +238,20 @@ class MainActivity : Activity() {
         /** 发完 Esc 到复查之间留的时间：React 提交状态需要一帧。 */
         const val MODAL_ESCAPE_SETTLE_MS = 240L
 
+        /**
+         * BACK 阶梯的第二级：抽屉开着就点它的遮罩关掉。
+         *
+         * 判据是宿主自己写的 `data-sidebar-collapsed`（窄屏下 = !narrowExpanded）——
+         * 浏览器半边只认这一个真相，App 这边也照它判；点遮罩而不是直接改状态，
+         * 是为了让「开合」始终只由页面侧那一份状态决定。
+         * 返回 true = 抽屉本来是开的、这一下已经按下去了。
+         */
+        const val JS_CLOSE_DRAWER =
+            "(function(){var f=document.querySelector('[data-handheld=\"frame\"]');" +
+                "if(!f||f.hasAttribute('data-sidebar-collapsed'))return false;" +
+                "var b=document.querySelector('[data-handheld=\"backdrop\"]');" +
+                "if(!b)return false;b.click();return true})()"
+
         const val PREF_SERVER_TOKEN = "server_token" // dsh 0.1.2+ 一次性启动 token（服务重启后自动更新）
 
         // ── 手机端适配插件（dsh-handheld-mobile，本仓库自研）────────────────
@@ -255,7 +269,7 @@ class MainActivity : Activity() {
         // id 必须与那个 bundle 内的 `id: "dsh-handheld-mobile"` 一致，改不得（CI 有断言）。
         // rev 只是 WebView 侧的缓存键：内容变更必须换 rev，否则可能命中旧缓存。
         const val MOBILE_PLUGIN_ID = "dsh-handheld-mobile"
-        const val MOBILE_PLUGIN_REV = "dsh-handheld-mobile-1.0.12"
+        const val MOBILE_PLUGIN_REV = "dsh-handheld-mobile-1.0.13"
         const val MOBILE_PLUGIN_URL = "/plugins/??$MOBILE_PLUGIN_ID/client.js&rev=$MOBILE_PLUGIN_REV"
 
         /**
@@ -1657,24 +1671,30 @@ class MainActivity : Activity() {
                 DiagLog.i(TAG, "BACK: 连接屏 → 退到后台（隧道保持）")
                 moveTaskToBack(true)
             }
-            else -> dismissWebModalThenFallback()
+            else -> handleWebBack()
         }
     }
 
     /**
-     * 网页里有模态（`[role=dialog][aria-modal]`，例如设置页）时，BACK 先当 Esc 用；
-     * 页面没吃掉这一下，再走原来的 BACK 语义。
+     * 网页里的 BACK 阶梯：**模态 → 抽屉 → 原语义**。
      *
-     * 手机上没有 Esc 键：设置页那种铺满整屏的浮层，用户唯一的"关掉"直觉就是返回手势。
-     * 不接这一下的话，BACK 会把用户送到连接屏（甚至网页历史里），而设置页还开着。
+     * 一、页面里有模态（`[role=dialog][aria-modal]`，例如设置页）→ 当 Esc 用。
+     * 二、模态没有、但目录抽屉开着 → 收起抽屉。
+     * 三、都没有 → 原来的语义（网页历史 → 连接屏 → 退到后台），一个字没改。
      *
-     * 两处必须小心：
-     *  1. `evaluateJavascript` 是异步的，所以这里只能先问页面、再在回调里决定回退，
+     * 为什么要有前两级：手机上没有 Esc 键，铺满整屏的浮层与抽屉，用户唯一的"关掉"直觉
+     * 就是返回手势。不接这两下的话，BACK 会把用户送到网页历史甚至连接屏，而设置页/抽屉
+     * 还开在那里 —— 回来仍是同一屏，看起来就是"按了没反应"。
+     *
+     * 三处必须小心：
+     *  1. `evaluateJavascript` 是异步的，所以只能先问页面、再在回调里决定下一级，
      *     不能像原来那样同步 `when` 一把梭；
      *  2. 页面"吃掉了"不等于"关掉了" —— 有的模态不监听 Escape。所以发完 Esc 等一下
-     *     再复查一次，模态还在就照样走原来的 BACK 语义，绝不把 BACK 变成空操作。
+     *     再复查一次，模态还在就照样往下走，绝不把 BACK 变成空操作；
+     *  3. 抽屉那一级直接点页面里我们自己的遮罩（`[data-handheld="backdrop"]`），
+     *     不去写宿主状态：开合的唯一真相在页面侧，App 只是替用户按了一下它的按钮。
      */
-    private fun dismissWebModalThenFallback() {
+    private fun handleWebBack() {
         val wv = webView
         if (wv == null) {
             fallbackBack()
@@ -1682,7 +1702,7 @@ class MainActivity : Activity() {
         }
         wv.evaluateJavascript(JS_ESCAPE_MODAL) { escaped ->
             if (escaped != "true") {
-                fallbackBack()
+                closeDrawerOrFallback()
                 return@evaluateJavascript
             }
             ui.postDelayed({
@@ -1691,8 +1711,8 @@ class MainActivity : Activity() {
                 if (!live || current == null) return@postDelayed
                 current.evaluateJavascript(JS_MODAL_OPEN) { stillOpen ->
                     if (stillOpen == "true") {
-                        DiagLog.i(TAG, "BACK: 模态没吃下 Esc，按原语义回退")
-                        fallbackBack()
+                        DiagLog.i(TAG, "BACK: 模态没吃下 Esc，继续下一级")
+                        closeDrawerOrFallback()
                     } else {
                         DiagLog.i(TAG, "BACK: 关掉网页模态（Esc）")
                     }
@@ -1701,7 +1721,23 @@ class MainActivity : Activity() {
         }
     }
 
-    /** 原来的 BACK 语义：网页历史 → 连接屏 → 退到后台。 */
+    /** 第二级：抽屉开着就收起（点页面里那个遮罩，开合状态仍由页面自己持有）。 */
+    private fun closeDrawerOrFallback() {
+        val wv = webView
+        if (wv == null) {
+            fallbackBack()
+            return
+        }
+        wv.evaluateJavascript(JS_CLOSE_DRAWER) { closed ->
+            if (closed == "true") {
+                DiagLog.i(TAG, "BACK: 收起目录抽屉")
+            } else {
+                fallbackBack()
+            }
+        }
+    }
+
+    /** 第三级（原来的 BACK 语义）：网页历史 → 连接屏 → 退到后台。 */
     private fun fallbackBack() {
         when {
             webView?.canGoBack() == true -> {

@@ -300,12 +300,17 @@ window.__ModuleLoader__.load({
      判据用语义结构而不是哈希类名：面板是 [role=dialog][aria-modal=true]:has(> nav)，
      导航就是它下面那个 <nav>，内容列是 _content / _options。
      作用域挂在 html:has([data-handheld="frame"]) 而不是 frame 上：这个对话框是 fixed
-     浮层，可能被渲染到 frame 之外（portal），挂在 frame 上会漏掉。 */
+     浮层，可能被渲染到 frame 之外（portal），挂在 frame 上会漏掉。
+
+     面板四周留 32px（每边 16px = 本机 60 设备像素 ≈ 4.2mm），这一圈就是「点外面关掉」
+     那个遮罩条。原来每边 8px：真机复验时我得精确点到 x=4 CSS px 才点到 —— 8px ≈ 2.1mm，
+     手指根本不可能（触摸目标惯例 ≥ 4mm）。留白加大后 ✕ 与 BACK 仍是主要关闭路径
+     （见 docs/mobile-adaptation.md），「点外面」只是顺手也能关。 */
   html:has([data-handheld="frame"]) [role="dialog"][aria-modal="true"]:has(> nav) {
-    width: calc(100vw - 16px) !important;
-    max-width: calc(100vw - 16px) !important;
-    height: calc(100dvh - 16px) !important;
-    max-height: calc(100dvh - 16px) !important;
+    width: calc(100vw - 32px) !important;
+    max-width: calc(100vw - 32px) !important;
+    height: calc(100dvh - 32px) !important;
+    max-height: calc(100dvh - 32px) !important;
     border-radius: 20px !important;
     flex-direction: column !important;
   }

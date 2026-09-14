@@ -168,6 +168,8 @@ const main = async () => {
                    closeHit: pt ? who(pt[0], pt[1]) : null,
                    closeIsInPanel: !!(dlg && at(pt) && dlg.contains(at(pt))),
                    maskHit: mask ? who(mt[0], mt[1]) : null,
+                   // 面板四周的遮罩条有多宽：x=12 能命中的话，说明留白 > 12px（点得到）
+                   maskHitInset12: mask ? who(12, Math.round(innerHeight / 2)) : null,
                    behindPt: bt,
                    behindRect: behind ? (function () { var r = behind.getBoundingClientRect();
                      return [Math.round(r.left), Math.round(r.top), Math.round(r.right), Math.round(r.bottom)]; })() : null,

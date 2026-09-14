@@ -423,11 +423,16 @@ unzip -p app-debug.apk classes6.dex | grep -a -o "onCreate: savedUrl" | wc -l
 不该顺手改变抽屉状态**。真正危险的是另一半：万一某个模态不因遮罩点击而关闭，
 这一笔就会把它变成下一张「点不动的画」。改成按祖先范围判定后，模态开着时整条启发式停用。
 
-顺带把「手机上怎么关一个铺满整屏的页面」补齐：**Android 的 BACK 现在会先当 Esc 用**
-（`MainActivity.dismissWebModalThenFallback()`）—— 页面上有 `[role=dialog][aria-modal=true]`
-时派发一次 `keydown Escape`（dsh 的模态就是在 document 上监听 Escape 的），240ms 后复查，
-模态还在就照旧走原来的 BACK 语义。原来的语义一个字没改，只是插了一级；
-复查这一步是必须的：有的模态不监听 Escape，不能把 BACK 变成空操作。
+顺带把「手机上怎么关掉这一屏」补齐，BACK 变成三级阶梯（`MainActivity.handleWebBack()`）：
+**模态 → 抽屉 → 原语义**。① 有 `[role=dialog][aria-modal=true]` 时派发一次 `keydown Escape`
+（dsh 的模态就是在 document 上监听 Escape 的），240ms 后复查 —— 复查是必须的：有的模态
+不监听 Escape，不能把 BACK 变成空操作；② 模态没了但抽屉开着，就点我们自己的遮罩收起它
+（开合的真相始终在页面侧那一份状态里）；③ 都没有才走原来的语义，一个字没改。
+
+同一轮还把设置面板的留白从每边 8px 改成 16px：8px 在 384px 视口上只有 30 设备像素
+≈ 2.1mm，**「点外面关掉」这条路径实际是点不到的**（复验时我得精确点到 x=4 CSS px）。
+16px = 60 设备像素 ≈ 4.2mm，够一根手指；代价只是面板窄了 16px（352 而非 368）。
+✕ 与 BACK 仍是主要关闭路径，点外面是"顺手也能关"。
 
 复验（同一台机，release 包，每步 `uiautomator dump` + `logcat -s DshHandheld` 双证据）：
 
@@ -437,6 +442,7 @@ unzip -p app-debug.apk classes6.dex | grep -a -o "onCreate: savedUrl" | wc -l
 | 接着点 ✕ | 对话框关闭 ✓，抽屉保持打开 ✓ | 同左 ✓ |
 | 开设置 → 直接点对话框外的遮罩 | 对话框关闭 ✓，**但抽屉也被收了** ✗ ← 这一笔让判据的洞暴露出来 | 对话框关闭 ✓，抽屉保持打开 ✓ |
 | 开着设置页按系统 BACK | 对话框关闭 ✓（`logcat`：`BACK: 关掉网页模态（Esc）`），没有跳到连接屏 ✓ | 同左 ✓ |
+| 抽屉开着（无模态）按 BACK | 网页历史/连接屏那条老路 ✗ ← 1.0.13 里补成第二级 | 抽屉收起 ✓（`logcat`：`BACK: 收起目录抽屉`），页面不动 ✓ |
 | 抽屉里点会话行（`android.view.View`，非按钮） | 仍然照旧收起抽屉并切会话 ✓（启发式本身没坏） | 同左 ✓ |
 | 抽屉收起后点输入框 | 软键盘照常弹出 ✓（兜底规则没有把整列变成常驻可点） | 同左 ✓ |
 
