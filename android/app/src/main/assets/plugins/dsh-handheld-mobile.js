@@ -41,6 +41,29 @@ window.__ModuleLoader__.load({
 
     var h = react.createElement;
 
+    /** 发一条消息给原生侧；没有桥（桌面浏览器 / 老版本 App）就什么都不做。 */
+    var postToApp = function (payload) {
+      var bridge = window.dshNative;
+      if (!bridge || typeof bridge.postMessage !== "function") return;
+      try {
+        bridge.postMessage(JSON.stringify(payload));
+      } catch (e) { /* 通道坏了不该影响页面 */ }
+    };
+
+    /** 会话标题：优先用会话头，取不到就退回 document.title。 */
+    var sessionLabel = function () {
+      try {
+        var header = document.querySelector('[data-handheld="frame"] [data-phase] header');
+        var host = header === null
+          ? null
+          : (header.querySelector('[class*="_crumbs"]') || header);
+        var text = host === null ? "" : String(host.textContent || "");
+        text = text.replace(/\s+/g, " ").trim();
+        if (text !== "") return text.slice(0, 60);
+      } catch (e) { /* 取不到就用兜底 */ }
+      return String(document.title || "").slice(0, 60);
+    };
+
     /** 只有「窄视口 + 触摸主指针」才生效：桌面窗口完全不受影响。 */
     var MOBILE_QUERY = "(max-width: 1023px) and (pointer: coarse)";
     /** 抽屉宽：窄手机 86vw，最宽 340px（再宽在平板上也不像个抽屉了）。 */
@@ -586,29 +609,7 @@ window.__ModuleLoader__.load({
             ? window.performance.now()
             : Date.now();
         };
-
-        /** 会话标题：优先用会话头，取不到就退回 document.title。 */
-        var sessionLabel = function () {
-          try {
-            var header = document.querySelector('[data-handheld="frame"] [data-phase] header');
-            var host = header === null
-              ? null
-              : (header.querySelector('[class*="_crumbs"]') || header);
-            var text = host === null ? "" : String(host.textContent || "");
-            text = text.replace(/\s+/g, " ").trim();
-            if (text !== "") return text.slice(0, 60);
-          } catch (e) { /* 取不到就用兜底 */ }
-          return String(document.title || "").slice(0, 60);
-        };
-
-        /** 发一条给原生侧；没有桥（桌面浏览器 / 老版本 App）就什么都不做。 */
-        var post = function (payload) {
-          var bridge = window.dshNative;
-          if (!bridge || typeof bridge.postMessage !== "function") return;
-          try {
-            bridge.postMessage(JSON.stringify(payload));
-          } catch (e) { /* 通道坏了不该影响页面 */ }
-        };
+        var post = postToApp;
 
         var check = function () {
           if (disposed) return;
@@ -642,6 +643,47 @@ window.__ModuleLoader__.load({
           observer.disconnect();
         };
       }, "dsh-handheld-mobile: turn watcher");
+
+      // ── 需要你选择 → 通知 App ────────────────────────────────
+      //
+      // 「一轮结束」不是唯一该叫用户回来的时刻，甚至不是最该叫的：**它在等你在手机上点一下**
+      // （批准一次工具调用、回答一个问题）时，那一轮根本没结束 —— 用户却在等一个不会来的结果。
+      // 两类卡片都是宿主自己写的稳定钩子，值就是这一次交互的 key：
+      //   [data-question-key]      dsh-client-ui-user-questions（提问 / 计划确认）
+      //   [data-approval-key]      dsh-client-ui-approval（工具审批）
+      // 它们在 pending 存在时挂载、回答后卸载。同一张卡重渲染时 key 不变，所以用 key 去重；
+      // 卡片消失后再出现（key 变了）才会再提醒一次。
+      ctx.effect(function () {
+        var ASK = '[data-question-key], [data-approval-key], [data-plan-review-key]';
+        var node = null;
+        var lastKey = null;
+        var disposed = false;
+
+        var check = function () {
+          if (disposed) return;
+          if (node === null || !node.isConnected) node = document.querySelector(ASK);
+          if (node === null) {
+            // 卡没了（回答了 / 被撤销）：清掉去重键，下次出现要重新提醒
+            lastKey = null;
+            return;
+          }
+          var key = node.getAttribute("data-question-key")
+            || node.getAttribute("data-approval-key")
+            || node.getAttribute("data-plan-review-key")
+            || "";
+          if (key === lastKey) return;
+          lastKey = key;
+          postToApp({ type: "needs-input", title: sessionLabel(), key: key });
+        };
+
+        var observer = new MutationObserver(check);
+        observer.observe(document.documentElement, { childList: true, subtree: true });
+        check();
+        return function () {
+          disposed = true;
+          observer.disconnect();
+        };
+      }, "dsh-handheld-mobile: needs-input watcher");
 
       // ── 会话头里的目录按钮 ──────────────────────────────────
       ctx.effect(function () {

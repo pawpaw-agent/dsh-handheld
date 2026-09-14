@@ -132,9 +132,10 @@ fixture 页面 + 真实的 dsh 组件 CSS，`file://` 加载）：见 `docs/mobi
 
 | | |
 |---|---|
-| 判据 | dsh 的「深度求索中…」指示器：`dsh-client-ui-chat` 的 `div[class*="_turnStatus"][role=status]`。它随 `running` 挂载/卸载，我们盯**从有到无**的那次跃迁 |
+| 判据（完成） | dsh 的「深度求索中…」指示器：`dsh-client-ui-chat` 的 `div[class*="_turnStatus"][role=status]`。它随 `running` 挂载/卸载，我们盯**从有到无**的那次跃迁 |
+| 判据（等你在手机上点一下） | `[data-question-key]` / `[data-approval-key]` / `[data-plan-review-key]` —— 提问、工具审批、计划确认三张卡，pending 时挂载、回答后卸载。用 key 去重（同一张卡重渲染不会重复提醒） |
 | 通道 | `window.dshNative.postMessage(...)` —— WebView 的 `addWebMessageListener`（`androidx.webkit`），origin 只放行隧道实际会用的两个（`SshTunnel.PORT_CANDIDATES`），**只进不出**（App 不向页面发指令） |
-| 消息 | `{"type":"turn-start"}`、`{"type":"turn-done","title":…,"ms":…}` |
+| 消息 | `{"type":"turn-start"}`、`{"type":"turn-done","title":…,"ms":…}`、`{"type":"needs-input","title":…,"key":…}` |
 | 没有桥时 | 静默跳过 —— 同一份 bundle 在桌面浏览器里只是不通知，不影响适配 |
 
 三条不显然的实现约束（都写在代码注释里）：
@@ -153,4 +154,4 @@ fixture 页面 + 真实的 dsh 组件 CSS，`file://` 加载）：见 `docs/mobi
 
 `MainActivity.MOBILE_PLUGIN_REV` 是 WebView 侧的缓存键：**内容变了必须换 rev**，否则可能
 命中旧缓存。CI 断言 App 常量与 bundle 内的 `id` 一致（`check-mobile-hooks.mjs` 的静态
-不变量）。当前为 `dsh-handheld-mobile-1.0.15`。
+不变量）。当前为 `dsh-handheld-mobile-1.0.16`。

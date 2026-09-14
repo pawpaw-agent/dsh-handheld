@@ -45,22 +45,36 @@ object Notifier {
     /** 任务完成渠道（[ensureChannels] 里创建）。 */
     const val CHANNEL_TURN = "dsh-turn"
 
+    /** 「在等你选择」渠道：比完成提醒更急（那一轮**卡住**了），走 heads-up。 */
+    const val CHANNEL_ASK = "dsh-ask"
+
     /**
      * 用固定 id：连着干完几轮只留最新一条，而不是在通知栏里堆一排。
      * （[TunnelService] 用 1，这里避开。）
      */
     private const val ID_TURN = 2
 
+    /** 「等你选择」用另一个 id：它和「做完了」可能前后脚出现，不该互相顶掉。 */
+    private const val ID_ASK = 3
+
     /** 建渠道。可重复调用（已存在就跳过）。 */
     fun ensureChannels(context: Context, channelId: String) {
         val nm = context.getSystemService(NotificationManager::class.java) ?: return
         if (nm.getNotificationChannel(channelId) != null) return
-        nm.createNotificationChannel(
-            NotificationChannel(channelId, "任务完成", NotificationManager.IMPORTANCE_DEFAULT).apply {
-                description = "dsh 生成结束时提醒你（App 在后台时才发）"
-                setShowBadge(true)
-            }
-        )
+        when (channelId) {
+            CHANNEL_ASK -> nm.createNotificationChannel(
+                NotificationChannel(channelId, "在等你选择", NotificationManager.IMPORTANCE_HIGH).apply {
+                    description = "dsh 停下来等你批准或回答（App 在后台时才发）"
+                    setShowBadge(true)
+                }
+            )
+            else -> nm.createNotificationChannel(
+                NotificationChannel(channelId, "任务完成", NotificationManager.IMPORTANCE_DEFAULT).apply {
+                    description = "dsh 生成结束时提醒你（App 在后台时才发）"
+                    setShowBadge(true)
+                }
+            )
+        }
     }
 
     /**
@@ -80,7 +94,47 @@ object Notifier {
 
     /** 撤回「任务完成」通知（用户关掉开关时调用，别留一条撤不掉的历史）。 */
     fun cancelTurn(context: Context) {
-        context.getSystemService(NotificationManager::class.java)?.cancel(ID_TURN)
+        val nm = context.getSystemService(NotificationManager::class.java) ?: return
+        nm.cancel(ID_TURN)
+        nm.cancel(ID_ASK)
+    }
+
+    /**
+     * 发一条「dsh 停下来等你了」。
+     *
+     * 比 [turnDone] 急：那一轮**没有**结束 —— 它在等一次批准或一个回答，而用户往往正在
+     * 等一个不会自己来的结果。所以走 `dsh-ask` 渠道（`IMPORTANCE_HIGH`，会浮到屏幕上）。
+     *
+     * @param title 会话标题（页面给的）。
+     */
+    fun needsInput(context: Context, title: String?) {
+        if (!allowed(context)) {
+            DiagLog.w(TAG, "通知不可用（开关或权限），丢弃这条「等你选择」通知")
+            return
+        }
+        ensureChannels(context, CHANNEL_ASK)
+        val open = PendingIntent.getActivity(
+            context, 0,
+            Intent(context, MainActivity::class.java)
+                .addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_NEW_TASK),
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+        val text = title?.takeIf { it.isNotBlank() } ?: "回到 App 点一下"
+        val n = Notification.Builder(context, CHANNEL_ASK)
+            .setContentTitle("dsh 在等你选择")
+            .setContentText(text)
+            .setStyle(Notification.BigTextStyle().bigText(text))
+            .setSmallIcon(R.drawable.ic_launcher_foreground)
+            .setContentIntent(open)
+            .setAutoCancel(true)
+            .setWhen(System.currentTimeMillis())
+            .setShowWhen(true)
+            .setCategory(Notification.CATEGORY_REMINDER)
+            .build()
+        runCatching {
+            context.getSystemService(NotificationManager::class.java)?.notify(ID_ASK, n)
+        }.onFailure { DiagLog.w(TAG, "notify 失败：${it.javaClass.simpleName}: ${it.message}") }
+        DiagLog.i(TAG, "已发「等你选择」通知：$text")
     }
 
     /**

@@ -368,7 +368,7 @@ class MainActivity : Activity() {
         // id 必须与那个 bundle 内的 `id: "dsh-handheld-mobile"` 一致，改不得（CI 有断言）。
         // rev 只是 WebView 侧的缓存键：内容变更必须换 rev，否则可能命中旧缓存。
         const val MOBILE_PLUGIN_ID = "dsh-handheld-mobile"
-        const val MOBILE_PLUGIN_REV = "dsh-handheld-mobile-1.0.15"
+        const val MOBILE_PLUGIN_REV = "dsh-handheld-mobile-1.0.16"
         const val MOBILE_PLUGIN_URL = "/plugins/??$MOBILE_PLUGIN_ID/client.js&rev=$MOBILE_PLUGIN_REV"
 
         /**
@@ -1091,9 +1091,9 @@ class MainActivity : Activity() {
         fun refreshNotifHint() {
             val allowed = Notifier.allowed(this@MainActivity)
             notifHint.text = when {
-                !notifSwitch.isChecked -> "关闭：生成结束时不提醒。"
+                !notifSwitch.isChecked -> "关闭：生成结束、以及在等你选择时，都不提醒。"
                 !allowed -> "没有通知权限，提醒不会生效（点开关重新申请，或到系统设置里开启）。"
-                else -> "dsh 生成结束时提醒你 —— 只在 App 不在前台时才发。"
+                else -> "生成结束、或停下来等你批准／回答时提醒 —— 只在 App 不在前台时才发。"
             }
             notifHint.setTextColor(if (notifSwitch.isChecked && !allowed) COL_ERROR else COL_MUTED)
         }
@@ -1103,7 +1103,8 @@ class MainActivity : Activity() {
         fun enableTurnNotif() {
             prefs.edit().putBoolean(DshApp.PREF_NOTIF_TURN, true).apply()
             Notifier.ensureChannels(this@MainActivity, Notifier.CHANNEL_TURN)
-            status("已开启任务完成提醒")
+            Notifier.ensureChannels(this@MainActivity, Notifier.CHANNEL_ASK)
+            status("已开启提醒")
             refreshNotifHint()
             DiagLog.i(TAG, "通知开关：开（系统允许=${Notifier.allowed(this@MainActivity)}）")
         }
@@ -1125,7 +1126,7 @@ class MainActivity : Activity() {
             } else {
                 prefs.edit().putBoolean(DshApp.PREF_NOTIF_TURN, false).apply()
                 Notifier.cancelTurn(this@MainActivity)
-                status("已关闭任务完成提醒")
+                status("已关闭提醒")
                 refreshNotifHint()
                 DiagLog.i(TAG, "通知开关：关")
             }
@@ -1143,7 +1144,7 @@ class MainActivity : Activity() {
                 gravity = Gravity.CENTER_VERTICAL
                 addView(LinearLayout(this@MainActivity).apply {
                     orientation = LinearLayout.VERTICAL
-                    addView(UiKit.text(this@MainActivity, "任务完成时提醒我", 14f, COL_TEXT))
+                    addView(UiKit.text(this@MainActivity, "dsh 需要你时提醒我", 14f, COL_TEXT))
                     addView(notifHint, rowParams(top = dp(6), width = ViewGroup.LayoutParams.MATCH_PARENT))
                 }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
                 addView(notifSwitch, LinearLayout.LayoutParams(

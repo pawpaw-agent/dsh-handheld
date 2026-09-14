@@ -146,6 +146,18 @@ class DshApp : Application() {
                     else -> Notifier.turnDone(this, title)
                 }
             }
+            "needs-input" -> {
+                val title = json.optString("title").takeIf { it.isNotBlank() }
+                val key = json.optString("key")
+                val on = prefs.getBoolean(PREF_NOTIF_TURN, false)
+                val foreground = visibleActivities.get() > 0
+                DiagLog.i(TAG, "页面报告：在等你选择（key=$key，标题=$title，开关=$on，前台=$foreground）")
+                when {
+                    !on -> Unit
+                    foreground -> DiagLog.i(TAG, "App 在前台，不发通知")
+                    else -> Notifier.needsInput(this, title)
+                }
+            }
             else -> DiagLog.w(TAG, "未知的页面消息：${json.optString("type")}")
         }
     }
