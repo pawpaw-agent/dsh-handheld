@@ -105,8 +105,29 @@ class DshApp : Application() {
     }
 
     private val tunnelObservers = CopyOnWriteArrayList<TunnelObserver>()
+
+    /**
+     * 只保护 [sshTunnel] / [tunnelFingerprint] / [dialGeneration] 这几个字段，临界区永远是
+     * 常数级。**主线程会拿它**（「断开连接」按钮 → [closeTunnel]），所以这里绝不能出现
+     * 拨号、`reap()` 这类阻塞动作 —— 2026-09-14 的审计就是在这一条上发现 ANR 的。
+     */
     private val tunnelLock = Any()
+
+    /** 串行化拨号（同一时刻只允许一条）。拨号是长阻塞（最坏 3×15s），只在后台线程上拿。 */
+    private val dialLock = Any()
+
     private var tunnelFingerprint: String? = null
+
+    /**
+     * 拨号代数：每次 [closeTunnel] 自增。拨号开始时记下当时的代数，发布结果前对不上就丢弃
+     * —— 用户在拨号期间点了「断开连接」时，这次拨号已经作废，不能把隧道又发布出去
+     * （否则「断开」被一个迟到的后台结果逆转）。
+     */
+    private var dialGeneration = 0L
+
+    /** 正在后台回收旧隧道的线程；下一次拨号前 join 它，端口稳定才不会被自己人白漂一次。 */
+    @Volatile
+    private var pendingClose: Thread? = null
 
     fun addTunnelObserver(o: TunnelObserver) {
         if (!tunnelObservers.contains(o)) tunnelObservers.add(o)
@@ -209,27 +230,57 @@ class DshApp : Application() {
     // ── 隧道所有权 ────────────────────────────────────────────────
 
     /**
-     * 取得 SSH 配置 [cfg] 对应的隧道，必要时新建。**阻塞**（拨号 ~1-3s），
+     * 取得 SSH 配置 [cfg] 对应的隧道，必要时新建。**阻塞**（拨号 ~1-3s，失败最坏 3×15s），
      * 必须在后台线程调用。失败返回 null。
      *
      * 复用规则：已有隧道且配置指纹一致且 [SshTunnel.isHealthy] → 直接返回。
      * [force] = true 时强制重建（用户在连接屏明确点了「连接」，可能是在修一条
      * 自己觉得有问题的隧道）。
      *
-     * 同一时刻只允许一条拨号在跑（[tunnelLock]），避免 WebView 与后台服务
-     * 同时建两条隧道。
+     * ## 两把锁（2026-09-14 审计后拆开）
+     *
+     * 原先是「一把锁 + 整段拨号都在锁内」，于是主线程的「断开连接」要排队等拨号结束，
+     * 最长几十秒 —— 那是必然 ANR。现在：
+     *  - [tunnelLock]：只做字段级短临界区，主线程可以安全地拿；
+     *  - [dialLock]：串行化拨号，长阻塞只发生在后台线程上；
+     *  - [dialGeneration]：拨号期间发生过「断开/换配置」就丢弃这次结果。
      */
     fun ensureTunnel(cfg: SshConfig, force: Boolean = false): SshTunnel? {
         val fp = cfg.fingerprint()
-        synchronized(tunnelLock) {
+        // 先短看一眼能不能复用（健康探针本身要发真流量，放到锁外做）
+        val reusable = synchronized(tunnelLock) {
             val cur = sshTunnel
-            if (!force && cur != null && tunnelFingerprint == fp && cur.isHealthy()) {
-                DiagLog.i(TAG, "ensureTunnel: 复用已有隧道 ${cur.localBaseUrl}")
-                return cur
+            if (!force && cur != null && tunnelFingerprint == fp) cur else null
+        }
+        if (reusable != null && reusable.isHealthy()) {
+            DiagLog.i(TAG, "ensureTunnel: 复用已有隧道 ${reusable.localBaseUrl}")
+            return reusable
+        }
+        synchronized(dialLock) {
+            // 等上一次「断开」的回收线程收完旧 owner：否则新拨号会看到端口还被占着，
+            // 白白漂到 13080（origin 一变 cookie/localStorage 全换一份）。
+            pendingClose?.let { th ->
+                runCatching { th.join(CLOSE_JOIN_MS) }
+                    .onFailure { Thread.currentThread().interrupt() }  // 别把中断标志吞掉
             }
-            cur?.close()
-            sshTunnel = null
-            tunnelFingerprint = null
+            // 排队等锁期间别人可能已经拨好了
+            val again = synchronized(tunnelLock) {
+                val cur = sshTunnel
+                if (!force && cur != null && tunnelFingerprint == fp) cur else null
+            }
+            if (again != null && again.isHealthy()) {
+                DiagLog.i(TAG, "ensureTunnel: 复用已有隧道 ${again.localBaseUrl}（等锁期间建立）")
+                return again
+            }
+            val (obsolete, generation) = synchronized(tunnelLock) {
+                val cur = sshTunnel
+                sshTunnel = null
+                tunnelFingerprint = null
+                cur to dialGeneration
+            }
+            // 收旧 owner 必须在选端口之前完成；它是阻塞的（每个进程最多 1.5s），
+            // 所以刻意放在短锁之外 —— 代价由后台线程承担。
+            obsolete?.close()
 
             val t = build(cfg) ?: return null
             t.onStateChange = { s ->
@@ -247,8 +298,20 @@ class DshApp : Application() {
                 DiagLog.w(TAG, "ensureTunnel: 拨号失败")
                 return null
             }
-            sshTunnel = t
-            tunnelFingerprint = fp
+            val published = synchronized(tunnelLock) {
+                if (dialGeneration != generation) {
+                    false
+                } else {
+                    sshTunnel = t
+                    tunnelFingerprint = fp
+                    true
+                }
+            }
+            if (!published) {
+                DiagLog.i(TAG, "ensureTunnel: 拨号期间用户已断开/已换配置，丢弃这次拨号结果")
+                t.close()
+                return null
+            }
             // 隧道真的起来了才需要保活。放在成功分支里（而不是 build()），
             // 免得拨号失败也留下一个常驻前台服务。
             TunnelService.start(this, "已连接到 ${cfg.host}")
@@ -257,14 +320,30 @@ class DshApp : Application() {
         }
     }
 
-    /** 关闭隧道（用户手动断开）。谁都不该在别处 close，否则会打断 WebView。 */
+    /**
+     * 关闭隧道（用户手动断开）。谁都不该在别处 close，否则会打断 WebView。
+     *
+     * **绝不阻塞调用方**：主线程（「断开连接」按钮）会调它，所以这里只做常数级的字段
+     * 清理 + 自增 [dialGeneration]（作废所有在飞的拨号结果），真正的进程回收交给后台线程。
+     * 回收线程记在 [pendingClose]，下一次拨号前会被 join —— 「端口稳定」仍然成立，
+     * 只是这份代价不再由 UI 线程付（原先它要排队等拨号锁，是 ANR 来源）。
+     */
     fun closeTunnel() {
-        synchronized(tunnelLock) {
-            sshTunnel?.close()
+        val closing = synchronized(tunnelLock) {
+            dialGeneration++
+            val cur = sshTunnel
             sshTunnel = null
             tunnelFingerprint = null
-            // 隧道没了就不该继续占着前台服务
-            TunnelService.stop(this)
+            cur
+        }
+        // 隧道没了就不该继续占着前台服务
+        TunnelService.stop(this)
+        if (closing != null) {
+            val th = Thread { closing.close() }
+            th.name = "tunnel-close"
+            th.isDaemon = true
+            pendingClose = th
+            th.start()
         }
     }
 
@@ -288,5 +367,7 @@ class DshApp : Application() {
 
     private companion object {
         const val TAG = "DshApp"
+        /** 新拨号前最多等多久让上一次「断开」把旧 owner 收完（正常 <100ms）。 */
+        const val CLOSE_JOIN_MS = 5_000L
     }
 }

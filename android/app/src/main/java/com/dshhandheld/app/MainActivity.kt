@@ -1591,6 +1591,13 @@ class MainActivity : Activity() {
             DiagLog.w(TAG, "revalidateTunnel: 探针失败 —— 重建隧道")
             // 连接守卫与 status() 都必须在 UI 线程上（beginConnect 失败会写状态栏）
             onUi {
+                // 探针要跑满 1.5–4.5s，这期间用户可能已经「断开连接」或换了隧道。
+                // 迟到的结果不能算数：否则一个后台探针会把用户刚断开的连接又建回来
+                // （断开被逆转，prefs["url"] 也会被重新写回）。
+                if (app.sshTunnel !== tunnel) {
+                    DiagLog.i(TAG, "revalidateTunnel: 现场已变（当前隧道 ${app.sshTunnel?.localBaseUrl}），丢弃这次探测结果")
+                    return@onUi
+                }
                 if (beginConnect()) rebuildTunnel(cfg)
                 else DiagLog.i(TAG, "revalidateTunnel: 已有连接在进行，让位")
             }
@@ -1605,13 +1612,25 @@ class MainActivity : Activity() {
             val prevBase = app.sshTunnel?.localBaseUrl
             val t = app.ensureTunnel(cfg, force = true)
             val base = t?.localBaseUrl
-            if (base == null) {
+            // 直接对 t 判空：后面的 autoFetchToken(t) 需要 t 的非空类型，靠 `base != null`
+            // 去反推 t 非空依赖编译器的智能转换，写明确一点不吃亏。
+            if (t == null || base == null) {
                 DiagLog.w(TAG, "rebuildTunnel: 重建失败")
                 onUi { status("重连失败，请回连接屏手动重试"); refreshConnectState(); endConnect() }
                 return@Thread
             }
+            // origin 变了 → cookie 名含 authority，必然失效 → 得重新取令牌。
+            // ⚠️ 取令牌**必须在后台线程**：autoFetchToken 会跑最多 4 条 SSH 命令
+            // （execOnce 每条默认超时 8s，内部是轮询子进程）。原先这一句写在下面的
+            // onUi 块里 = 主线程冻结最长 32s（ANR），2026-09-14 审计抓到的就是它；
+            // 同一函数的另外三个调用点本来都在后台线程，只有这里漏了。
+            val sameOrigin = base == prevBase
+            if (!sameOrigin) {
+                DiagLog.i(TAG, "rebuildTunnel: origin 变了（$prevBase → $base），先在后台取令牌再回主线程")
+                autoFetchToken(t)
+            }
             onUi {
-                if (base == prevBase) {
+                if (sameOrigin) {
                     // **同 origin 重建：不重载页面。** 这是省流量的关键一笔。
                     //
                     // 端口没变 → origin 没变 → cookie 仍有效、WebView 缓存仍能命中，页面自己的
@@ -1628,7 +1647,6 @@ class MainActivity : Activity() {
                 } else {
                     // origin 变了：服务端 cookie 名含 authority，必然失效 → 必须重走 token 交换并重载
                     DiagLog.i(TAG, "rebuildTunnel: origin 变了（$prevBase → $base）→ 重新加载")
-                    autoFetchToken(t)
                     sshTokenAck = false
                     connectWeb(base)
                     refreshConnectState()
