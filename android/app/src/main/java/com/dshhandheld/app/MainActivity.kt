@@ -284,15 +284,23 @@ class MainActivity : Activity() {
         disconnectLink?.visibility = if (tunneled) View.VISIBLE else View.GONE
     }
 
-    /** 状态块下面那行小字：隧道活着就报实际在用的本地基址，否则报「上次连的是谁」。 */
+    /**
+     * 状态块下面那行小字：报**电脑**，不报隧道在手机这一头的地址。
+     *
+     * 原来连着的时候这里显示 `http://127.0.0.1:3080`。那是从实现出发的（它确实是当前在用的
+     * 东西），但从用户出发是错的：**127.0.0.1 是手机自己**，看一眼只会让人以为「连到了本机」；
+     * 而且它是术语 —— README 里写着连接屏刻意不出现 SSH / 端口 / 令牌。用户想确认的是
+     * 「我连的是哪台电脑」，那就该看到那台电脑。
+     *
+     * 隧道的本地基址没有丢：诊断页（连接屏右上「诊断」）里一直有它，那才是排障该去的地方。
+     */
     private fun heroSubtitle(tunneled: Boolean): String {
-        if (tunneled) {
-            val base = (application as DshApp).sshTunnel?.localBaseUrl
-            if (!base.isNullOrBlank()) return base
-        }
-        val saved = SshConfig.load(prefs) ?: return "还没配置过"
-        if (!saved.isComplete) return "还没配置过"
-        return "${saved.user}@${saved.host}:${saved.port}  →  ${saved.remoteHost}:${saved.remotePort}"
+        val saved = SshConfig.load(prefs)
+        if (saved == null || !saved.isComplete) return "还没配置过"
+        // SSH 端口是 22 就不写出来：默认值写出来只是噪音（dsh 端口同理，见设置卡摘要）
+        val port = if (saved.port == SshConfig.DEFAULT_SSH_PORT) "" else ":${saved.port}"
+        return if (tunneled) "${saved.user}@${saved.host}$port"
+        else "上次连的是 ${saved.user}@${saved.host}$port"
     }
 
     private companion object {
