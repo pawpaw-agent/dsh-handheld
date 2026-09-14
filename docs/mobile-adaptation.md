@@ -40,7 +40,19 @@ App 启动 → WebView 加载 dsh 页面
 | `data-sidebar-right-panel` | 右侧边栏面板（取值 `fullscreen` / `push`）：手机上它只要打开就必然是 fullscreen |
 | `data-sidebar-right-mode` | 右侧边栏那个「全屏 / 退出全屏」按钮：手机上它与「收起」是同一个动作，隐藏（见下） |
 
-除这些属性，还依赖三个结构（类名是哈希前缀，用 `[class*=…]` 匹配）：
+除这些属性，还依赖一组结构（类名是 CSS Modules 的哈希前缀，只能用 `[class*=…]` 匹配）。
+**它们同样进了契约，而且是两份清单**（2026-09-14 补，见 `known-issues.md` §六 B1）：
+
+| 清单 | 含义 | 找不到时 |
+|---|---|---|
+| `classHooks`（16 个） | dsh **核心客户端包**里的界面（`_frame` / `_sidebarCol` / `_turnStatus` / `_navList` …） | 完整检查**判失败** —— 那条适配规则已经空转 |
+| `classHooksPlugin`（1 个） | **可选插件包**提供的界面（`_moreButton` 来自 `dsh-session-log-export`） | 只提示，不判失败：没装那个插件时规则本来就是空转 |
+
+局限（写下来免得当成没做）：短子串（`_split` / `_count` / `_menu`）在 dsh 里命中多个模块，
+所以这个金丝雀只能发现「后缀整体消失」，发现不了「我们想指的那个元素换了模块」。
+更强的一条得按真实 DOM 结构断言，需要浏览器 + 一个跑着的 dsh 实例。
+
+结构如下：
 
 ```
 div[class*="_frame"]                     外壳网格：侧栏 | 中栏 | 右栏（还有 _overlayLayer）

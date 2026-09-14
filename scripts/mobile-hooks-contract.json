@@ -13,5 +13,26 @@
     "data-sidebar-right-mode",
     "data-sidebar-right-panel"
   ],
-  "otherHostHooks": []
+  "otherHostHooks": [],
+  "classHooks": [
+    "_content",
+    "_count",
+    "_crumbs",
+    "_frame",
+    "_headerActions",
+    "_menu",
+    "_navCell",
+    "_navList",
+    "_options",
+    "_overlayLayer",
+    "_root",
+    "_sidebarCol",
+    "_split",
+    "_titleRow",
+    "_trigger",
+    "_turnStatus"
+  ],
+  "classHooksPlugin": [
+    "_moreButton"
+  ]
 }

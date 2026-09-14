@@ -101,6 +101,23 @@ function readHostHooks(text) {
   return found;
 }
 
+/**
+ * 从插件 bundle 里读出它依赖的**哈希类名后缀**（`[class*="_xxx"]`）。
+ *
+ * 为什么也要守：dsh 的 CSS Modules 把类名写成 `<hash>_<localName>`，我们只能按后缀匹配。
+ * 上游把某个 `localName` 改个名（或把那段 UI 挪进另一个模块），匹配就**静默失效** ——
+ * 抽屉不生效、某条隐藏规则不再命中、通知不再触发，而 CI 全绿。
+ *
+ * 局限（写在文档里，别当成没做）：短子串（`_split` / `_count` / `_menu`）在 dsh 里
+ * 命中多个模块，所以本检查只能发现「这个后缀整体消失了」，发现不了「我们想指的那个
+ * 元素换了模块」。要更强就得按真实 DOM 结构断言，那需要浏览器 + dsh 实例。
+ */
+function readClassHooks(text) {
+  const found = new Set();
+  for (const m of text.matchAll(/\[class\*=["']?(_[A-Za-z0-9_-]+)/g)) found.add(m[1]);
+  return found;
+}
+
 const die = (msg) => { console.error(`\n✗ ${msg}\n`); process.exit(1); };
 
 // ── 定位 dsh 前端产物 ───────────────────────────────────────────────────────
@@ -144,30 +161,44 @@ if (process.argv.includes('--contract')) {
   const actual = [...read]
     .filter((h) => !otherPrefixes.some((p) => h.startsWith(p)))
     .filter((h) => !PLUGIN_OWN.includes(h)).sort();
+  const classActual = [...readClassHooks(b)].sort();
   const contract = JSON.parse(readFileSync(CONTRACT, 'utf8'));
   const declared = [...contract.dshHooks].sort();
   const extra = actual.filter((h) => !declared.includes(h));
   const gone = declared.filter((h) => !actual.includes(h));
+  const classDeclared = [
+    ...(contract.classHooks ?? []), ...(contract.classHooksPlugin ?? []),
+  ].sort();
+  const classExtra = classActual.filter((h) => !classDeclared.includes(h));
+  const classGone = classDeclared.filter((h) => !classActual.includes(h));
   console.log('移动端适配 · 契约校验（静态，无需 dsh）');
   console.log(`  契约文件   ${path.relative(REPO, CONTRACT)}`);
-  console.log(`  声明依赖   ${declared.length} 个 dsh 钩子`);
-  console.log(`  插件实读   ${actual.length} 个`);
+  console.log(`  声明依赖   ${declared.length} 个 dsh 钩子 + ${classDeclared.length} 个类名后缀`);
+  console.log(`  插件实读   ${actual.length} 个钩子 + ${classActual.length} 个类名后缀`);
   console.log('');
   for (const h of declared) {
     console.log(`  ${actual.includes(h) ? '✓' : '✗'} ${h}`);
   }
-  if (extra.length) {
+  for (const h of [...(contract.classHooks ?? [])].sort()) {
+    console.log(`  ${classActual.includes(h) ? '✓' : '✗'} [class*="${h}"]`);
+  }
+  for (const h of [...(contract.classHooksPlugin ?? [])].sort()) {
+    console.log(`  ${classActual.includes(h) ? '✓' : '✗'} [class*="${h}"]  (可选插件提供)`);
+  }
+  if (extra.length || classExtra.length) {
     console.log('');
     console.log('插件读了契约里没有的钩子（重新 vendoring 后需显式更新契约）：');
     for (const h of extra) console.log(`  + ${h}`);
+    for (const h of classExtra) console.log(`  + [class*="${h}"]`);
   }
-  if (gone.length) {
+  if (gone.length || classGone.length) {
     console.log('');
     console.log('契约声明了但插件已不再读取（可从契约移除）：');
     for (const h of gone) console.log(`  - ${h}`);
+    for (const h of classGone) console.log(`  - [class*="${h}"]`);
   }
   console.log('');
-  if (extra.length === 0 && gone.length === 0) {
+  if (!extra.length && !gone.length && !classExtra.length && !classGone.length) {
     console.log('契约与插件一致 ✓');
     process.exit(0);
   }
@@ -186,7 +217,7 @@ if (!modules) {
 }
 
 // 收集 dsh 前端的全部产物文本
-function collectFrontendText(root) {
+function collectFrontendText(root, scope = 'core') {
   const chunks = [];
   const walk = (dir, depth = 0) => {
     if (depth > 4) return;
@@ -204,9 +235,13 @@ function collectFrontendText(root) {
       }
     }
   };
-  // 只看 dsh 自己的前端包，别把整棵 node_modules 拖进来
+  // core：dsh 自己的前端壳（适配层真正改造的那一层）
+  // all ：再加上**可选插件包**提供的界面 —— 它们同样渲染在这个壳里，
+  //       我们的隐藏规则也会命中它们（例：dsh-session-log-export 的 _moreButton）。
   for (const e of readdirSync(root)) {
-    if (!/^dsh-(web-frontend|client-ui|web-app|client-modules)/.test(e)) continue;
+    if (scope === 'core') {
+      if (!/^dsh-(web-frontend|client-ui|web-app|client-modules)/.test(e)) continue;
+    } else if (!/^dsh-/.test(e)) continue;
     walk(path.join(root, e));
   }
   return chunks.join('\n');
@@ -225,10 +260,15 @@ const frontend = collectFrontendText(modules);
 if (frontend.length < 1000) {
   die(`在 ${modules} 下没读到 dsh 前端产物（${frontend.length} 字节）—— 路径可能不对`);
 }
+const frontendAll = collectFrontendText(modules, 'all');
+const contractFull = JSON.parse(readFileSync(CONTRACT, 'utf8'));
+const requiredClasses = [...(contractFull.classHooks ?? [])].sort();
+const pluginClasses = [...(contractFull.classHooksPlugin ?? [])].sort();
+const classHooks = [...readClassHooks(bundle)].sort();
 
 console.log('移动端适配 · 宿主契约检查');
 console.log(`  dsh 模块     ${modules}`);
-console.log(`  前端产物     ${(frontend.length / 1024).toFixed(0)} KB`);
+console.log(`  前端产物     核心 ${(frontend.length / 1024).toFixed(0)} KB / 含插件 ${(frontendAll.length / 1024).toFixed(0)} KB`);
 console.log(`  插件 bundle  ${(bundle.length / 1024).toFixed(0)} KB`);
 console.log('');
 console.log(`── 插件依赖 dsh 的钩子（${dshHooks.length} 个）──`);
@@ -239,6 +279,28 @@ for (const h of dshHooks) {
   const ok = n > 0;
   if (!ok) missing.push(h);
   console.log(`  ${ok ? '✓' : '✗'} ${h.padEnd(34)} ${ok ? `${n} 处` : '**在 dsh 前端里找不到**'}`);
+}
+
+console.log('');
+console.log(`── 插件依赖的类名后缀（${classHooks.length} 个）──`);
+const classMissing = [];
+const classPluginOnly = [];
+for (const h of classHooks) {
+  const inCore = frontend.split(h).length - 1;
+  const inAll = frontendAll.split(h).length - 1;
+  const declaredPlugin = pluginClasses.includes(h);
+  if (inCore > 0) {
+    const tag = declaredPlugin ? '（契约里标为插件提供，但核心包里也有）' : '';
+    console.log(`  ✓ ${h.padEnd(20)} 核心 ${inCore} 处${tag}`);
+  } else if (inAll > 0) {
+    classPluginOnly.push(h);
+    // 只出现在插件包里的后缀**不判失败**：规则仍然命中（那个插件装了就有 UI），
+    // 没装时它只是空转。判失败的是「全量安装里也找不到」——那才是真的静默失效。
+    console.log(`  ✓ ${h.padEnd(20)} 仅插件包 ${inAll} 处${declaredPlugin ? '' : ' ← 建议挪到契约的 classHooksPlugin'}`);
+  } else {
+    classMissing.push(h);
+    console.log(`  ✗ ${h.padEnd(20)} **全量安装里也找不到** —— 这条适配规则已经空转`);
+  }
 }
 
 if (otherHooks.length) {
@@ -270,26 +332,39 @@ console.log(`  ${usedAll ? '✓' : '✗'} 引导模板用到全部三个占位�
 
 // ── 结论 ───────────────────────────────────────────────────────────────────
 console.log('');
-const failures = missing.length + (idOk ? 0 : 1) + leftover.length + (usedAll ? 0 : 1);
+const failures = missing.length + classMissing.length + (idOk ? 0 : 1) + leftover.length + (usedAll ? 0 : 1);
 if (failures === 0) {
   if (process.argv.includes('--update-contract')) {
     let dshVersion = 'unknown';
     try {
       dshVersion = execSync('dsh --version', { encoding: 'utf8' }).trim();
     } catch { /* 取不到就记 unknown */ }
+    const prev = JSON.parse(readFileSync(CONTRACT, 'utf8'));
     writeFileSync(CONTRACT, JSON.stringify({
-      note: '移动端适配所依赖的 dsh DOM 钩子。由 scripts/check-mobile-hooks.mjs 维护；'
-        + 'CI 用 --contract 模式校验插件与它一致，完整检查需在本机装有 dsh 时运行。',
+      note: prev.note,
       verifiedAgainst: { dsh: dshVersion, date: new Date().toISOString().slice(0, 10) },
       dshHooks,
       otherHostHooks: otherHooks,
+      // 必需：必须在**核心客户端包**里找到（找不到 = 适配静默失效）
+      classHooks: classHooks.filter((h) => !classPluginOnly.includes(h)),
+      // 可选：来自插件包提供的界面（如 dsh-session-log-export 的 _moreButton）——
+      // 没装那个插件时规则空转，不算失效
+      classHooksPlugin: classPluginOnly,
     }, null, 2) + '\n');
     console.log(`契约已更新 → ${path.relative(REPO, CONTRACT)}（对照 ${dshVersion}）`);
   }
-  console.log(`适配契约完好：${dshHooks.length} 个 dsh 钩子全部存在 ✓`);
+  console.log(`适配契约完好：${dshHooks.length} 个 dsh 钩子 + ${classHooks.length} 个类名后缀全部存在 ✓`);
   process.exit(0);
 }
 console.log(`${failures} 项不通过 ✗`);
+if (classMissing.length) {
+  console.log('');
+  console.log('这些类名后缀找不到了 —— 对应的适配规则已经空转（静默失效）：');
+  for (const h of classMissing) console.log(`  - [class*="${h}"]`);
+  console.log('');
+  console.log('处理方式：到 dsh 前端里核对那个 localName 是否被改名/搬家，然后改我们的选择器，');
+  console.log('并在 scripts/mobile-hooks-contract.json 里同步（--update-contract）。');
+}
 if (missing.length) {
   console.log('');
   console.log('dsh 前端里找不到这些钩子 —— 移动端适配很可能已失效：');

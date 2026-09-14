@@ -513,6 +513,7 @@ onClick: () => { if (fullscreen && autoFullscreen) actions.setExpanded(sessionId
 | A1 | `rebuildTunnel` 在 `onUi { }` 里调 `autoFetchToken(t)` → 主线程跑最多 4 条 SSH 命令（`execOnce` 每条默认 8s）= **最长 32s 冻结 / ANR** | `MainActivity.kt:1631`（原）；同函数另三个调用点都在后台线程 | 令牌在 worker 线程取好再回主线程重载。负对照：脚本扫「`onUi` 体内出现阻塞调用」修复前命中 1 处、修复后 0 处 |
 | A2 | `ensureTunnel` 把**整段拨号**放在 `synchronized(tunnelLock)` 里，而主线程的「断开连接」→ `closeTunnel()` 要拿同一把锁 → 拨号期间点断开，主线程卡几十秒（ANR） | `DshApp.kt` 原 `222-258` vs `262-269`；拨号最坏 3×15s + 探针 4.5s | 拆两把锁：`tunnelLock` 只做字段级短临界区（主线程可安全拿）、`dialLock` 串行化拨号且长阻塞只在后台；新增 `dialGeneration`（拨号期间断开 → 丢弃这次结果，「断开」必须赢）与 `pendingClose`（回收丢后台，下次拨号前 join，端口稳定仍成立） |
 | A3(半) | 探针要跑 1.5–4.5s，迟到的那条回调会把用户刚「断开连接」的隧道又建回来（断开被逆转、`prefs["url"]` 被写回） | `MainActivity.kt:1578-1597` + `beginConnect`(`1795`) 与 `disconnectCurrent`(`1848`) 无互斥、无代数 | 回调先比对「我探的那条隧道还是当前这条吗」，不是就丢弃。A2 的 `dialGeneration` 挡住另一半（拨号结果不发布） |
+| B1 | 适配层 17 个 `[class*="_…"]` 判据**没有任何金丝雀**，上游改个 localName 就静默失效 | 同左 | `check-mobile-hooks.mjs` 现在也提取类名后缀，并按来源分两份清单：`classHooks`（核心包，找不到即失败）与 `classHooksPlugin`（可选插件提供，如 `dsh-session-log-export` 的 `_moreButton`，只提示）。负对照：把 `_turnStatus` 改名 → 完整检查报「这条适配规则已经空转」、契约模式报「不一致」 ✓ |
 
 ### 待修（按建议顺序）
 
@@ -520,7 +521,6 @@ onClick: () => { if (fullscreen && autoFullscreen) actions.setExpanded(sessionId
 |---|---|---|---|
 | A4 | `persistSshConfig(...)` 写在 `onUi { }` 里（Activity 销毁就永不执行），落盘还是空 catch | `MainActivity.kt:1204-1208`、`1273-1279` | 拨号期间 Activity 被销毁 → 隧道已发布但 `ssh_json` 没落盘 → 下次冷启动走「无 ssh 配置」分支，可能停在指向死端口的旧页面上；`revalidateTunnel` 只查隧道健康、**从不比对 origin**，没有恢复路径 |
 | A5 | 前台服务与隧道状态两个方向都不同步：失败路径不 `stop`（假「已连接到 X」常驻）；复用分支不补 `start`（首次在后台拨号被 Android 12+ 拒后**永远不再保活**） | `DshApp.kt:226-229 / 245-249 / 267`、`TunnelService.kt:112-116` | 通知说谎 + 进程优先级与设计意图相反 |
-| B1 | 适配层 15 个 `[class*="_…"]` 判据**没有任何金丝雀**；契约只守 2 个 `data-*`。其中 8 个是短子串（`_split`/`_count`/`_content`/`_menu`/`_close`/`_trigger`/`_options`/`_frame`），在 dsh 里各命中 4–11 个模块 | `scripts/mobile-hooks-contract.json`、`check-mobile-hooks.mjs:100` | 上游一次重命名或新增同类名元素 = 静默错杀/失效，CI 全绿 |
 | B2 | `MutationObserver`（`subtree: true`）永不停；标记打上后仍每帧一次全 DOM 查询 | `dsh-handheld-mobile.js` 标记兜底 effect | 流式输出时白烧 CPU |
 | B3 | `addDocumentStartJavaScript` 每次 Activity 重建都加一份（WebView 保活 → N 份累积） | `MainActivity.kt:324-337`（返回值丢弃） | N 份脚本白跑；功能上仍只补一条 entry（`defineProperty` 覆盖式重定义），但依赖「最后一次定义生效」这一微妙性质 |
 | B4 | 验证工具的「绿」比说的弱：`css-lab.mjs` 只打印不判定（文档却写成「断言」）；`ui-verify` / `device-ui-verify` 不在 CI 跑（标记已过期过一次）；CI 的 `--contract` 只保证「插件与契约一致」，**不保证钩子仍在 dsh 里**；完整检查用子串计数（`data-phase` 会被 `data-phase-count` 满足），且扫到注释也算 | `scripts/*` | 适配层最怕的那类失效恰好不在覆盖范围内 |
