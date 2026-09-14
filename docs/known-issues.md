@@ -455,6 +455,44 @@ FATAL EXCEPTION：0。
 回环（`scripts/css-lab.mjs`）现在也量这一项：`elementFromPoint` 的命中栈 +
 `pointer-events` 计算值，见 `docs/mobile-ui-verification.md`。
 
+### 右侧边栏在手机上多一个「收起」（2026-09-14，插件 rev 1.0.14）
+
+用户报告：「右侧边栏有两个收起按钮」。**两个按钮都是宿主的**，不是我们加的
+（`dsh-client-ui-sidebar-right` 的 `PanelChrome`）：
+
+```
+button[data-sidebar-right-mode]     全屏 / 退出全屏
+button[data-sidebar-right-toggle]   收起右侧边栏
+```
+
+为什么在手机上等于重复 —— 宿主自己的代码就是判据：
+
+```js
+const autoFullscreen = viewportWidth < 768;
+const fullscreen = autoFullscreen || surface?.layout.mode === "fullscreen";
+// 模式按钮：
+onClick: () => { if (fullscreen && autoFullscreen) actions.setExpanded(sessionId, false); actions.setMode(sessionId, next); }
+```
+
+本机视口 384px ⇒ 面板只要打开就必然 `fullscreen` ⇒ 那一笔走的就是
+`setExpanded(false)` —— **和「收起」同一个动作**。真机复现：在面板里点「退出全屏」，
+面板直接关掉，与点「收起」没有可见区别。多出来的只有副作用：它顺手把持久化的
+`mode` 写成 `push`，用户回到电脑上打开同一个 dsh 时，面板的初始形态被改掉了。
+
+修法：只在 `fullscreen` 状态下隐藏那个模式按钮（纯 CSS，判据用宿主写的
+`data-sidebar-right-panel="fullscreen"` + `button[data-sidebar-right-mode]`，
+不依赖 aria-label 的语种）。两个钩子已进契约，本机完整检查（4 个钩子）全在。
+
+复验（`uiautomator`，面板打开时）：
+
+| | 修前 | 修后 |
+|---|---|---|
+| 面板右上 | `(1173,33)-(1286,146) 退出全屏` + `(1308,33) 收起右侧边栏` | 只剩 `(1308,33) 收起右侧边栏` |
+
+顺带确认了**分栏**不是同类问题：面板里点「分栏」会真的分成两格（384px 下每格 ≈192px），
+分完那一格的分栏按钮自己消失（「已达两格上限」），「收起」仍在原位。也就是说这一屏
+任何时候都只有一个出口，没有被新 UI 堵住。
+
 ### 仍未覆盖
 
 - **终端模式**本轮未复测（切用途要重走一次连接、会动到正在用的隧道）；上一次逐项记录见
