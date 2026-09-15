@@ -66,16 +66,28 @@ dsh --profile web
 # 默认监听 http://127.0.0.1:3080
 ```
 
-### 2. 安装 App
+### 2. 拿 APK
 
-从 [Releases](../../releases) 下载 APK，或自行构建：
+**构建只走 CI（GitHub Actions）—— 本仓库不在本地构建。**
+
+这不是偏好问题，是因为本地构建**做不出能用的包**：`dbclient` / `dropbearkey` /
+`dropbearconvert` 三个原生组件由 CI 用 NDK 交叉编译后才放进
+`android/app/src/main/jniLibs/`，而 `jniLibs/` 不入库。少了它们，隧道、终端、
+私钥导入会**全部不可用**，而 `./gradlew assembleDebug` 自己**不会报错** ——
+产出的包能装、能开、连不上（`TuiActivity` 会显示「dbclient 缺失」）。
+
+从 CI 取包（也可以在 Actions 页面直接下 artifact）：
 
 ```sh
-cd android && ./gradlew assembleDebug
-adb install android/app/build/outputs/apk/debug/app-debug.apk
+gh run list  --workflow=ci.yml --limit 1              # 找最近一次成功的 run
+gh run download <run-id> -n dsh-handheld-release      # 正式包（需仓库 secrets 里的签名材料）
+gh run download <run-id> -n dsh-handheld-debug        # 仅供真机 UI 取证，debuggable，不可分发
+adb install app-release.apk
 ```
 
-> CI（GitHub Actions）也会构建 debug APK 作为 artifact。
+带 tag 的历史版本另有 [Releases](../../releases) 页面（更新到 v0.1.8，之后的版本只在
+CI artifact 里）。CI 另有两条硬校验：产物不得 `debuggable`，且三个原生组件必须都在
+APK 里 —— 后者正是为了防止「某个组件没打进去、功能静默失效」。
 
 ### 3. 连接
 

@@ -1,3 +1,10 @@
+# 唯一的构建入口 —— **本项目不在本地构建**。
+#
+# 原因不是规矩，是本地构建做不出能用的包：dbclient / dropbearkey / dropbearconvert
+# 三个原生组件由本流程用 NDK 交叉编译后才放进 android/app/src/main/jniLibs/，
+# 而 jniLibs/ 不入库。本地 ./gradlew assembleDebug 产出的 APK 会缺这些二进制，
+# 隧道 / 终端 / 私钥导入全部不可用 —— 而构建本身**不会报错**。
+# 验证与取包都走这里（见 README「拿 APK」）。
 name: dsh-handheld CI
 
 on:
