@@ -129,6 +129,14 @@ jobs:
 
       - name: Set up Android SDK (NDK)
         uses: android-actions/setup-android@v4
+        with:
+          # 默认 packages 是 "tools platform-tools"，而 SDK 仓库**已经不再提供 `tools`
+          # 这个包**：sdkmanager 报 `Warning: Failed to find package 'tools'` 并以 1 退出，
+          # 于是 setup-android 这一步必失败。2026-09-15 复现；main 上（无任何代码改动）
+          # 同样失败，而同一份 action SHA 与同一版镜像在 09-14 还是成功的 ——
+          # 变的是 SDK 仓库，不是代码。
+          # 本项目不需要 `tools`：NDK 由镜像预装，platform / build-tools 在下面自己装。
+          packages: platform-tools
 
       # 缓存按「构建脚本 + localoptions.h」的哈希取键：dropbear 版本号写在脚本里，
       # 脚本一改键就变，所以不会用旧产物冒充新版本。命中时省掉 clone + 交叉编译。
@@ -181,6 +189,10 @@ jobs:
 
       - name: Set up Android SDK
         uses: android-actions/setup-android@v4
+        with:
+          # 理由同 build-dropbear job：默认要装的 `tools` 包在 SDK 仓库里已经不存在，
+          # 让它去装只会得到 Failed to find package 'tools' 然后失败。
+          packages: platform-tools
 
       # AGP 9.4 要求 SDK Build Tools ≥ 36.0.0（36.0.0 也是它的默认值），compileSdk 36
       # 需要 `platforms;android-36`。两者都不保证已预装在 runner 镜像里。AGP 虽能按需
