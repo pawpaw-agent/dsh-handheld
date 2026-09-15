@@ -49,7 +49,7 @@ SSH 本地端口转发让服务端**仍然认为请求来自本机**，因此是
 ## 功能
 
 - **看 dsh 网页** — 全屏 WebView 加载 dsh 官方 Web 前端，功能与桌面端一致（Markdown、代码高亮、会话树、设置页、模型管理……）。内置 `crypto.randomUUID` 文档启动注入（防局域网明文 HTTP 下白屏）、跨 Activity 重建的 WebView 保活。
-- **内置 SSH 隧道** — 打包 dropbear `dbclient`（arm64）做进程式本地端口转发，固定使用 `3080`（占用时回退 `13080`）。支持**密码**与**私钥**（含口令，可用系统文件选择器导入）两种认证；断线自动重连，App 重启后自动重建隧道。
+- **内置 SSH 隧道** — 打包 dropbear `dbclient`（arm64）做进程式本地端口转发，固定使用 `3080`（占用时回退 `13080`）。支持**密码**与**私钥**两种认证，私钥可用系统文件选择器导入。**导入的 OpenSSH 私钥会自动转成 dbclient 能读的 dropbear 格式**（转换器 `dropbearconvert` 随 APK 一起打包）；**带口令的私钥不支持** —— dropbear 结构上解不开（见下文「私钥为什么必须先转换」）。断线自动重连，App 重启后自动重建隧道。
 - **打开终端** — 经 SSH PTY 打开远程 shell，用 Termux 的 [terminal-view](https://github.com/termux/termux-app) 原生渲染（真 IME / 软键盘交互，非 WebView），底部常驻键排（ESC / TAB / CTRL / 方向键 / Enter）。进入后就是普通远程 shell，**自由输入 `dsh-tui` 等命令**，不做任何自动启动。
 - **token 全自动** — dsh 0.1.2+ 启用了浏览器 token 认证。SSH 模式下 App 会在服务端自动提取最新 token 并保存，服务重启后无需手动更新；失败时回退到连接屏手动填写。
 - **任务完成提醒** — dsh 生成结束时，App 自己发一条通知（点开回到 App）。**默认关闭**，在连接屏「任务完成时提醒我」打开（会申请通知权限）；App 在前台时不打扰。此前这件事靠服务端推送，现在由页面里的适配插件报告「这一轮结束了」，不再依赖服务端配置。
@@ -66,16 +66,28 @@ dsh --profile web
 # 默认监听 http://127.0.0.1:3080
 ```
 
-### 2. 安装 App
+### 2. 拿 APK
 
-从 [Releases](../../releases) 下载 APK，或自行构建：
+**构建只走 CI（GitHub Actions）—— 本仓库不在本地构建。**
+
+这不是偏好问题，是因为本地构建**做不出能用的包**：`dbclient` / `dropbearkey` /
+`dropbearconvert` 三个原生组件由 CI 用 NDK 交叉编译后才放进
+`android/app/src/main/jniLibs/`，而 `jniLibs/` 不入库。少了它们，隧道、终端、
+私钥导入会**全部不可用**，而 `./gradlew assembleDebug` 自己**不会报错** ——
+产出的包能装、能开、连不上（`TuiActivity` 会显示「dbclient 缺失」）。
+
+从 CI 取包（也可以在 Actions 页面直接下 artifact）：
 
 ```sh
-cd android && ./gradlew assembleDebug
-adb install android/app/build/outputs/apk/debug/app-debug.apk
+gh run list  --workflow=ci.yml --limit 1              # 找最近一次成功的 run
+gh run download <run-id> -n dsh-handheld-release      # 正式包（需仓库 secrets 里的签名材料）
+gh run download <run-id> -n dsh-handheld-debug        # 仅供真机 UI 取证，debuggable，不可分发
+adb install app-release.apk
 ```
 
-> CI（GitHub Actions）也会构建 debug APK 作为 artifact。
+带 tag 的历史版本另有 [Releases](../../releases) 页面（更新到 v0.1.8，之后的版本只在
+CI artifact 里）。CI 另有两条硬校验：产物不得 `debuggable`，且三个原生组件必须都在
+APK 里 —— 后者正是为了防止「某个组件没打进去、功能静默失效」。
 
 ### 3. 连接
 
@@ -115,12 +127,13 @@ dsh-handheld/
 │   │   │   │   ├── TuiActivity.kt            # SSH 终端模式（PTY + Termux 渲染）
 │   │   │   │   ├── DshTerminalExtraKeys.kt   # 终端底部常驻键排
 │   │   │   │   ├── SecurePrefs.kt            # 凭据静态加密（AndroidKeyStore AES-GCM）
+│   │   │   │   ├── SshKeyImport.kt           # 导入的 OpenSSH 私钥 → dropbear 格式（dropbearconvert）
 │   │   │   │   └── DshApp.kt                 # Application：持有保活 WebView 与唯一隧道
 │   │   │   └── protocol/
 │   │   │       └── SshTunnel.kt              # dbclient 进程 + 端口选择 + 看门狗
 │   │   ├── java/com/termux/shared/terminal/io/   # vendored Termux 额外键栏（7 文件，见下）
 │   │   ├── assets/plugins/                   # 注入的移动端适配插件（MIT，见下）
-│   │   ├── jniLibs/arm64-v8a/                # dbclient（CI 阶段构建后放入）
+│   │   ├── jniLibs/arm64-v8a/                # dbclient / dropbearkey / dropbearconvert（CI 构建后放入）
 │   │   └── AndroidManifest.xml
 │   ├── terminal-conformance/                 # 纯 JVM 终端行为回归测试台（不进 APK）
 │   └── gradlew + gradle/ + *.gradle.kts      # 构建入口与 Gradle wrapper
@@ -145,19 +158,64 @@ dsh-handheld/
 
 ---
 
+## 私钥为什么必须先转换
+
+dbclient 的 `-i` **只认 dropbear 自有格式**，这是上游的设计而不是本项目的取舍：
+客户端的身份文件加载路径是 `cli-runopts.c:loadidentityfile()` →
+`common-runopts.c:readhostkey()` → `signkey.c:buf_get_priv_key()`，那个解析器把文件
+当成「4 字节大端长度 + 算法名」的裸结构读，既没有口令参数也不做任何解密。拿
+`ssh-keygen` 生成的密钥直接喂给它，dbclient 会在**连接之前**就退出：
+
+```
+-----BEGIN OPENSSH PRIVATE KEY-----   ← 被当成 4 字节长度读，值是天文数字
+./dbclient: Exited: String too long
+```
+
+上游 README 对这件事的说明是：*"you will have to convert OpenSSH style keys to
+Dropbear format, or use dropbearkey to create them."*
+
+所以本项目把转换器一并打包（`scripts/build-dropbear.sh` 的 `BUILD_ONLY` 里
+`dropbearconvert`，CI 放进 `jniLibs/`），并且**在导入时就转**：
+
+| 你给什么 | App 做什么 |
+|---|---|
+| OpenSSH 私钥（`-----BEGIN` 开头，不含口令） | 导入时自动转成 dropbear 格式，存转换后的路径 |
+| 已是 dropbear 格式的私钥 | 原样使用 |
+| **带口令的私钥** | **不支持**，导入时就会说明；`dropbearconvert` 同样解不开它（`keyimport.c` 里 `openssh_read()` 的 passphrase 参数是 `UNUSED`），实测报 `Error decoding OpenSSH key` |
+| 不是私钥的文件 | 导入时直接说清楚，不再拖到连接阶段变成一句「检查私钥」 |
+
+带口令的私钥想用，只能先在电脑上去掉口令再导入：
+
+```sh
+ssh-keygen -p -f ~/.ssh/id_ed25519 -N ""     # 去掉口令
+```
+
+> 历史：0.1.11 及更早的连接屏有一个「私钥口令（可选）」输入框，但它从来没有被
+> 传给 dbclient（口令在 dropbear 侧无处可去），而导入的 OpenSSH 密钥又一律加载失败
+> ——两者叠加的结果是：用私钥的用户无论怎么填都连不上，看到的却是一句
+> 「检查地址/账号/私钥」。字段已移除，限制改为写在明处。
+
+---
+
 ## 凭据存储
 
-SSH 密码与私钥口令**不以明文落盘**：
+SSH 密码与 dsh token **不以明文落盘**：
 
 ```
 SharedPreferences "dsh-handheld"
-  ssh_json      → enc.v1.<base64(iv ‖ AES-256-GCM 密文)>
+  ssh_json      → enc.v1.<base64(iv ‖ AES-256-GCM 密文)>    # host/user/password/keyPath…
   server_token  → 同上
-  url / ssh_enabled → 明文（非敏感）
+  url           → 明文（非敏感；不含 token）
 ```
 
 密钥由 **AndroidKeyStore** 持有且不可导出，因此即便应用私有目录被完整复制到另一台设备
 也无法解密。实现见 `SecurePrefs.kt`。
+
+**私钥文件本身不做应用层加密**：它由 App 拷进应用私有目录
+（`filesDir/ssh_private_key`；OpenSSH 格式的会就地转成
+`filesDir/id_dropbear_converted`），保护来自 `filesDir` 的应用私有权限与
+`android:allowBackup="false"`。加密它没有意义 —— dbclient 需要明文文件才能读，
+加密等于把明文落到一个临时文件里再交给子进程。
 
 **不使用** `androidx.security:security-crypto`——该库的全部 API 已被官方废弃
 （1.1.0-beta01 起："Deprecated all APIs in favour of existing platform APIs and direct use
@@ -360,6 +418,7 @@ node scripts/check-mobile-hooks.mjs
 - **安全** — SSH 密码与 dsh token 经 AndroidKeyStore 加密后落盘（见「凭据存储」）；发布包不可调试。dsh 0.1.2+ 默认启用浏览器 token 认证，SSH 隧道再叠加一层 SSH 认证。公开 WiFi 下建议用 Tailscale 而不是直接暴露端口。
 - **仅 arm64** — `dbclient` 目前只为 `arm64-v8a` 构建，不适用于 32 位或 x86 设备。
 - **签名变更需重装** — 0.1.3 起改用独立发布签名（此前为 debug 签名）。签名不同，Android **不允许覆盖安装**：需先卸载旧版，已保存的连接配置会一并清除。
+- **换了主机密钥之后** — 服务器重装、或同一个 IP 被分给了另一台机器时，dbclient 会直接拒绝连接（本项目的 TOFU 只放行**未知**主机，指纹不匹配的仍然拒绝）。连接屏「连接设置」卡片底部有 **「重置已信任的电脑身份」** —— 这是手机上唯一的出口，此前只能清应用数据。
 - **真机验证状态** — 见 `docs/known-issues.md`。
 
 ---

@@ -671,3 +671,72 @@ Notifier.turnDone → 渠道 dsh-turn（IMPORTANCE_DEFAULT），点开回到 App
 4. 反向：留在 App 前台做同样的事 —— **不应该**有通知（`turn-done` 会记进
    `DiagLog`：「App 在前台，不发通知」）
 5. 取证不必看屏幕：`adb shell dumpsys notification --noredact | grep -A3 dsh-turn`
+
+---
+
+## 八、私钥从「两个都假」到真的能用（0.1.12）
+
+### 现象与根因（两层，都不是「忘了接线」）
+
+用户用私钥登录，**无论怎么填都连不上**，屏幕上永远是
+「① 检查电脑 ✗ 连不上你的电脑（检查地址/账号/私钥）」。往下挖有两层：
+
+**第一层：口令收集了却无处可去。** 连接屏有「私钥口令（可选）」输入框，值一路
+加密落盘到 `SshConfig.keyPass`，然后 `SshTunnel.buildArgs()` 只把它写成一条
+`DiagLog.w`，从不传给 dbclient。
+
+**第二层（更根本）：dbclient 根本读不了 OpenSSH 密钥，有没有口令都一样。**
+这是上游设计，不是缺了一行代码：
+
+- 客户端身份文件加载路径是 `cli-runopts.c:loadidentityfile()` →
+  `common-runopts.c:readhostkey()` → `signkey.c:buf_get_priv_key()`。该解析器把文件
+  当成「4 字节大端长度 + 算法名」的裸结构读，**没有口令参数、也不解密**。
+- 全树唯一接受口令的函数是 `keyimport.c:import_read(filename, passphrase, …)`，
+  而它唯一的调用者是 `dropbearconvert.c:122`，传 `NULL`；`openssh_read()` 的
+  passphrase 参数更是被标注为 `UNUSED`。
+- 口令提示函数 `getpass_or_cancel()` 只有两个调用点：密码认证
+  （`cli-authpasswd.c:129`）与 keyboard-interactive（`cli-authinteract.c:125`）——
+  **私钥路径从不问口令**。
+
+**实测**（dropbear `DROPBEAR_2026.94` + 本仓库 `scripts/localoptions.h`，本机编译）：
+
+| `dbclient -i <key>` | 结果 |
+|---|---|
+| 不给 `-i`（对照） | 走到连接：`Connect failed: Connection refused` |
+| `dropbearkey` 生成的密钥（对照） | 加载成功，走到连接 |
+| OpenSSH ed25519，无口令 | `Exited: String too long`（**解析期就死**） |
+| OpenSSH ed25519，**带口令** | `Exited: String too long` |
+| OpenSSH RSA，无口令 | `Exited: String too long` |
+| 传统 PEM RSA，带口令 | `Exited: String too long` |
+
+`dropbearconvert openssh dropbear` 对无口令的 ed25519/RSA 都能转成功；对带口令的
+报 `Error decoding OpenSSH key`，对传统 PEM 加密报
+`Ciphers other than DES-EDE3-CBC not supported`。
+
+⇒ **「导入私钥」此前是坏的，与口令无关**；而 `导入` 按钮接受任意文件
+（`type="*/*"`），所以用户做最自然的事（导入 `ssh-keygen` 的密钥）必然失败，
+失败原因又因为 `DshApp` 把 `onStateChange` 吞成日志而到不了屏幕。
+
+### 处置
+
+| # | 改动 | 位置 |
+|---|---|---|
+| 1 | 打包 `dropbearconvert`（`BUILD_ONLY` 加一项，CI 放进 `jniLibs`） | `scripts/build-dropbear.sh`、`.github/workflows/ci.yml` |
+| 2 | 导入时就地转换：OpenSSH → dropbear；按字节判格式（`-----BEGIN ` vs `4 字节长度 + ssh-*`），不靠扩展名 | 新增 `SshKeyImport.kt`、`MainActivity.onActivityResult` |
+| 3 | 消费端兜底转换/判定：隧道（`DshApp.resolveAuth`）与终端（`TuiActivity.resolveKeyPath`）各过一次 —— 旧版本存下来的 `keyPath` 指向的还是 OpenSSH 原文件 | `DshApp.kt`、`TuiActivity.kt` |
+| 4 | **删掉口令输入框**，把限制写成提示（带口令 → 给出 `ssh-keygen -p -N ""` 的可执行命令） | `MainActivity.createConnectView` |
+| 5 | 失败原因透到 UI：`SshTunnel.lastError` → `DshApp.lastTunnelError` → 连接屏按签名翻成人话（主机身份变了 / 私钥带口令 / 端口没监听…），拿不到签名才退回原来的通用文案 | `SshTunnel.kt`、`DshApp.kt`、`MainActivity.tunnelFailureHint` |
+| 6 | 新增「重置已信任的电脑身份」：删 `filesDir/.ssh/known_hosts` —— 主机密钥变更后手机上**唯一**的出口 | `MainActivity.resetKnownHosts` |
+
+第 5 条与本条是同一个根因的两半：**失败原因到不了用户眼前**，所以第一层（口令没接线）
+和第二层（格式不对）才会长时间表现为同一句「检查密码」。
+
+### 仍未做
+
+- **带口令的私钥仍然不支持**，且不是本版能补的：需要自己实现 OpenSSH 私钥解密
+  （bcrypt-pbkdf + chacha20-poly1305/aes-ctr）或换成支持它的 SSH 实现
+  （JSch/sshj）。目前的取舍是「说清楚 + 给命令」，不是「假装支持」。
+- 转换在导入与消费两处都会跑（消费端只在文件确实是 PEM 时跑）。旧配置每次拨号会
+  多一次毫秒级子进程；等 0.1.12 之后的配置全部指向转换产物后，这条路径自然不再触发。
+- 未上真机。本版只做了静态验证与 dropbear 行为实测，**没有**在 Android 设备上跑过
+  「导入 OpenSSH 密钥 → 隧道建立成功」这条路径（见下）。
