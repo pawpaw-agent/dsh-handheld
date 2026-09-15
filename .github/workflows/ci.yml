@@ -200,6 +200,10 @@ jobs:
           mkdir -p android/app/src/main/jniLibs/arm64-v8a
           install -m 0755 dbclient/dbclient android/app/src/main/jniLibs/arm64-v8a/libdbclient.so
           install -m 0755 dbclient/dropbearkey android/app/src/main/jniLibs/arm64-v8a/libdropbearkey.so
+          # dropbearconvert 不是可选项：dbclient 的 -i 只认 dropbear 格式，少了它
+          # 「导入私钥」在手机上直接不可用（见 SshKeyImport 与 scripts/build-dropbear.sh）
+          install -m 0755 dbclient/dropbearconvert \
+            android/app/src/main/jniLibs/arm64-v8a/libdropbearconvert.so
           cp dbclient/LICENSE.txt android/app/src/main/jniLibs/arm64-v8a/LICENSE-dropbear.txt 2>/dev/null || true
           ls -la android/app/src/main/jniLibs/arm64-v8a/
 
@@ -247,6 +251,23 @@ jobs:
           fi
           echo "✓ application-debuggable 不存在（不可调试）"
           "$AAPT" dump badging "$APK" | grep -E "^package|^application-label|sdkVersion|targetSdkVersion"
+
+      # 硬校验：三个原生组件缺一不可。**少任何一个都不会让构建失败**，但会让对应功能
+      # 在手机上静默失效 —— 而这正是「导入私钥」此前的故障形态（转换器不在，
+      # dbclient 读不了 OpenSSH 密钥，用户只看到一句「检查私钥」）。
+      #   libdbclient.so       隧道 + 终端
+      #   libdropbearkey.so    终端模式现生成密钥
+      #   libdropbearconvert.so OpenSSH 私钥 → dropbear 格式
+      - name: Verify native binaries are packaged
+        run: |
+          APK=android/app/build/outputs/apk/release/app-release.apk
+          for lib in libdbclient.so libdropbearkey.so libdropbearconvert.so; do
+            if ! unzip -l "$APK" | grep -q "lib/arm64-v8a/$lib"; then
+              echo "::error::APK 里缺少 $lib —— 对应功能在手机上会静默失效"
+              exit 1
+            fi
+            echo "✓ lib/arm64-v8a/$lib"
+          done
 
       - name: Upload APK
         uses: actions/upload-artifact@v7

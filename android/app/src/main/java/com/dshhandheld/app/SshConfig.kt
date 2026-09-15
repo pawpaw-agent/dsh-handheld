@@ -32,6 +32,14 @@ data class SshConfig(
     val authType: String = AUTH_PASSWORD,
     val password: String = "",
     val keyPath: String = "",
+    /**
+     * **历史字段，不要再接 UI。**
+     *
+     * 0.1.11 及更早的连接屏收过「私钥口令」，但它从来没有用武之地：dbclient 侧
+     * 结构上无法解密带口令的密钥（见 [SshKeyImport] 的类注释），所以那一步只是把用户
+     * 往「密码错了」的方向引。字段保留只为**读得懂旧配置**（老 JSON 里可能有值），
+     * 以及让 [fingerprint] 不会因为删字段而漂移。
+     */
     val keyPass: String = "",
 ) {
 

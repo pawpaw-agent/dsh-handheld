@@ -49,6 +49,14 @@ class TuiActivity : Activity() {
     private var session: TerminalSession? = null
     private var statusView: TextView? = null
 
+    /**
+     * [resolveKeyPath] 失败的具体原因（在后台线程写、UI 线程读）。
+     *
+     * 没有它，三种完全不同的失败（带口令的私钥 / 格式不认识 / 生成密钥失败）都会显示
+     * 同一句「SSH 密钥不可用，请回连接屏导入私钥」——而其中只有一种是「去导入」能解决的。
+     */
+    @Volatile private var keyError: String? = null
+
     private companion object {
         const val TAG = "TuiActivity"
         // 配色与连接屏共用一份定义（见 UiKit）；此前两个 Activity 各写一遍。
@@ -189,7 +197,8 @@ class TuiActivity : Activity() {
                 runOnUiThread {
                     if (isDestroyed) return@runOnUiThread
                     if (keyPath == null) {
-                        statusView?.text = "SSH 密钥不可用，请回连接屏导入私钥"
+                        // 具体原因由 resolveKeyPath 写进 keyError；拿不到才用通用文案
+                        statusView?.text = keyError ?: "SSH 密钥不可用，请回连接屏导入私钥"
                     } else {
                         launchSession(dbclient, cfg, baseEnv, arrayOf("-i", keyPath))
                     }
@@ -284,20 +293,45 @@ class TuiActivity : Activity() {
      */
     private fun resolveKeyPath(): String? {
         val libDir = applicationInfo.nativeLibraryDir
-        // 1) 连接屏导入的私钥
+        // 1) 连接屏导入/填写的私钥 —— dbclient 的 -i 只认 dropbear 格式，
+        //    OpenSSH 密钥必须在这里先转换（转换器与 dbclient 同批构建，见
+        //    scripts/build-dropbear.sh 的 BUILD_ONLY）。
         val imported = SshConfig.load(getSharedPreferences("dsh-handheld", MODE_PRIVATE))?.keyPath
-        if (!imported.isNullOrBlank() && File(imported).exists()) return imported
+        if (!imported.isNullOrBlank() && File(imported).exists()) {
+            return when (val r = SshKeyImport.ensureUsable(
+                File(imported), filesDir, SshKeyImport.converterPath(libDir)
+            )) {
+                is SshKeyImport.Outcome.Ready -> r.file.absolutePath
+                is SshKeyImport.Outcome.NeedsPassphraseRemoval -> {
+                    DiagLog.w(TAG, "私钥带口令，dbclient 无法解密")
+                    keyError = "私钥带口令，手机端的 SSH 组件无法解密：请先在电脑上去掉口令再导入"
+                    null
+                }
+                is SshKeyImport.Outcome.Failed -> {
+                    DiagLog.w(TAG, "私钥不可用：${r.reason}")
+                    keyError = "私钥不可用：${r.reason}"
+                    null
+                }
+            }
+        }
 
         // 2) 自动生成一对（app 私有目录），公钥一行提示加到服务端
         val dir = filesDir
         val key = File(dir, KEY_NAME)
         if (!key.exists()) {
             val dbkey = File(libDir, "libdropbearkey.so")
-            if (!dbkey.exists()) return null
+            if (!dbkey.exists()) {
+                keyError = "缺少 libdropbearkey.so（APK 未包含？）"
+                return null
+            }
             val gen = ProcessBuilder(dbkey.absolutePath, "-t", "ed25519", "-f", key.absolutePath)
                 .redirectErrorStream(true).start()
             gen.waitFor()
-            if (!key.exists()) { DiagLog.e(TAG, "dropbearkey failed"); return null }
+            if (!key.exists()) {
+                DiagLog.e(TAG, "dropbearkey failed")
+                keyError = "生成密钥失败（dropbearkey）"
+                return null
+            }
             DiagLog.i(TAG, "generated key at ${key.absolutePath}")
         }
         // 输出公钥到日志（方便用户加到服务端 authorized_keys）
@@ -310,6 +344,7 @@ class TuiActivity : Activity() {
                 DiagLog.i(TAG, "PUBKEY (add to server ~/.ssh/authorized_keys): $text")
             } catch (_: Exception) {}
         }
+        keyError = null
         return key.absolutePath
     }
 

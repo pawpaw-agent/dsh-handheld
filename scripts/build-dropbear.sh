@@ -3,13 +3,20 @@
 #
 # Based on the MIT-licensed build script from ribbons/android-dropbear
 # (https://github.com/ribbons/android-dropbear, SPDX-License-Identifier: MIT)
-# — adjusted for the dsh-handheld project (single arm64 target, dbclient only).
+# — adjusted for the dsh-handheld project (single arm64 target).
 #
 # Usage:
 #   ANDROID_NDK_HOME=/path/to/ndk ./scripts/build-dropbear.sh
 #   [DROPBEAR_VERSION=DROPBEAR_2026.94] [BUILD_ONLY=dbclient]
 #
-# Output: ./build-dropbear-output/{dbclient,LICENSE.txt}
+# Output: ./build-dropbear-output/{dbclient,dropbearkey,dropbearconvert,LICENSE.txt}
+#
+# 三个二进制各自的用途：
+#   dbclient        —— 隧道（SshTunnel）与终端（TuiActivity）共用的 SSH 客户端
+#   dropbearkey     —— 终端模式现生成一对密钥
+#   dropbearconvert —— 把导入的 OpenSSH 私钥转成 dbclient 能读的 dropbear 格式
+#                      （**必须一起打包**：dbclient 的 -i 只认 dropbear 格式，少了它
+#                       「导入私钥」在手机上无法工作。见 SshKeyImport 的类注释）
 #
 # Always run from this script's own directory (resolved absolutely),
 # so paths (localoptions.h, output dir) stay valid after `cd dropbear`.
@@ -20,7 +27,7 @@ PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
 TARGET=${TARGET:-aarch64-linux-android}
 PLATFORM=21
 DROPBEAR_VERSION=${DROPBEAR_VERSION:-DROPBEAR_2026.94}
-BUILD_ONLY=${BUILD_ONLY:-"dbclient dropbearkey"}
+BUILD_ONLY=${BUILD_ONLY:-"dbclient dropbearkey dropbearconvert"}
 OUTDIR=${OUTDIR:-"$PROJECT_ROOT/build-dropbear-output"}
 
 if [ -z "$ANDROID_NDK_HOME" ]; then

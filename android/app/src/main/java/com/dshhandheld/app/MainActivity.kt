@@ -667,7 +667,10 @@ class MainActivity : Activity() {
                         return@onUi
                     }
                     connectFailed = true
-                    status("自动连接失败，请在连接屏手动重试")
+                    // app.lastTunnelError：隧道自己的判定（密钥不可用 / dbclient 的 stderr）。
+                    // 拿不到签名就退回原来的通用文案，绝不把英文机器文本直接上屏。
+                    val hint = tunnelFailureHint(app.lastTunnelError)
+                    status(hint ?: "自动连接失败，请在连接屏手动重试")
                     refreshConnectState()
                     endConnect()
                 }
@@ -964,8 +967,6 @@ class MainActivity : Activity() {
             pickSshKey()
         }
         val errKey = errorLine()
-        val keyPassInput = input("没有就留空", savedSsh?.keyPass ?: "", pwd = true)
-        val keyPassRow = pwdRow(keyPassInput)
         val keyBlock = LinearLayout(this@MainActivity).apply {
             orientation = LinearLayout.VERTICAL
             addView(label("私钥路径", keyPathInput), rowParams(top = dp(12),
@@ -976,9 +977,14 @@ class MainActivity : Activity() {
                 addView(browseKeyBtn, LinearLayout.LayoutParams(dp(64), dp(46)))
             }, rowParams(top = dp(7), width = ViewGroup.LayoutParams.MATCH_PARENT))
             addView(errKey, rowParams(top = dp(6), width = ViewGroup.LayoutParams.MATCH_PARENT))
-            addView(label("私钥口令（可选）", keyPassInput), rowParams(top = dp(12),
-                width = ViewGroup.LayoutParams.MATCH_PARENT))
-            addView(keyPassRow, rowParams(top = dp(7), width = ViewGroup.LayoutParams.MATCH_PARENT))
+            // 「私钥口令」输入框已移除：dbclient **结构上**解不开带口令的密钥
+            // （keyimport.c 里 openssh_read 的 passphrase 是 UNUSED，见 SshKeyImport）。
+            // 收了口令却用不上，等于把用户往「密码错了」的方向引。改成把限制写在明处。
+            addView(
+                hint("OpenSSH 格式的私钥会在导入时自动转换；带口令的私钥不支持 —— "
+                    + "请先在电脑上执行 ssh-keygen -p -f <私钥> -N \"\" 去掉口令。"),
+                rowParams(top = dp(6), width = ViewGroup.LayoutParams.MATCH_PARENT)
+            )
         }
         theForm.addView(keyBlock, rowParams(width = ViewGroup.LayoutParams.MATCH_PARENT))
 
@@ -1005,6 +1011,18 @@ class MainActivity : Activity() {
             width = ViewGroup.LayoutParams.MATCH_PARENT))
         theForm.addView(hint("dsh 网页的端口，默认 3080。"),
             rowParams(top = dp(6), width = ViewGroup.LayoutParams.MATCH_PARENT))
+
+        // 主机密钥变更后的**唯一出口**（见 resetKnownHosts）。放在表单末尾、用弱化的
+        // 文字链：它不是日常操作，但出事时必须在手机上够得着 —— 此前只能清应用数据。
+        theForm.addView(
+            UiKit.text(this@MainActivity, "重置已信任的电脑身份", 12f, COL_ACCENT).apply {
+                gravity = Gravity.CENTER
+                isClickable = true
+                setPadding(0, dp(16), 0, dp(2))
+                setOnClickListener { resetKnownHosts() }
+            },
+            rowParams(top = dp(6), width = ViewGroup.LayoutParams.MATCH_PARENT)
+        )
 
         val summary = UiKit.text(this@MainActivity, "", 13f, COL_TEXT)
         settingsSummary = summary
@@ -1248,7 +1266,9 @@ class MainActivity : Activity() {
                 }
                 val keyFile = File(path)
                 if (!keyFile.exists()) { fail(keyPathInput, errKey, "私钥文件不存在：$path"); return }
-                SshTunnel.Auth.KeyPair(keyFile, keyPassInput.text.toString().ifEmpty { null })
+                // 不带口令：dbclient 用不了它（见 SshKeyImport），真正的转换在
+                // DshApp.resolveAuth / TuiActivity.resolveKeyPath 里做。
+                SshTunnel.Auth.KeyPair(keyFile)
             } else {
                 val pw = sshPassInput.text.toString()
                 if (pw.isEmpty()) { fail(sshPassInput, errPass, "请填写电脑登录密码"); return }
@@ -1366,16 +1386,52 @@ class MainActivity : Activity() {
         }
         if (requestCode != REQ_PICK_KEY || resultCode != RESULT_OK) return
         val uri: Uri = data?.data ?: return
-        try {
-            val dest = File(filesDir, "ssh_private_key")
-            contentResolver.openInputStream(uri)?.use { input ->
-                FileOutputStream(dest).use { output -> input.copyTo(output) }
-            } ?: run { status("读取私钥失败"); return }
-            sshKeyPathInput?.setText(dest.absolutePath)
-            status("私钥已导入到应用私有目录")
-        } catch (e: Exception) {
-            status("导入私钥失败：${e.message ?: "未知错误"}")
-        }
+        // 拷贝 + 转换都在这里做，且**整段在后台线程**：转换要 fork 一个子进程
+        // （dropbearconvert，最长 10s）。按本项目的既有教训（审计 A1/A2），
+        // 主线程上的阻塞调用必然 ANR。
+        status("正在导入私钥…")
+        Thread {
+            val dest = File(filesDir, SshKeyImport.IMPORTED_FILE_NAME)
+            val outcome: SshKeyImport.Outcome? = try {
+                val copied = try {
+                    contentResolver.openInputStream(uri)?.use { input ->
+                        FileOutputStream(dest).use { output -> input.copyTo(output) }
+                    }
+                    dest.exists() && dest.length() > 0L
+                } catch (e: Exception) {
+                    DiagLog.w(TAG, "读取私钥失败：${e.javaClass.simpleName}: ${e.message}")
+                    false
+                }
+                if (!copied) {
+                    null
+                } else {
+                    // dbclient 的 -i 只认 dropbear 格式；OpenSSH 密钥必须在这里转。
+                    // 就地转换的另一个好处：错在哪（带口令 / 不是私钥）**在导入这一步**
+                    // 就能说清楚，而不是拖到连接时变成一句「检查私钥」。
+                    SshKeyImport.ensureUsable(
+                        dest, filesDir, SshKeyImport.converterPath(applicationInfo.nativeLibraryDir)
+                    )
+                }
+            } catch (e: Exception) {
+                DiagLog.w(TAG, "导入私钥失败：${e.javaClass.simpleName}: ${e.message}")
+                null
+            }
+            onUi {
+                when (outcome) {
+                    null -> status("读取私钥失败", err = true)
+                    is SshKeyImport.Outcome.Ready -> {
+                        // 存**转换后**的路径（已经是 dropbear 格式，dbclient 直接可用）
+                        sshKeyPathInput?.setText(outcome.file.absolutePath)
+                        status(if (outcome.converted) "私钥已导入并转换为可用格式" else "私钥已导入")
+                    }
+                    is SshKeyImport.Outcome.NeedsPassphraseRemoval ->
+                        status("这把私钥带口令，手机端的 SSH 组件无法解密：请先在电脑上执行 "
+                            + "ssh-keygen -p -f <私钥> -N \"\" 去掉口令，再重新导入", err = true)
+                    is SshKeyImport.Outcome.Failed ->
+                        status("私钥不可用：${outcome.reason}", err = true)
+                }
+            }
+        }.apply { name = "ssh-key-import"; isDaemon = true }.start()
     }
 
     private fun status(msg: String, err: Boolean = false) {
@@ -1569,10 +1625,12 @@ class MainActivity : Activity() {
                         return@onUi
                     }
                     connectFailed = true
-                    status("连不上你的电脑")
                     // 提示词跟登录方式：私钥用户看到「检查密码」会懵
                     val what = if (auth is SshTunnel.Auth.KeyPair) "私钥" else "密码"
-                    guideLine(1, "① 检查电脑 ✗ 连不上你的电脑（检查地址/账号/$what）", state = null)
+                    val hint = tunnelFailureHint(app.lastTunnelError)
+                    status(hint ?: "连不上你的电脑")
+                    guideLine(1, "① 检查电脑 ✗ "
+                        + (hint ?: "连不上你的电脑（检查地址/账号/$what）"), state = null)
                     guideLine(2, "② 建立安全通道 未开始", state = true)
                     // ensureTunnel 已把旧隧道关掉，这里必须刷新，否则
                     // 「断开连接」会留在屏幕上指向一个已死的隧道
@@ -1671,6 +1729,65 @@ class MainActivity : Activity() {
         try {
             SshConfig.save(prefs, buildSshConfig(sshHost, sshPort, sshUser, remotePort, auth))
         } catch (_: Exception) {}
+    }
+
+    /**
+     * 把隧道的原始失败原因翻成一句用户能照着做的话。
+     *
+     * 两条约束同时成立，所以不能把 stderr 直接上屏：
+     *  1. 连接屏刻意不出现术语（README「连接屏刻意去术语」），而 dbclient 的原因是英文机器文本；
+     *  2. 但有些失败**必须**改变用户的下一步（主机身份变了、私钥带口令）——那种情况下
+     *     「检查地址/账号/密码」是误导，用户会一直在错误的地方试。
+     * 所以只认几个能改变动作的签名，其余返回 null，由调用方沿用原来的通用文案。
+     * 原始值不会丢：它同时在诊断页与 DiagLog 里。
+     */
+    private fun tunnelFailureHint(raw: String?): String? {
+        val r = raw?.lowercase() ?: return null
+        return when {
+            // dbclient: "ssh-ed25519 host key mismatch for <host> !"
+            r.contains("host key mismatch") ->
+                "这台电脑的 SSH 身份和上次不一样（重装过系统？）。到「连接设置」里" +
+                    "「重置已信任的电脑身份」之后再连"
+            // DshApp.resolveAuth 的判定（dbclient 解不开带口令的密钥）
+            r.contains("带口令") ->
+                "私钥带口令，手机端解不开：请先在电脑上执行 ssh-keygen -p -N \"\" 去掉口令再导入"
+            r.contains("缺少 libdropbearconvert") ->
+                "APK 里缺少私钥转换工具（构建不完整？）"
+            r.contains("不像是一把 ssh 私钥") ->
+                "选中的文件不是 SSH 私钥"
+            r.contains("密钥文件不存在") ->
+                "私钥文件不在了，请重新导入"
+            // dbclient 读不了非 dropbear 格式时的原始输出（正常路径下已被转换挡掉）
+            r.contains("string too long") || r.contains("failed loading keyfile") ->
+                "私钥读不了（dbclient 只认 dropbear 格式）"
+            r.contains("permission denied") || r.contains("no auth methods") ->
+                "服务器拒绝了登录：账号或密码/私钥不对"
+            r.contains("connection refused") ->
+                "电脑上没有 SSH 服务在监听（端口填对了吗？）"
+            r.contains("timed out") || r.contains("timeout") || r.contains("no route to host") ->
+                "连不上这台电脑：地址或网络不通"
+            else -> null
+        }
+    }
+
+    /**
+     * 清掉 TOFU 记录：`$HOME/.ssh/known_hosts`（HOME = `filesDir`，见 [SshTunnel.homeDir]）。
+     *
+     * 这是手机端**唯一的出路**。服务器重装、容器重建、或 DHCP 把同一个 IP 分给了另一台
+     * 机器之后，`known_hosts` 里的旧指纹会让 dbclient 直接拒绝连接 —— `-y`（本项目的 TOFU）
+     * 只放行**未知**主机，不匹配的仍然拒绝（dropbear `cli-kex.c`）。而这个文件在应用私有
+     * 目录里，用户没有别的地方可以删，此前只能清应用数据（配置一并丢失）。
+     */
+    private fun resetKnownHosts() {
+        val f = File(filesDir, ".ssh/known_hosts")
+        val existed = f.exists()
+        val ok = !existed || runCatching { f.delete() }.getOrDefault(false)
+        DiagLog.i(TAG, "重置 known_hosts: path=${f.absolutePath} existed=$existed ok=$ok")
+        status(
+            if (ok) "已清除信任记录，下次连接会重新确认这台电脑"
+            else "清除失败：${f.absolutePath}",
+            err = !ok
+        )
     }
 
     // ── Basic Auth（WebView 隧道/反代场景）────────────────────

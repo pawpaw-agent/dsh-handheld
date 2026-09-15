@@ -107,6 +107,23 @@ class SshTunnel(
     /** 本地端口/基址变化（断线重连后会更换端口）；调用方需据此重新加载。 */
     @Volatile var onLocalBaseChanged: ((String) -> Unit)? = null
 
+    /**
+     * 最近一次失败的原因（dbclient 的 stderr，或本类的判定），成功时清空。
+     *
+     * 为什么需要它：[onStateChange] 在本项目里只被 DshApp 用来记日志，UI 拿不到。
+     * 于是「主机身份变了」「私钥读不了」这类**能改变用户下一步**的失败，全都会塌缩成
+     * 一句「连不上你的电脑（检查地址/账号/密码）」——把用户引向错误的方向。
+     * 这个字段是给调用方把原因带到界面上的通道（见 DshApp.lastTunnelError）。
+     */
+    @Volatile var lastError: String? = null
+        private set
+
+    /** 记下失败原因并广播状态；所有失败路径都必须走这里，别直接 invoke。 */
+    private fun fail(msg: String) {
+        lastError = msg
+        onStateChange?.invoke("failed: $msg")
+    }
+
     /** 建立隧道并阻塞等待本地监听就绪（最多 [LOCAL_READY_TIMEOUT_MS] × [MAX_ATTEMPTS]）。成功返回本地端口。 */
     @Synchronized
     fun start(): Int {
@@ -258,8 +275,12 @@ class SshTunnel(
         )
         if (auth is Auth.KeyPair) {
             args += listOf("-i", auth.privateKeyFile.absolutePath)
+            // 口令在 dbclient 侧**结构上无法使用**（openssh_read 的 passphrase 是 UNUSED，
+            // 见 SshKeyImport 的类注释）。UI 已不再收集它；这里保留一条日志，
+            // 好让历史配置里遗留的 keyPass 在诊断时能被看出来，而不是静默失效。
             auth.passphrase?.takeIf { it.isNotEmpty() }?.let {
-                DiagLog.w(TAG, "key passphrase unsupported by dbclient CLI; try without")
+                DiagLog.w(TAG, "配置里带着私钥口令，但 dbclient 无法使用它："
+                    + "密钥必须先转成无口令的 dropbear 格式（见 SshKeyImport）")
             }
         }
         args += "$sshUser@$sshHost"
@@ -272,7 +293,7 @@ class SshTunnel(
         val bin = binPath
         if (bin == null) {
             DiagLog.e(TAG, "dbclient path not set — DshApp.onCreate should inject it")
-            onStateChange?.invoke("failed: 内部错误（dbclient 路径未设置）")
+            fail("内部错误（dbclient 路径未设置）")
             return false
         }
         // 先回收旧 owner：固定端口要立刻能重绑，而且不能让残留进程冒名监听
@@ -281,8 +302,7 @@ class SshTunnel(
             if (!started.get()) return false
             val port = pickFreePort()
             if (port < 0) {
-                onStateChange?.invoke(
-                    "failed: 本地端口 ${preferredPorts.joinToString(" / ")} 都被占用，请关掉占用它的应用后重试")
+                fail("本地端口 ${preferredPorts.joinToString(" / ")} 都被占用，请关掉占用它的应用后重试")
                 return false
             }
             val args = buildArgs(bin, port)
@@ -295,7 +315,7 @@ class SshTunnel(
                 pb.start()
             } catch (e: Exception) {
                 DiagLog.w(TAG, "dbclient launch failed: ${e.message}")
-                if (attempt == MAX_ATTEMPTS) onStateChange?.invoke("failed: ${e.message}")
+                if (attempt == MAX_ATTEMPTS) fail(e.message ?: "dbclient 启动失败")
                 continue
             }
             spawned.add(p)
@@ -310,8 +330,9 @@ class SshTunnel(
                 DiagLog.w(TAG, "dbclient tune #$attempt 未就绪（$state）: ${err.take(200)}")
                 reap(p)
                 if (attempt == MAX_ATTEMPTS) {
-                    val why = err.ifEmpty { "连接超时（$state）" }
-                    onStateChange?.invoke("failed: $why")
+                    // err 是 dbclient 的真实输出（认证失败 / host key mismatch / 私钥读不了…），
+                    // 原样交给调用方：它是唯一能区分这些故障的东西。
+                    fail(err.ifEmpty { "连接超时（$state）" })
                 }
                 continue
             }
@@ -327,14 +348,14 @@ class SshTunnel(
                 DiagLog.w(TAG, "dbclient tune #$attempt 端口就绪但探针无响应，丢弃重试")
                 reap(p)
                 if (attempt == MAX_ATTEMPTS) {
-                    onStateChange?.invoke(
-                        "failed: 本地端口已就绪，但对 dsh 的请求无响应"
-                            + "（隧道可能已断，或电脑上的 dsh 没在运行）")
+                    fail("本地端口已就绪，但对 dsh 的请求无响应"
+                        + "（隧道可能已断，或电脑上的 dsh 没在运行）")
                 }
                 continue
             }
             proc = p
             localPort = port
+            lastError = null
             val base = "http://127.0.0.1:$port"
             val changed = localBaseUrl != base
             val first = localBaseUrl == null

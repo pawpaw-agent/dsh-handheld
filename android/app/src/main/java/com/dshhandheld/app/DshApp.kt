@@ -213,6 +213,21 @@ class DshApp : Application() {
     var sshTunnel: SshTunnel? = null
         private set
 
+    /**
+     * 最近一次拨号失败的原因。
+     *
+     * **只在 [ensureTunnel] 返回 null 时有意义**（成功路径会清空它）。数据来自
+     * [SshTunnel.lastError]（dbclient 的真实输出）或本类的认证解析（密钥不可用等）。
+     *
+     * 为什么要有它：隧道失败的原因此前只进 DiagLog，UI 上所有失败都塌缩成
+     * 「连不上你的电脑（检查地址/账号/密码）」。而「主机身份变了」「私钥读不了」
+     * 是两件**用户下一步动作完全不同**的事，其中最糟的一种（主机密钥不匹配）
+     * 在手机上还无路可走 —— 见 MainActivity.resetKnownHosts。
+     */
+    @Volatile
+    var lastTunnelError: String? = null
+        private set
+
     /** 隧道基址变化的订阅者（目前只有 MainActivity 订阅）。 */
     interface TunnelObserver {
         fun onTunnelBaseChanged(base: String) {}
@@ -408,8 +423,10 @@ class DshApp : Application() {
             }
             t.start()
             if (t.localBaseUrl == null) {
+                // 失败原因带到 UI 去（否则只剩一句「检查地址/账号/密码」）
+                lastTunnelError = t.lastError
                 t.close()
-                DiagLog.w(TAG, "ensureTunnel: 拨号失败")
+                DiagLog.w(TAG, "ensureTunnel: 拨号失败（${lastTunnelError ?: "原因未记录"}）")
                 return null
             }
             val published = synchronized(tunnelLock) {
@@ -428,6 +445,7 @@ class DshApp : Application() {
             }
             // 隧道真的起来了才需要保活。放在成功分支里（而不是 build()），
             // 免得拨号失败也留下一个常驻前台服务。
+            lastTunnelError = null
             TunnelService.start(this, "已连接到 ${cfg.host}")
             DiagLog.i(TAG, "ensureTunnel: 已建立 ${t.localBaseUrl}")
             return t
@@ -461,11 +479,13 @@ class DshApp : Application() {
         }
     }
 
-    /** 配置指纹由 [SshConfig.fingerprint] 提供（字段定义在那里，不再各写一份）。 */
+    /** 建隧道。配置不完整或认证材料不可用时置 [lastTunnelError] 并返回 null。 */
     private fun build(cfg: SshConfig): SshTunnel? {
-        if (!cfg.isComplete) return null
-        // 私钥方式但没给路径 → 配置不可用（终端模式另有「现生成一对」的回退，不在此列）
-        val auth = cfg.toAuth() ?: return null
+        if (!cfg.isComplete) {
+            lastTunnelError = "SSH 配置不完整（地址或账号为空）"
+            return null
+        }
+        val auth = resolveAuth(cfg) ?: return null
         return SshTunnel(
             sshHost = cfg.host,
             sshPort = cfg.port,
@@ -477,6 +497,49 @@ class DshApp : Application() {
             // （3080 优先）；见 SshTunnel.pickFreePort。
             preferredPorts = SshTunnel.PORT_CANDIDATES,
         )
+    }
+
+    /**
+     * 把配置里的认证方式变成 dbclient **真的能用**的形态。
+     *
+     * 私钥分支必须在这里过一次 [SshKeyImport]：dbclient 的 `-i` 只认 dropbear 格式，
+     * 而用户导入的（以及旧版本存下来的）`ssh-keygen` 密钥是 OpenSSH/PEM 格式 ——
+     * 直接交给它会在**连接之前**退出（实测 `Exited: String too long`），UI 只会显示
+     * 一句含糊的「检查私钥」。
+     *
+     * 调用链保证在后台线程：[ensureTunnel] 的 [dialLock] 内，转换的子进程（毫秒级）
+     * 不会碰到 UI 线程 —— 这是本项目审计 A1/A2 的教训。
+     */
+    private fun resolveAuth(cfg: SshConfig): SshTunnel.Auth? {
+        val auth = cfg.toAuth()
+        if (auth == null) {
+            // 私钥方式但没给路径 → 配置不可用（终端模式另有「现生成一对」的回退，不在此列）
+            lastTunnelError = "私钥路径为空"
+            return null
+        }
+        if (auth !is SshTunnel.Auth.KeyPair) {
+            lastTunnelError = null
+            return auth
+        }
+        val outcome = SshKeyImport.ensureUsable(
+            src = auth.privateKeyFile,
+            workDir = filesDir,
+            converter = SshKeyImport.converterPath(applicationInfo.nativeLibraryDir),
+        )
+        return when (outcome) {
+            is SshKeyImport.Outcome.Ready -> {
+                lastTunnelError = null
+                SshTunnel.Auth.KeyPair(outcome.file)
+            }
+            is SshKeyImport.Outcome.NeedsPassphraseRemoval -> {
+                lastTunnelError = "私钥带口令，dbclient 无法解密"
+                null
+            }
+            is SshKeyImport.Outcome.Failed -> {
+                lastTunnelError = outcome.reason
+                null
+            }
+        }
     }
 
     companion object {
