@@ -71,16 +71,21 @@ node scripts/css-lab.mjs --page file:///tmp/fixture/fixture-modal.html \
 ### 零层之二：统计行的 A/B 断言（`scripts/composer-stats-lab.mjs`）
 
 `css-lab.mjs` 的探针是给抽屉/模态写的（侧栏位置、遮罩命中栈…），不量输入框上方那行统计。
-1.0.17 起这一行的窄屏重排有自己的一条断言：从**安装产物**里抽宿主那两段 CSS 搭 fixture，
-360 / 384 / 412px 各跑两遍 —— A 不注入**必须复现截断**（负对照），B 注入后不得截断、
-两侧不得留白。
+1.0.17 起这一行的窄屏重排有自己的一条断言：fixture 从**安装产物**里抽宿主的三段 CSS ——
+这一行自己的 `.bOPqQW_*`、定义变量的 `.wSkVaW_root{...}`、以及**它真正的父容器**
+`.uV2eYG_root{...}`（composer dock，左右各 16px）—— 360 / 384 / 412px 各跑两遍：
+A 不注入**必须复现截断**（负对照），B 注入后不得截断、两侧不得留白，且**不换行时余量 ≥ 12px**
+（真机字体比 fixture 宽一点；0.1.17 第一版就是余量只剩 6px，装机后照旧截断）。
 
 ```sh
 node scripts/plugin-css.mjs /tmp/plugin.css
 node scripts/composer-stats-lab.mjs --css /tmp/plugin.css
 ```
 
-它自己 `die()` 的地方都很明确（找不到 dsh 产物 / 找不到 chromium / 宿主那段 CSS 改名了），
+**父容器那一段是踩过坑才加进去的**：第一版 fixture 只有「视口 384px → 这一行 384px 宽」，
+于是小回环全绿而真机仍截断 —— 真机上它住在 composer dock 里，可用宽度少了 32px。
+教训是通用的：**fixture 的父链必须照着真实 DOM 搭**，只搭目标元素本身会系统性高估可用宽度。
+它自己 `die()` 的地方都很明确（找不到 dsh 产物 / 找不到 chromium / 宿主那几段 CSS 改名了），
 不静默跳过 —— 这一行的失败模式本来就是「一声不响地变回截断」。同上：fixture 是近似，
 最终判据仍是真机截图。
 

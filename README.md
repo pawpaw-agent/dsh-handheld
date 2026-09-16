@@ -321,7 +321,7 @@ assets 返回插件 bundle，**服务端不需要装任何插件**。
 **适配建立在 dsh 的 DOM 之上**：一组 `data-*` 属性（`data-phase`、`data-sidebar-collapsed`、
 `data-composer-stats` …）加若干层结构与哈希类名后缀（外壳网格与侧栏列、会话头、头部弹层、
 输入框上方那行统计）。这些**没有版本契约** —— dsh 独立演进，适配层按内容换 rev
-（当前 `dsh-handheld-mobile-1.0.17`，见 `MainActivity.MOBILE_PLUGIN_REV`）。dsh 改个属性名
+（当前 `dsh-handheld-mobile-1.0.18`，见 `MainActivity.MOBILE_PLUGIN_REV`）。dsh 改个属性名
 或那几层结构，适配就**静默失效**（抽屉不弹、布局错位），只能在手机上发现。
 
 因此有**契约金丝雀**在 CI 里守着：`node scripts/check-mobile-hooks.mjs --contract`
