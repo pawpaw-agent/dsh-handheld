@@ -92,6 +92,8 @@ class MainActivity : Activity() {
     }
     private var pendingAuth: HttpAuthHandler? = null
     private var statusView: TextView? = null
+    /** 底部状态条上「一次性提示」的定时器（见 [notice]）。写下一句时会把它作废。 */
+    private var statusHide: Runnable? = null
     private var sshKeyPathInput: EditText? = null
 
     // ── 连接屏（状态优先版）的引用：见 [createConnectView] ────────────────
@@ -323,6 +325,14 @@ class MainActivity : Activity() {
         const val REQ_NOTIF = 2003
         /** WebView 内 <input type=file> 的文件选择请求（与私钥导入分开）。 */
         const val REQ_WEB_FILE = 2002
+
+        /**
+         * 底部状态条上一次性提示的存活时间（见 [notice]）。
+         *
+         * 5 秒是「扫一眼看得完、又不至于一直挂着」的余量：12sp 的短句真机上 ≈1 秒读完。
+         * 失败原因**不受**它影响 —— 那些走 [status]，常驻到被下一句替换为止。
+         */
+        const val STATUS_NOTICE_MS = 5000L
 
         // ── 网页模态与系统 BACK（见 dismissWebModalThenFallback）────────────
         /** 页面里有没有活着的模态对话框（设置页就是其中之一，没有 URL 语义可退）。 */
@@ -649,7 +659,7 @@ class MainActivity : Activity() {
                 onUi {
                     if (connectAttempt != attempt) return@onUi
                     connectFailed = true
-                    status("私钥路径为空，请到连接屏重新填写")
+                    status("私钥路径为空，请点「导入」重新选择私钥")
                     endConnect()
                 }
                 return@Thread
@@ -1112,7 +1122,7 @@ class MainActivity : Activity() {
             prefs.edit().putBoolean(DshApp.PREF_NOTIF_TURN, true).apply()
             Notifier.ensureChannels(this@MainActivity, Notifier.CHANNEL_TURN)
             Notifier.ensureChannels(this@MainActivity, Notifier.CHANNEL_ASK)
-            status("已开启提醒")
+            notice("已开启提醒")
             refreshNotifHint()
             DiagLog.i(TAG, "通知开关：开（系统允许=${Notifier.allowed(this@MainActivity)}）")
         }
@@ -1134,7 +1144,7 @@ class MainActivity : Activity() {
             } else {
                 prefs.edit().putBoolean(DshApp.PREF_NOTIF_TURN, false).apply()
                 Notifier.cancelTurn(this@MainActivity)
-                status("已关闭提醒")
+                notice("已关闭提醒")
                 refreshNotifHint()
                 DiagLog.i(TAG, "通知开关：关")
             }
@@ -1169,17 +1179,26 @@ class MainActivity : Activity() {
         }
 
         // 状态条（全局提示；字段级错误走输入框下面那几行）
+        //
+        // 三条约束都是**别让这一块自己动**（见 docs/known-issues.md §七「底部状态条」）：
+        //  1. 宽度跟着字走（原来 MATCH_PARENT）——「已断开」这 3 个字被撑成一条整宽横条，
+        //     看着像第二条工具栏，而不像一句话。现在是一枚居中的胶囊（背景本来就是胶囊形）。
+        //  2. 空着也占位（INVISIBLE，不是 GONE）—— 有提示时主按钮被顶下去一行，
+        //     提示一消失又弹回来：用户正要按的时候按钮挪了位置。留出这一格，位置恒定。
+        //  3. 不设 maxLines —— 失败原因可能是一整句（「这台电脑的 SSH 身份和上次不一样…」），
+        //     在 AT_MOST 约束下自动折行，不截断。
         val status = TextView(this@MainActivity).apply {
             textSize = 12f
             setTextColor(COL_MUTED)
             gravity = Gravity.CENTER
-            minHeight = dp(30)
             setBackgroundResource(R.drawable.bg_status_pill)
-            setPadding(dp(14), dp(5), dp(14), dp(5))
-            visibility = View.GONE
+            setPadding(dp(14), dp(6), dp(14), dp(6))
+            visibility = View.INVISIBLE
         }
         statusView = status
-        actionZone.addView(status, rowParams(width = ViewGroup.LayoutParams.MATCH_PARENT))
+        actionZone.addView(status, LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT
+        ).apply { gravity = Gravity.CENTER_HORIZONTAL })
 
         // 看网页 / 开终端：不再是独立一步，而是决定主按钮做什么
         val webModeBtn = segment("看 dsh 网页", true)
@@ -1261,7 +1280,7 @@ class MainActivity : Activity() {
                 startActivity(Intent(this@MainActivity, TuiActivity::class.java))
                 return
             }
-            if (!beginConnect()) { status("正在连接中，请稍候…"); return }
+            if (!beginConnect()) { notice("正在连接中，请稍候…"); return }
             connectAttempt++
             connectFailed = false
             guideLine(1, "① 检查电脑 正在连接…", state = true)
@@ -1341,7 +1360,7 @@ class MainActivity : Activity() {
         if (granted) {
             prefs.edit().putBoolean(DshApp.PREF_NOTIF_TURN, true).apply()
             Notifier.ensureChannels(this, Notifier.CHANNEL_TURN)
-            status("已开启任务完成提醒")
+            notice("已开启任务完成提醒")
         } else {
             prefs.edit().putBoolean(DshApp.PREF_NOTIF_TURN, false).apply()
             sw.setOnCheckedChangeListener(null)
@@ -1378,10 +1397,52 @@ class MainActivity : Activity() {
         }
     }
 
+    /**
+     * 底部状态条：**常驻**的一句话（失败原因、要用户照着做的提示）。
+     *
+     * 只有「被下一句替换」与 `status("")` 两种清空方式 —— 错误自己消失等于用户还没看清就没了。
+     * 一次性回执（「已断开」「已开启提醒」…）走 [notice]。
+     *
+     * 文案有一条**术语禁令**（README「连接屏刻意去术语」）：这里不出现 127.0.0.1 / SSH /
+     * 隧道 / 令牌 —— 那些在右上角「诊断」里，连接屏上只讲人话。
+     */
     private fun status(msg: String, err: Boolean = false) {
-        statusView?.text = msg
-        statusView?.setTextColor(if (err) COL_ERROR else COL_MUTED)
-        statusView?.visibility = if (msg.isBlank()) View.GONE else View.VISIBLE
+        showStatus(msg, err, persist = true)
+    }
+
+    /**
+     * 底部状态条：一条**用完就该走**的回执（「已断开」「已取消连接」「已开启提醒」…）。
+     *
+     * 与 [status] 的分工是**寿命**，不是颜色：这些回答的都是「我刚才那一下成了吗」，
+     * 看过就没用了；留着不只是噪音 —— 它会跟顶上的状态块说同一件事（底部「已断开」+
+     * 顶部「未连接」），甚至变成过时信息。所以 [STATUS_NOTICE_MS] 之后自己消失。
+     */
+    private fun notice(msg: String) {
+        showStatus(msg, err = false, persist = false)
+    }
+
+    private fun showStatus(msg: String, err: Boolean, persist: Boolean) {
+        // 先作废上一条的定时器：否则「已断开」的 5 秒到点会把随后那条
+        // 「没有通知权限…」一起抹掉（后写的常驻提示被前一条的收尾带走）。
+        statusHide?.let { ui.removeCallbacks(it) }
+        statusHide = null
+        val v = statusView ?: return
+        v.text = msg
+        v.setTextColor(if (err) COL_ERROR else COL_MUTED)
+        v.visibility = if (msg.isBlank()) View.INVISIBLE else View.VISIBLE
+        if (msg.isBlank()) return
+        // 状态条上的字此前不进日志：真机排查「屏幕上那句是什么时候写的」只能靠截图时间戳。
+        DiagLog.i(TAG, "状态条：${if (persist) "常驻" else "${STATUS_NOTICE_MS / 1000}s 后自隐"}：$msg")
+        if (persist) return
+        val hide = Runnable {
+            statusHide = null
+            statusView?.apply {
+                text = ""
+                visibility = View.INVISIBLE
+            }
+        }
+        statusHide = hide
+        ui.postDelayed(hide, STATUS_NOTICE_MS)
     }
 
     // ── WebView 内的文件选择 ─────────────────────────────────
@@ -1505,7 +1566,14 @@ class MainActivity : Activity() {
      * 此时 [sshTokenAck] 为 false，会重新走 token 交换。
      */
     private fun connectWeb(url: String) {
-        status("连接中… $url")
+        // 这里原来写着 `status("连接中… $url")`，两个毛病：
+        //  1. `$url` 是隧道基址 `http://127.0.0.1:3080` —— 127.0.0.1 是**手机自己**，
+        //     术语泄漏；顶部状态块为同一件事改过一次（见 heroSubtitle），底部漏了；
+        //  2. 下一行就切到网页屏，这句在切屏那一瞬根本看不见，只会在用户按 BACK 回到
+        //     连接屏时露出来 —— 而那时它已经过时（隧道活着、页面正在加载），于是底部
+        //     一句「连接中…」和顶部一句「已连上电脑」同屏，自相矛盾。
+        // 「正在连 / 正在打开」由顶部状态块 + ①②③ 进度行讲，这里只负责把上一句清掉。
+        status("")
         showScreen(Screen.WEB)
         lastUrl = url
         unauthorizedCleanTried = false
@@ -1928,19 +1996,23 @@ class MainActivity : Activity() {
     private fun reFetchTokenAndReload() {
         val tunnel = (application as DshApp).sshTunnel
         if (tunnel == null) {
-            status("尚无 SSH 隧道，请先连接", true)
+            // 连接屏不出现术语（README「连接屏刻意去术语」）：原来这里写「SSH 隧道」，
+            // 用户看到的只是一句「还没连上电脑」就够 —— 怎么修是下面那个按钮的事。
+            status("还没连上电脑，请先连接", true)
             hideErrorPage(); showConnectScreen()
             return
         }
         hideErrorPage()
-        status("自动获取令牌…")
+        // 「令牌」是服务端概念，连接屏只剩「访问权限」这一层：用户要做的事没变，
+        // 但他不需要知道 dsh 内部把它叫 token（全文见 README「连接屏刻意去术语」）。
+        status("正在重新确认网页访问权限…")
         Thread {
             val token = autoFetchToken(tunnel)
             onUi {
                 // autoFetchToken 只在拿到 ≥40 字符的 token 时返回非 null，所以这里
                 // 只需判空（原先还重判了一次 length < 40，那半段不可达）。
                 if (token == null) {
-                    status("自动获取令牌失败，请检查服务端 dsh-web.service", true)
+                    status("网页访问权限确认失败 —— 检查电脑上的 dsh 是否在运行", true)
                     showTokenPromptPage()
                 } else {
                     sshTokenAck = false
@@ -2245,7 +2317,8 @@ class MainActivity : Activity() {
     /** 连接守卫：CAS 置位；失败时提示用户等待。 */
     private fun beginConnect(): Boolean {
         if (!connecting.compareAndSet(false, true)) {
-            status("正在连接中，请稍候…")
+            // 一次性提示，不是失败：用户只是手快了，顶上那行「连接中…」才是真相。
+            notice("正在连接中，请稍候…")
             return false
         }
         return true
@@ -2338,7 +2411,7 @@ class MainActivity : Activity() {
         sshTokenAck = false
         endConnect()
         showPhase(ConnectPhase.IDLE)
-        status("已取消连接")
+        notice("已取消连接")
     }
 
     /** 断开连接：停隧道、清回连 URL、回连接屏。 */
@@ -2358,7 +2431,7 @@ class MainActivity : Activity() {
         unauthorizedCleanTried = false
         webView?.stopLoading()
         showConnectScreen()
-        status("已断开")
+        notice("已断开")
     }
 
     /**
