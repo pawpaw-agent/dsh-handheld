@@ -1101,7 +1101,8 @@ class MainActivity : Activity() {
             notifHint.text = when {
                 !notifSwitch.isChecked -> "关闭：生成结束、以及在等你选择时，都不提醒。"
                 !allowed -> "没有通知权限，提醒不会生效（点开关重新申请，或到系统设置里开启）。"
-                else -> "生成结束、或停下来等你批准／回答时提醒 —— 只在 App 不在前台时才发。"
+                else -> "生成结束、或停下来等你批准／回答时提醒 —— 只在 App 不在前台时才发，" +
+                    "会在屏幕上弹出横幅。"
             }
             notifHint.setTextColor(if (notifSwitch.isChecked && !allowed) COL_ERROR else COL_MUTED)
         }

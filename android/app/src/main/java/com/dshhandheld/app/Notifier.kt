@@ -27,7 +27,12 @@ import com.dshhandheld.diag.DiagLog
  * | 渠道 | 名称 | 重要性 | 用途 |
  * |---|---|---|---|
  * | `dsh-tunnel` | 保持连接 | `IMPORTANCE_MIN` | 前台服务的凭据（见 [TunnelService]），静默 |
- * | `dsh-turn` | 任务完成 | `IMPORTANCE_DEFAULT` | 「你等的那个结果好了」，响铃/震动按用户设置 |
+ * | `dsh-turn-hi` | 任务完成 | `IMPORTANCE_HIGH` | 「你等的那个结果好了」，**浮到屏幕上** |
+ *
+ * ⚠️ `dsh-turn-hi` 的 `-hi` 是**渠道迁移**留下的：0.1.11 用的是 `dsh-turn`
+ * （`IMPORTANCE_DEFAULT`）。Android 的渠道一旦创建，**重要性只有用户能改**，
+ * App 改不动 —— 所以「任务完成要弹横幅」只能换一个新 id 重建，同时删掉旧渠道
+ * （见 [ensureChannels]）。真机实测：0.1.11 那条只在通知栏里，不弹横幅。
  *
  * 注意一条系统规则：Android 13+ 的 `POST_NOTIFICATIONS` 是**一次性**授权，用户为了
  * 任务完成提醒批准之后，隧道那条常驻通知也会跟着出现（不能只批一半）。它是静默的，
@@ -42,8 +47,15 @@ object Notifier {
 
     private const val TAG = "DshNotifier"
 
-    /** 任务完成渠道（[ensureChannels] 里创建）。 */
-    const val CHANNEL_TURN = "dsh-turn"
+    /**
+     * 任务完成渠道（[ensureChannels] 里创建）。
+     *
+     * 换过 id（见类注释）：旧的是 `dsh-turn`（DEFAULT，不弹横幅）。
+     */
+    const val CHANNEL_TURN = "dsh-turn-hi"
+
+    /** 旧的完成渠道：只在 [ensureChannels] 里删掉它，不再往里发东西。 */
+    private const val CHANNEL_TURN_LEGACY = "dsh-turn"
 
     /** 「在等你选择」渠道：比完成提醒更急（那一轮**卡住**了），走 heads-up。 */
     const val CHANNEL_ASK = "dsh-ask"
@@ -60,6 +72,13 @@ object Notifier {
     /** 建渠道。可重复调用（已存在就跳过）。 */
     fun ensureChannels(context: Context, channelId: String) {
         val nm = context.getSystemService(NotificationManager::class.java) ?: return
+        // 渠道迁移：旧的 `dsh-turn`（DEFAULT，不弹横幅）删掉。留着只会让设置页多一条
+        // 永远不会响的「任务完成」。删除对用户是可见的（那条会从设置里消失），
+        // 但它本来就只是一条从未被用户调过的渠道 —— 0.1.11 到 0.1.12 之间才存在。
+        if (channelId == CHANNEL_TURN && nm.getNotificationChannel(CHANNEL_TURN_LEGACY) != null) {
+            nm.deleteNotificationChannel(CHANNEL_TURN_LEGACY)
+            DiagLog.i(TAG, "已删除旧渠道 $CHANNEL_TURN_LEGACY（换成 $CHANNEL_TURN，任务完成要弹横幅）")
+        }
         if (nm.getNotificationChannel(channelId) != null) return
         when (channelId) {
             CHANNEL_ASK -> nm.createNotificationChannel(
@@ -68,9 +87,12 @@ object Notifier {
                     setShowBadge(true)
                 }
             )
+            // HIGH 而不是 DEFAULT：只有 HIGH 及以上才允许**浮到屏幕上**（heads-up）。
+            // 0.1.11 用 DEFAULT，真机上只在通知栏里躺着 —— 用户的原话是
+            // 「有通知但不是弹出横幅通知」。渠道重要性创建后 App 改不动，所以换了 id。
             else -> nm.createNotificationChannel(
-                NotificationChannel(channelId, "任务完成", NotificationManager.IMPORTANCE_DEFAULT).apply {
-                    description = "dsh 生成结束时提醒你（App 在后台时才发）"
+                NotificationChannel(channelId, "任务完成", NotificationManager.IMPORTANCE_HIGH).apply {
+                    description = "dsh 生成结束时提醒你（App 在后台时才发），会浮到屏幕上"
                     setShowBadge(true)
                 }
             )
@@ -156,6 +178,8 @@ object Notifier {
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
         val text = title?.takeIf { it.isNotBlank() } ?: "回到 App 看结果"
+        // 弹不弹横幅由**渠道重要性**决定（CATEGORY 只是一句语义标注）：HIGH + 有提示音
+        // 才会浮到屏幕上。所以这里保持 CATEGORY_STATUS 的语义，不去蹭 MESSAGE/CALL。
         val n = Notification.Builder(context, CHANNEL_TURN)
             .setContentTitle("dsh 做完了")
             .setContentText(text)
