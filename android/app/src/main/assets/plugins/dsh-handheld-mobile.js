@@ -385,6 +385,38 @@ window.__ModuleLoader__.load({
   [data-sidebar-right-panel="fullscreen"] button[data-sidebar-right-mode] {
     display: none !important;
   }
+
+  /* ---------- 10. 输入框上方那行统计（data-composer-stats）：把手机宽度用满 ----------
+     宿主（client/ui-chat 的 StatsPills）给这一行的样式是：
+         width:100%; max-width:--dsh-chat-content-width;
+         padding:4px calc(--dsh-composer-side-clearance + 16px) 0; justify-content:center;
+     --dsh-composer-side-clearance 是 16px（client/ui-conversation 的 ConversationView），
+     所以左右各留 32px；而 --dsh-chat-content-width 在窄屏恒取下限 680px
+     （clamp(680px, 列宽 * .64, 920px)），max-width 根本不起作用 —— 384px 的一行只剩 320px。
+
+     两个胶囊「9 轮 298 步 · 111 tok/s」「62.6M tok · 缓存命中 98%」总共要 ≈361px，
+     于是**两个都被省略号吃掉一截**，而两侧还空着 32px。本地渲染回环实测
+     （scripts/ 外的 fixture，见下）：label scrollWidth 142/155 > clientWidth 121/135，
+     物理宽度 360/384/412px 全部截断，到 448px 才装得下；截图一眼就是「没用满宽度」。
+
+     改法：左右各 12px（那张 composer 卡的留白是 16px）、两个胶囊分列两端
+     （space-between 把余量吃掉，而不是堆在中间）、字号 12px、分隔符左右 3px。
+     只在 ≤560px 生效：横屏与小平板上宿主那套居中布局本来就装得下（448px 起不截断），
+     不能让它们也贴到屏幕两边。判据见 docs/mobile-adaptation.md「统计行」。 */
+  @media (max-width: 560px) {
+    [data-composer-stats] {
+      max-width: none !important;
+      padding-left: 12px !important;
+      padding-right: 12px !important;
+      justify-content: space-between !important;
+      gap: 6px !important;
+      font-size: 12px !important;
+    }
+    /* 分隔符「·」宿主给了左右各 6px；窄屏收到 3px —— 两个胶囊各省 6px，共 12px 余量 */
+    [data-composer-stats] [class*="_sep"] {
+      margin: 0 3px !important;
+    }
+  }
 }
 
 /* 宽屏 / 精确指针：这一层整体退场，交给桌面布局。 */

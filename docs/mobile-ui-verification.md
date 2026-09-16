@@ -68,6 +68,22 @@ node scripts/css-lab.mjs --page file:///tmp/fixture/fixture-modal.html \
 一起演进）；fixture 页面是本机临时产物（真实的 dsh 组件 CSS 从已安装的 bundle 里抽，
 不随仓库走）。**负对照必须有**：一条永远通过的断言等于没有断言。
 
+### 零层之二：统计行的 A/B 断言（`scripts/composer-stats-lab.mjs`）
+
+`css-lab.mjs` 的探针是给抽屉/模态写的（侧栏位置、遮罩命中栈…），不量输入框上方那行统计。
+1.0.17 起这一行的窄屏重排有自己的一条断言：从**安装产物**里抽宿主那两段 CSS 搭 fixture，
+360 / 384 / 412px 各跑两遍 —— A 不注入**必须复现截断**（负对照），B 注入后不得截断、
+两侧不得留白。
+
+```sh
+node scripts/plugin-css.mjs /tmp/plugin.css
+node scripts/composer-stats-lab.mjs --css /tmp/plugin.css
+```
+
+它自己 `die()` 的地方都很明确（找不到 dsh 产物 / 找不到 chromium / 宿主那段 CSS 改名了），
+不静默跳过 —— 这一行的失败模式本来就是「一声不响地变回截断」。同上：fixture 是近似，
+最终判据仍是真机截图。
+
 ⚠️ **fixture 是近似**：这个沙箱里 Chromium 发不出任何 HTTP（`Page.navigate` 到 http://
 一律超时，`file://` 与 `data:` 可以），所以页面是照着 dsh 真实产物搭的，主题变量不全、
 视觉不可信；**几何、层叠与命中测试可信，最终判据永远是下面第三层的真机截图**。

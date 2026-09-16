@@ -39,13 +39,14 @@ App 启动 → WebView 加载 dsh 页面
 | `data-sidebar-collapsed` | **抽屉的开合信号**：宿主窄屏下的 `!narrowExpanded`，我们不自己维护开合状态 |
 | `data-sidebar-right-panel` | 右侧边栏面板（取值 `fullscreen` / `push`）：手机上它只要打开就必然是 fullscreen |
 | `data-sidebar-right-mode` | 右侧边栏那个「全屏 / 退出全屏」按钮：手机上它与「收起」是同一个动作，隐藏（见下） |
+| `data-composer-stats` | 输入框上方那行统计（轮/步 · tok/s、tokens · 缓存命中）：窄屏下重排它，把手机宽度用满（见「设计取舍」） |
 
 除这些属性，还依赖一组结构（类名是 CSS Modules 的哈希前缀，只能用 `[class*=…]` 匹配）。
 **它们同样进了契约，而且是两份清单**（2026-09-14 补，见 `known-issues.md` §六 B1）：
 
 | 清单 | 含义 | 找不到时 |
 |---|---|---|
-| `classHooks`（16 个） | dsh **核心客户端包**里的界面（`_frame` / `_sidebarCol` / `_turnStatus` / `_navList` …） | 完整检查**判失败** —— 那条适配规则已经空转 |
+| `classHooks`（17 个） | dsh **核心客户端包**里的界面（`_frame` / `_sidebarCol` / `_turnStatus` / `_navList` / `_sep` …） | 完整检查**判失败** —— 那条适配规则已经空转 |
 | `classHooksPlugin`（1 个） | **可选插件包**提供的界面（`_moreButton` 来自 `dsh-session-log-export`） | 只提示，不判失败：没装那个插件时规则本来就是空转 |
 
 局限（写下来免得当成没做）：短子串（`_split` / `_count` / `_menu`）在 dsh 里命中多个模块，
@@ -111,6 +112,18 @@ dsh 哪天改了这些，CI 的 `Mobile adaptation contract` 会红，而不是�
   在本机打开工作目录）；
   ③ 会话头那枚「⋯」（`session-log-export`：唯一功能是下载 Session 日志）。
   本项目不动服务端 composition，所以不去改宿主的判定，直接隐藏入口。
+- **统计行在窄屏用满宽度**（`data-composer-stats`，1.0.17）。宿主给这一行的是
+  `width:100% + max-width:--dsh-chat-content-width + 左右各 32px 留白 + justify-content:center`，
+  而 `--dsh-chat-content-width` 在窄屏**恒取下限 680px**（`clamp(680px, 列宽*.64, 920px)`，
+  所以 `max-width` 形同不存在），`--dsh-composer-side-clearance` 是固定的 16px ——
+  384px 的手机上只剩 **320px**。两个胶囊（`9 轮 298 步 · 111 tok/s` /
+  `62.6M tok · 缓存命中 98%`）要 ≈361px，于是**两个都被省略号吃掉一截**，而两侧还空着
+  32px（0.1.11 真机截图：`111···` / `缓存命···` —— 用户的原话是「没有利用完手机屏幕宽度」）。
+  改法：左右各 12px（composer 卡的留白是 16px）、两个胶囊分列两端（`space-between`
+  把余量吃掉，而不是堆在中间）、字号 12px、分隔符左右 3px。**只在 ≤560px 生效**：
+  448px 起宿主那套居中布局本来就装得下，不能让横屏与小平板也贴到屏幕两边。
+  断言见 `scripts/composer-stats-lab.mjs`（「怎么验证」第 3 条）—— 负对照必须复现截断，
+  否则这次「通过」不作数。
 
 ## 本版**没有**做的（与上游能力的差距，按需再补）
 
@@ -130,8 +143,19 @@ dsh 哪天改了这些，CI 的 `Mobile adaptation contract` 会红，而不是�
 
 1. **契约金丝雀**（秒级，CI）：`node scripts/check-mobile-hooks.mjs --contract`
 2. **对已安装 dsh 的完整检查**（本机）：`node scripts/check-mobile-hooks.mjs`
-   —— 断言那两个钩子确实还在 dsh 前端产物里
-3. **真机**：装 CI 产物 → `adb exec-out screencap`（不需要 debuggable）+ `uiautomator dump`
+   —— 断言这些钩子（含类名后缀）确实还在 dsh 前端产物里
+3. **统计行的 A/B 断言**（本机，需要 dsh + chromium）：
+
+   ```sh
+   node scripts/plugin-css.mjs /tmp/plugin.css
+   node scripts/composer-stats-lab.mjs --css /tmp/plugin.css
+   ```
+
+   宿主那段 CSS 从**安装产物**里现抽（不把 dsh 的样式抄进仓库），fixture 用真实 class 名；
+   360 / 384 / 412px 三个宽度各跑两遍：**A 不注入必须复现截断**（复现不了 = fixture 失真，
+   B 的通过不算证据），**B 注入后不得截断、两侧不得留白**。拿 1.0.16 的 CSS 跑会红 ——
+   所以它不是一条永远通过的断言。
+4. **真机**：装 CI 产物 → `adb exec-out screencap`（不需要 debuggable）+ `uiautomator dump`
    取无障碍树核对元素与坐标；**命中测试**（点了有没有反应）只能用 `input tap` 驱动 + 看
    实际状态变化 —— 无障碍树给不出「这一笔被谁吃住」，而 1.0.11 修的正是这一类故障
 
@@ -166,4 +190,4 @@ fixture 页面 + 真实的 dsh 组件 CSS，`file://` 加载）：见 `docs/mobi
 
 `MainActivity.MOBILE_PLUGIN_REV` 是 WebView 侧的缓存键：**内容变了必须换 rev**，否则可能
 命中旧缓存。CI 断言 App 常量与 bundle 内的 `id` 一致（`check-mobile-hooks.mjs` 的静态
-不变量）。当前为 `dsh-handheld-mobile-1.0.16`。
+不变量）。当前为 `dsh-handheld-mobile-1.0.17`（1.0.17 = 统计行窄屏重排）。

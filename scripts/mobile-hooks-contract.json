@@ -6,6 +6,7 @@
   },
   "dshHooks": [
     "data-approval-key",
+    "data-composer-stats",
     "data-phase",
     "data-plan-review-key",
     "data-question-key",
@@ -26,6 +27,7 @@
     "_options",
     "_overlayLayer",
     "_root",
+    "_sep",
     "_sidebarCol",
     "_split",
     "_titleRow",
