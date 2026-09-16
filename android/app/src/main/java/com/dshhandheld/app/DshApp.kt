@@ -265,6 +265,13 @@ class DshApp : Application() {
         // HOME 用 filesDir，与终端模式（TuiActivity）一致：两边写同一份 known_hosts，
         // TOFU 信任才不会分裂成两份。见 SshTunnel.homeDir。
         SshTunnel.homeDir = filesDir.absolutePath
+        // 开关打开着就把通知渠道准备好（顺手做一次渠道迁移：删掉旧的 dsh-turn）。
+        // 不能等到第一条通知才建：渠道是用户在系统设置里能单独调的对象，
+        // 「第一条通知之前看不到它」会让「为什么没弹横幅」变成一个查不到的空白。
+        if (prefs.getBoolean(PREF_NOTIF_TURN, false)) {
+            Notifier.ensureChannels(this, Notifier.CHANNEL_TURN)
+            Notifier.ensureChannels(this, Notifier.CHANNEL_ASK)
+        }
     }
 
     private fun pkgVersion(): String = try {
