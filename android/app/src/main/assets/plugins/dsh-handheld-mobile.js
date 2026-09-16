@@ -390,17 +390,25 @@ window.__ModuleLoader__.load({
      宿主（client/ui-chat 的 StatsPills）给这一行的样式是：
          width:100%; max-width:--dsh-chat-content-width;
          padding:4px calc(--dsh-composer-side-clearance + 16px) 0; justify-content:center;
-     --dsh-composer-side-clearance 是 16px（client/ui-conversation 的 ConversationView），
-     所以左右各留 32px；而 --dsh-chat-content-width 在窄屏恒取下限 680px
-     （clamp(680px, 列宽 * .64, 920px)），max-width 根本不起作用 —— 384px 的一行只剩 320px。
+     而它挂的槽是 composer dock（conversation.composer.dock，client/ui-conversation 的
+     .uV2eYG_root: padding 0 var(--dsh-composer-side-clearance)，即左右各 16px）。
+     于是 384px 的手机上：行宽 384-32=352，再减宿主自己那 32px 内边距 → 只剩 288px；
+     两个胶囊「9 轮 298 步 · 111 tok/s」「62.6M tok · 缓存命中 98%」在 13px 下要 ≈349px，
+     于是**两个都被省略号吃掉一截**，两侧却还空着 32px。
 
-     两个胶囊「9 轮 298 步 · 111 tok/s」「62.6M tok · 缓存命中 98%」总共要 ≈361px，
-     于是**两个都被省略号吃掉一截**，而两侧还空着 32px。本地渲染回环实测
-     （scripts/ 外的 fixture，见下）：label scrollWidth 142/155 > clientWidth 121/135，
-     物理宽度 360/384/412px 全部截断，到 448px 才装得下；截图一眼就是「没用满宽度」。
+     改法：左右各 12px、两个胶囊分列两端（space-between 把余量吃掉，而不是堆在中间）、
+     字号 11.5px、分隔符左右 2px；装不下时**换行**，不再用省略号。
 
-     改法：左右各 12px（那张 composer 卡的留白是 16px）、两个胶囊分列两端
-     （space-between 把余量吃掉，而不是堆在中间）、字号 12px、分隔符左右 3px。
+     ⚠️ 这两个数是真机校准出来的，别凭感觉改回去：
+      1. 第一版只按视口（384px）建模、以为有 360px 可用，装上真机照旧 111··· —— 漏了上面
+         那个父容器的 32px。真机截图反推：行最左的 ink 起点 37.1 CSS px
+         （= 16 父 + 12 自己 + 8 胶囊内边距 + 图标内缩），据此才定位到 .uV2eYG_root。
+      2. 12px 字号在小回环里只剩 6px 余量，真机字体（Roboto / Noto Sans CJK）更宽 → 仍截断；
+         11.5px 在 384px 下余量 22px，留得住。
+      3. flex-wrap 是兜底：窄到装不下时第二个胶囊换到下一行（各占一行、都完整）。
+         小回环对这条有 A/B 断言（含「余量 ≥ 12px」阈值）：
+         scripts/composer-stats-lab.mjs --css <plugin-css>。
+
      只在 ≤560px 生效：横屏与小平板上宿主那套居中布局本来就装得下（448px 起不截断），
      不能让它们也贴到屏幕两边。判据见 docs/mobile-adaptation.md「统计行」。 */
   @media (max-width: 560px) {
@@ -409,12 +417,14 @@ window.__ModuleLoader__.load({
       padding-left: 12px !important;
       padding-right: 12px !important;
       justify-content: space-between !important;
-      gap: 6px !important;
-      font-size: 12px !important;
+      gap: 4px !important;
+      row-gap: 2px !important;
+      flex-wrap: wrap !important;
+      font-size: 11.5px !important;
     }
-    /* 分隔符「·」宿主给了左右各 6px；窄屏收到 3px —— 两个胶囊各省 6px，共 12px 余量 */
+    /* 分隔符「·」宿主给了左右各 6px；窄屏收到 2px —— 两个胶囊各省 8px，共 16px 余量 */
     [data-composer-stats] [class*="_sep"] {
-      margin: 0 3px !important;
+      margin: 0 2px !important;
     }
   }
 }

@@ -69,7 +69,12 @@ function findDshModules() {
 
 const die = (msg) => { console.error(`\n✗ ${msg}\n`); process.exit(1); };
 
-/** 从宿主产物里抽出那一行的 CSS：`.bOPqQW_*` 与定义变量的 `.wSkVaW_root{...}`。 */
+/** 从宿主产物里抽出这一行的 CSS：`.bOPqQW_*`、定义变量的 `.wSkVaW_root{...}`、
+ *  以及**它真正的父容器** `.uV2eYG_root{...}`（composer dock，左右各 16px 内边距）。
+ *
+ * 父容器这一条是**真机逮出来的**：只按视口 384px 建模时，这条规则以为自己有 384-24=360px
+ * 可用；真机上它住在 `conversation.composer.dock` 槽里（`.uV2eYG_root`，padding 0 16px），
+ * 所以只有 352-24=328px —— 差这 32px 就是「小回环说装得下、真机仍截断」的全部原因。 */
 function extractHostCss(modules) {
   const read = (pkg) => {
     const f = path.join(modules, pkg, 'lib/client.js');
@@ -87,7 +92,14 @@ function extractHostCss(modules) {
   if (!root.includes('--dsh-composer-side-clearance') || !root.includes('--dsh-chat-content-width')) {
     die('.wSkVaW_root 里没有那两个变量了 —— 这条规则的前提变了，得重新判');
   }
-  return { stats, root };
+  const d = conv.match(/const css\$\d+ = "(\.uV2eYG_root\{[^"]*)"/);
+  if (!d) die('在 dsh-client-ui-conversation 里找不到 .uV2eYG_root（composer dock）那段 CSS —— '
+    + 'StatsPills 挂的槽还在 conversation.composer.dock 吗？');
+  const dock = d[1].split('}')[0] + '}';
+  if (!dock.includes('--dsh-composer-side-clearance')) {
+    die('.uV2eYG_root 不再吃 side-clearance 了 —— 父容器宽度变了，得重新判');
+  }
+  return { stats, root, dock };
 }
 
 function fixtureHtml(host) {
@@ -103,11 +115,13 @@ function fixtureHtml(host) {
   .wSkVaW_root{width:100%;height:100%;display:flex;flex-direction:column;
     --dsh-conversation-column-width:100vw}
   .spacer{flex:1}
-  .composerCard{height:112px;margin:0 var(--dsh-composer-side-clearance) 16px;
+  .composerCard{height:112px;margin:0 0 16px;
     border:1px solid #2A2A30;border-radius:12px;background:#121216}
 </style>
-<style>${host.stats}</style></head>
+<style>${host.stats}</style>
+<style>${host.dock}</style></head>
 <body><div class="wSkVaW_root"><div class="spacer"></div>
+<div class="uV2eYG_root">
 <div class="bOPqQW_root" data-composer-stats>
   <span class="bOPqQW_anchor"><button type="button" class="bOPqQW_pill">
     <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">
@@ -119,7 +133,8 @@ function fixtureHtml(host) {
     <span class="bOPqQW_label">${PILL_USAGE}<span class="bOPqQW_sep" aria-hidden="true">·</span>${PILL_CACHE}</span>
   </button></span>
 </div>
-<div class="composerCard"></div></div></body></html>`;
+<div class="composerCard"></div>
+</div></div></body></html>`;
 }
 
 const PROBE = `(() => {
@@ -133,6 +148,7 @@ const PROBE = `(() => {
     return {
       text: el.textContent.trim().replace(/\\s+/g, ' '),
       left: Math.round(r.left), right: Math.round(r.right), w: Math.round(r.width),
+      top: Math.round(r.top),
       truncated: lab ? lab.scrollWidth > lab.clientWidth + 1 : null,
     };
   });
@@ -140,9 +156,17 @@ const PROBE = `(() => {
   const contentR = rr.right - parseFloat(rs.paddingRight);
   const first = pills[0], last = pills[pills.length - 1];
   const avail = contentR - contentL;
+  // 真余量 = 可用宽度 - 两个胶囊的自然宽度 - 最小间距。
+  // 注意不能用「两端距离」算：space-between 本来就会把两端撑满，那个差值恒为 0。
+  const minGap = parseFloat(rs.columnGap === 'normal' ? '0' : rs.columnGap) || 0;
+  const sumW = pills.reduce((a, p) => a + p.w, 0);
   return {
     availW: Math.round(avail),
     spanW: first && last ? Math.round(last.right - first.left) : null,
+    slack: pills.length ? Math.round(avail - sumW - minGap) : null,
+    // 装不下时适配层允许换行（flex-wrap）：两个胶囊各占一行 —— 那是**有意的兜底**，
+    // 不是故障；此时「用满整行」不再成立，断言按换行与否分开判。
+    wrapped: pills.length > 1 && Math.abs(pills[0].top - pills[1].top) > 1,
     freeLeft: first ? Math.round(first.left - contentL) : null,
     freeRight: last ? Math.round(contentR - last.right) : null,
     justify: rs.justifyContent,
@@ -239,17 +263,29 @@ const main = async () => {
   console.log('');
   console.log('  宽度   A 不注入                  B 注入');
   const fails = [];
+  // 真机字体（Roboto/Noto Sans CJK）比 fixture 里的略宽，余量太小等于真机上必然截断。
+  // 0.1.17 第一版余量只有 2px，装机后照旧 `111···` / `缓存命···` —— 这条阈值就是为它加的。
+  const MIN_SLACK = 12;
   for (const w of WIDTHS) {
     const a = await measure(w, fixturePath, '');
     const b = await measure(w, fixturePath, injected);
-    const fmt = (r) => `可用 ${String(r.availW).padStart(3)}px 截断 ${r.anyTruncated ? '是' : '否'}`
-      + ` 占满 ${r.spanW === null ? '?' : Math.round((r.spanW / r.availW) * 100)}%`;
+    const fmt = (r) => (r.wrapped
+      ? `可用 ${String(r.availW).padStart(3)}px 截断 ${r.anyTruncated ? '是' : '否'} 换行 是`
+      : `可用 ${String(r.availW).padStart(3)}px 截断 ${r.anyTruncated ? '是' : '否'}`
+        + ` 余量 ${String(r.slack).padStart(3)}px`);
     console.log(`  ${String(w).padStart(4)}   ${fmt(a).padEnd(26)} ${fmt(b)}`);
     // 负对照：不加适配层就必须复现截断，否则这个 fixture 证明不了任何事
     if (!a.anyTruncated) fails.push(`${w}px：不注入时也没有截断 —— fixture 失真，B 的结论无效`);
+    // 头号判据：注入后**任何宽度下都不许截断**（换行兜底优先于省略号）
     if (b.anyTruncated) fails.push(`${w}px：注入后仍截断（${b.pills.map((p) => p.text).join(' / ')}）`);
-    if (b.freeLeft !== 0 || b.freeRight !== 0) {
-      fails.push(`${w}px：注入后两侧仍有留白（左 ${b.freeLeft}px / 右 ${b.freeRight}px）`);
+    if (!b.wrapped) {
+      if (b.freeLeft !== 0 || b.freeRight !== 0) {
+        fails.push(`${w}px：不换行时两侧仍有留白（左 ${b.freeLeft}px / 右 ${b.freeRight}px）`);
+      }
+      if (b.slack !== null && b.slack < MIN_SLACK) {
+        fails.push(`${w}px：不换行时余量只有 ${b.slack}px（要 ≥ ${MIN_SLACK}px）`
+          + ' —— 真机字体会更宽，等于没修（0.1.17 第一版就是这样翻车的）');
+      }
     }
   }
   console.log('');

@@ -112,18 +112,23 @@ dsh 哪天改了这些，CI 的 `Mobile adaptation contract` 会红，而不是�
   在本机打开工作目录）；
   ③ 会话头那枚「⋯」（`session-log-export`：唯一功能是下载 Session 日志）。
   本项目不动服务端 composition，所以不去改宿主的判定，直接隐藏入口。
-- **统计行在窄屏用满宽度**（`data-composer-stats`，1.0.17）。宿主给这一行的是
-  `width:100% + max-width:--dsh-chat-content-width + 左右各 32px 留白 + justify-content:center`，
-  而 `--dsh-chat-content-width` 在窄屏**恒取下限 680px**（`clamp(680px, 列宽*.64, 920px)`，
-  所以 `max-width` 形同不存在），`--dsh-composer-side-clearance` 是固定的 16px ——
-  384px 的手机上只剩 **320px**。两个胶囊（`9 轮 298 步 · 111 tok/s` /
-  `62.6M tok · 缓存命中 98%`）要 ≈361px，于是**两个都被省略号吃掉一截**，而两侧还空着
-  32px（0.1.11 真机截图：`111···` / `缓存命···` —— 用户的原话是「没有利用完手机屏幕宽度」）。
-  改法：左右各 12px（composer 卡的留白是 16px）、两个胶囊分列两端（`space-between`
-  把余量吃掉，而不是堆在中间）、字号 12px、分隔符左右 3px。**只在 ≤560px 生效**：
-  448px 起宿主那套居中布局本来就装得下，不能让横屏与小平板也贴到屏幕两边。
-  断言见 `scripts/composer-stats-lab.mjs`（「怎么验证」第 3 条）—— 负对照必须复现截断，
-  否则这次「通过」不作数。
+- **统计行在窄屏用满宽度**（`data-composer-stats`，1.0.18）。宿主给这一行的是
+  `width:100% + max-width:--dsh-chat-content-width + 左右各 32px 留白 + justify-content:center`；
+  而它住在 composer dock 那个槽里（`conversation.composer.dock` → `.uV2eYG_root`，左右再各 16px），
+  `--dsh-chat-content-width` 在窄屏又恒取下限 680px（所以 `max-width` 形同不存在）。
+  算下来 384px 的手机上只有 **288px** 可用，而两个胶囊（`9 轮 298 步 · 111 tok/s` /
+  `62.6M tok · 缓存命中 98%`）在 13px 下要 ≈349px —— **两个都被省略号吃掉一截**，两侧却空着
+  32px（真机截图：`111···` / `缓存命···`；用户的原话是「没有利用完手机屏幕宽度」）。
+  改法：左右各 12px、两个胶囊分列两端（`space-between` 把余量吃掉，而不是堆在中间）、
+  字号 **11.5px**、分隔符左右 2px、装不下时 **`flex-wrap` 换行**（宁可两行，也不用省略号）。
+  **只在 ≤560px 生效**：448px 起宿主那套居中布局本来就装得下，不能让横屏与小平板也贴到屏幕两边。
+
+  这一条的真机教训值得单记：**第一版只按视口宽度建模**（以为有 360px 可用），小回环全绿、
+  装上真机照旧 `111···` —— 漏了父容器那 32px，而 12px 字号在小回环里的余量只有 6px，
+  真机字体（Roboto / Noto Sans CJK 比 fixture 的字体宽一点）一宽就吃光。定位靠真机截图反推：
+  行最左的 ink 起点 37.1 CSS px = 16（父）+ 12（自己）+ 8（胶囊内边距）+ 图标内缩。
+  小回环现在按父容器建模，并把**余量 ≥ 12px** 写进断言 —— 「装是装下了」不算过，
+  要留得出真机字体的余量（`scripts/composer-stats-lab.mjs`）。
 
 ## 本版**没有**做的（与上游能力的差距，按需再补）
 
@@ -151,10 +156,11 @@ dsh 哪天改了这些，CI 的 `Mobile adaptation contract` 会红，而不是�
    node scripts/composer-stats-lab.mjs --css /tmp/plugin.css
    ```
 
-   宿主那段 CSS 从**安装产物**里现抽（不把 dsh 的样式抄进仓库），fixture 用真实 class 名；
-   360 / 384 / 412px 三个宽度各跑两遍：**A 不注入必须复现截断**（复现不了 = fixture 失真，
-   B 的通过不算证据），**B 注入后不得截断、两侧不得留白**。拿 1.0.16 的 CSS 跑会红 ——
-   所以它不是一条永远通过的断言。
+   宿主那几段 CSS 从**安装产物**里现抽（不把 dsh 的样式抄进仓库），fixture 用真实 class 名，
+   连**父容器**（composer dock）一起搭；360 / 384 / 412px 三个宽度各跑两遍：
+   **A 不注入必须复现截断**（复现不了 = fixture 失真，B 的通过不算证据），
+   **B 注入后不得截断、两侧不得留白、且不换行时余量 ≥ 12px**（真机字体更宽）。
+   拿 1.0.16 的 CSS 跑会红 —— 所以它不是一条永远通过的断言。
 4. **真机**：装 CI 产物 → `adb exec-out screencap`（不需要 debuggable）+ `uiautomator dump`
    取无障碍树核对元素与坐标；**命中测试**（点了有没有反应）只能用 `input tap` 驱动 + 看
    实际状态变化 —— 无障碍树给不出「这一笔被谁吃住」，而 1.0.11 修的正是这一类故障
@@ -190,4 +196,6 @@ fixture 页面 + 真实的 dsh 组件 CSS，`file://` 加载）：见 `docs/mobi
 
 `MainActivity.MOBILE_PLUGIN_REV` 是 WebView 侧的缓存键：**内容变了必须换 rev**，否则可能
 命中旧缓存。CI 断言 App 常量与 bundle 内的 `id` 一致（`check-mobile-hooks.mjs` 的静态
-不变量）。当前为 `dsh-handheld-mobile-1.0.17`（1.0.17 = 统计行窄屏重排）。
+不变量）。当前为 `dsh-handheld-mobile-1.0.18`（1.0.18 = 统计行窄屏重排的**校准版**；
+1.0.17 是同一改动的第一版，装到真机上仍截断 —— 内容改了就必须再换一次 rev，
+否则手机的 WebView 缓存会把旧的那份喂回来）。
