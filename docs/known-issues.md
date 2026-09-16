@@ -671,3 +671,31 @@ Notifier.turnDone → 渠道 dsh-turn（IMPORTANCE_DEFAULT），点开回到 App
 4. 反向：留在 App 前台做同样的事 —— **不应该**有通知（`turn-done` 会记进
    `DiagLog`：「App 在前台，不发通知」）
 5. 取证不必看屏幕：`adb shell dumpsys notification --noredact | grep -A3 dsh-turn`
+
+### 2026-09-17：漏掉的是「一条 turn-done 都没有」——判据取错了节点（1.0.19）
+
+用户报「完成后没有收到弹窗提醒」。先排除掉最容易误判的三项，全部正常：
+`POST_NOTIFICATIONS=granted`、`appops` 默认允许、`dsh-turn` 渠道存在（importance 3）、
+App 内的开关 `notif_turn_done=true`（日志里 `开关=true`）。
+
+真机日志（`adb logcat -s DshApp`，0.1.11 + 插件 1.0.18）：
+
+```
+00:22:33  页面报告：一轮生成开始（pageBusy=true）
+00:28:41  页面报告：一轮生成结束（367948ms，…，前台=true）→ App 在前台，不发通知
+00:29:57  页面报告：一轮生成开始（pageBusy=true）
+（此后一整小时没有第二条「页面报告」—— 那一轮早就结束了，用户也回来看过了）
+```
+
+所以不是「通知被系统吃了」，是**页面根本没报结束**：适配层的观察者在第一轮之后卡死。
+根因是判据取节点的方式：`document.querySelector('[class*="_turnStatus"]')` 只拿**第一个**，
+而对话与轨迹两个面板各挂一份同名节点 —— 隐藏的那份 `isConnected` 永远为真，
+于是 `running` 停在 true，此后再不会有「从有到无」的跃迁。
+
+改法（1.0.19）：`pick()` / `live()` 都要求 `isConnected && getClientRects().length > 0`，
+两个面板谁可见认谁；另外每 60s 发一条 `{"type":"turn-state","nodes":N}` 心跳，App 记进日志
+（兜底分支现在会打印消息内容）—— 这类故障的形态就是「一声不响地不再报」，
+没有心跳事后连「观察者死了」还是「它看错了节点」都分不出来。
+
+教训一句话：**判「在不在」不能只看 `isConnected`，要看它是否真的被布局出来**
+（`getClientRects().length`）—— 同一份 UI 被挂两份是这个前端里的常态。

@@ -158,7 +158,10 @@ class DshApp : Application() {
                     else -> Notifier.needsInput(this, title)
                 }
             }
-            else -> DiagLog.w(TAG, "未知的页面消息：${json.optString("type")}")
+            // 认不出的消息也把**内容**记下来：适配层的诊断心跳（turn-state）走的就是这条。
+            // 2026-09-17 那次「完成后没有收到弹窗提醒」，日志里只有「一条 turn-done 都没有」
+            // 可查 —— 有它就能直接看到观察者当时看到几个候选节点。
+            else -> DiagLog.w(TAG, "未知的页面消息：${json.toString().take(200)}")
         }
     }
 

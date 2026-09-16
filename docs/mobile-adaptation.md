@@ -180,11 +180,36 @@ fixture 页面 + 真实的 dsh 组件 CSS，`file://` 加载）：见 `docs/mobi
 
 | | |
 |---|---|
-| 判据（完成） | dsh 的「深度求索中…」指示器：`dsh-client-ui-chat` 的 `div[class*="_turnStatus"][role=status]`。它随 `running` 挂载/卸载，我们盯**从有到无**的那次跃迁 |
+| 判据（完成） | dsh 的「深度求索中…」指示器：`dsh-client-ui-chat` 的 `div[class*="_turnStatus"][role=status]`。它随 `running` 挂载/卸载，我们盯**从有到无**的那次跃迁。**必须是可见的那一个**（见下） |
 | 判据（等你在手机上点一下） | `[data-question-key]` / `[data-approval-key]` / `[data-plan-review-key]` —— 提问、工具审批、计划确认三张卡，pending 时挂载、回答后卸载。用 key 去重（同一张卡重渲染不会重复提醒） |
 | 通道 | `window.dshNative.postMessage(...)` —— WebView 的 `addWebMessageListener`（`androidx.webkit`），origin 只放行隧道实际会用的两个（`SshTunnel.PORT_CANDIDATES`），**只进不出**（App 不向页面发指令） |
-| 消息 | `{"type":"turn-start"}`、`{"type":"turn-done","title":…,"ms":…}`、`{"type":"needs-input","title":…,"key":…}` |
+| 消息 | `{"type":"turn-start"}`、`{"type":"turn-done","title":…,"ms":…}`、`{"type":"needs-input","title":…,"key":…}`、诊断心跳 `{"type":"turn-state","nodes":N}` |
 | 没有桥时 | 静默跳过 —— 同一份 bundle 在桌面浏览器里只是不通知，不影响适配 |
+
+### 2026-09-17：「完成后没有收到弹窗提醒」——判据必须取**可见**的那个节点（1.0.19）
+
+真机日志（`adb logcat -s DshApp`，0.1.11 + 插件 1.0.18，开关=true、权限已给、
+`dsh-turn` 渠道存在）：
+
+```
+00:22:33  页面报告：一轮生成开始（pageBusy=true）
+00:28:41  页面报告：一轮生成结束（367948ms，…，前台=true）→ App 在前台，不发通知
+00:29:57  页面报告：一轮生成开始（pageBusy=true）
+（此后一整小时：一条「页面报告」都没有 —— 那一轮早已结束，用户也回来看过了）
+```
+
+也就是说：`turn-start` 收到过两次、`turn-done` 只在第一次收到，之后**观察者卡死**。
+原因是判据只按 `found.isConnected` 判、用 `document.querySelector` 取**第一个**
+`_turnStatus`：对话与轨迹两个面板各挂一份同名节点，隐藏的那份 `isConnected` 永远为真 →
+`running` 一直停在 true → 此后再也不报结束。
+
+改法：`pick()` / `live()` 都要求 **`isConnected && getClientRects().length > 0`**
+（后者 = 真的被布局出来，`display:none` 与零尺寸都为 0），两个面板谁可见认谁。
+
+同时还加了**诊断心跳**：跑一轮期间每 60s 发一条 `{"type":"turn-state","nodes":N}`，
+App 把它记进日志（`DshApp.onPageMessage` 的兜底分支现在会打印消息内容）。
+这一层的失败模式是「一声不响地不再报」—— 没有心跳，事后只能从「一条都没有」反推，
+连「观察者死了」还是「它看错了节点」都分不出来。
 
 三条不显然的实现约束（都写在代码注释里）：
 
@@ -202,6 +227,6 @@ fixture 页面 + 真实的 dsh 组件 CSS，`file://` 加载）：见 `docs/mobi
 
 `MainActivity.MOBILE_PLUGIN_REV` 是 WebView 侧的缓存键：**内容变了必须换 rev**，否则可能
 命中旧缓存。CI 断言 App 常量与 bundle 内的 `id` 一致（`check-mobile-hooks.mjs` 的静态
-不变量）。当前为 `dsh-handheld-mobile-1.0.18`（1.0.18 = 统计行窄屏重排的**校准版**；
-1.0.17 是同一改动的第一版，装到真机上仍截断 —— 内容改了就必须再换一次 rev，
-否则手机的 WebView 缓存会把旧的那份喂回来）。
+不变量）。当前为 `dsh-handheld-mobile-1.0.19`（1.0.19 = 任务完成通知的判据改取可见节点 + 诊断心跳；
+1.0.18 = 统计行窄屏重排的校准版；1.0.17 是那一改动的第一版，装到真机上仍截断 ——
+内容改了就必须再换一次 rev，否则手机的 WebView 缓存会把旧的那份喂回来）。

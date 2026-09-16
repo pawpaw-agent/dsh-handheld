@@ -641,9 +641,11 @@ window.__ModuleLoader__.load({
       ctx.effect(function () {
         var TURN_STATUS = '[class*="_turnStatus"]';
         var MIN_TURN_MS = 1500;
+        var HEARTBEAT_MS = 60000;
         var found = null;
         var running = false;
         var startedAt = 0;
+        var lastBeat = 0;
         var disposed = false;
 
         var now = function () {
@@ -653,19 +655,50 @@ window.__ModuleLoader__.load({
         };
         var post = postToApp;
 
+        /**
+         * 「在跑」的判据必须是**可见**的那一个 —— 这是 2026-09-17 真机取证换来的。
+         *
+         * 原先只按 `found.isConnected` 判、用 `document.querySelector` 取第一个
+         * `_turnStatus`。真机上（对话 / 轨迹两个面板各挂一份）隐藏的那份 `isConnected`
+         * 永远为真 → `running` 卡在 true → **此后再也不报结束**：日志里 turn-start 收到过
+         * 两次、turn-done 只在第一次收到，之后整整一小时没有任何「页面报告」，
+         * 通知功能静默失效（用户的原话：「完成后没有收到弹窗提醒」）。
+         *
+         * 判据改成「isConnected 且 getClientRects().length > 0」：后者表示真的被布局出来
+         * （display:none / 零尺寸都为 0），两个面板谁可见就认谁。
+         */
+        var pick = function () {
+          var list = document.querySelectorAll(TURN_STATUS);
+          for (var i = 0; i < list.length; i++) {
+            var el = list[i];
+            if (el.isConnected && el.getClientRects().length > 0) return el;
+          }
+          return null;
+        };
+        var live = function (el) {
+          return el !== null && el.isConnected && el.getClientRects().length > 0;
+        };
+
         var check = function () {
           if (disposed) return;
-          var present = found !== null && found.isConnected;
-          if (!present) {
-            found = document.querySelector(TURN_STATUS);
-            present = found !== null;
-          }
+          if (!live(found)) found = pick();
+          var present = found !== null;
           var at = now();
           if (present) {
             if (!running) {
               running = true;
               startedAt = at;
+              lastBeat = at;
               post({ type: "turn-start" });
+            } else if (at - lastBeat >= HEARTBEAT_MS) {
+              // 心跳：这一层的失败模式是「一声不响地不再报」。拿不到页面日志时，
+              // 只有周期性自报能证明观察者还活着、以及它此刻看到几个候选节点。
+              // 后台的定时器会被节流到分钟级，所以取 60s（再密也没用）。
+              lastBeat = at;
+              post({
+                type: "turn-state",
+                nodes: document.querySelectorAll(TURN_STATUS).length
+              });
             }
             return;
           }
