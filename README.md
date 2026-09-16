@@ -130,6 +130,7 @@ dsh-handheld/
 │   ├── push-via-api.py                       # 增量推送（git 传输不可用时）
 │   ├── mirror-via-api.py                     # 整树镜像推送（重命名/删除时更稳）
 │   ├── check-mobile-hooks.mjs                # 移动端适配契约金丝雀（CI 门禁）
+│   ├── composer-stats-lab.mjs                # 统计行「用满宽度」的 A/B 断言（本机 + chromium）
 │   └── ui-verify.mjs                         # 真实页面渲染验证（手机视口，需联网浏览器）
 ├── docs/
 │   ├── known-issues.md                       # 已知问题与行为记录
@@ -317,10 +318,11 @@ dsh 官方 Web 前端是桌面布局，窄屏下侧栏会常驻挤占内容。�
 `addDocumentStartJavaScript` 钩住 `__DSH_BOOT__` 启动图，`shouldInterceptRequest` 从 APK
 assets 返回插件 bundle，**服务端不需要装任何插件**。
 
-**适配建立在 dsh 的 DOM 之上**：两个属性（`data-phase`、`data-sidebar-collapsed`）加三层
-结构（外壳网格与侧栏列、会话头、头部弹层）。这些**没有版本契约** —— dsh 独立演进，
-适配层钉在 `dsh-handheld-mobile-1.0.0`。dsh 改个属性名或那几层结构，适配就**静默失效**
-（抽屉不弹、布局错位），只能在手机上发现。
+**适配建立在 dsh 的 DOM 之上**：一组 `data-*` 属性（`data-phase`、`data-sidebar-collapsed`、
+`data-composer-stats` …）加若干层结构与哈希类名后缀（外壳网格与侧栏列、会话头、头部弹层、
+输入框上方那行统计）。这些**没有版本契约** —— dsh 独立演进，适配层按内容换 rev
+（当前 `dsh-handheld-mobile-1.0.17`，见 `MainActivity.MOBILE_PLUGIN_REV`）。dsh 改个属性名
+或那几层结构，适配就**静默失效**（抽屉不弹、布局错位），只能在手机上发现。
 
 因此有**契约金丝雀**在 CI 里守着：`node scripts/check-mobile-hooks.mjs --contract`
 断言适配层实际读取的钩子与提交在仓库里的 `scripts/mobile-hooks-contract.json` 完全一致
@@ -333,19 +335,21 @@ node scripts/check-mobile-hooks.mjs
 ```
 
 它会逐个断言这些钩子在当前 dsh 前端里确实存在。完整说明与「真实页面渲染验证」
-（`scripts/ui-verify.mjs`，手机视口 + A/B 对照 + 截图）见
+（`scripts/ui-verify.mjs`，手机视口 + A/B 对照 + 截图）、以及单条适配规则的 A/B 断言
+（`scripts/composer-stats-lab.mjs`，统计行用满宽度那条）见
 [`docs/mobile-ui-verification.md`](docs/mobile-ui-verification.md)。
 
 > ℹ️ **手机端适配层是本仓库自研**（`android/app/src/main/assets/plugins/dsh-handheld-mobile.js`，
-> 约 15 KB）：一个标准的 dsh 客户端插件，由 App 在 document-start 注入，服务端零改动。
+> 约 36 KB）：一个标准的 dsh 客户端插件，由 App 在 document-start 注入，服务端零改动。
 >
 > 2026-09-13 之前这一层是 vendored 的第三方 dsh-web-mobile（MIT）外加 5 个手工补丁 ——
 > 每次上游发版都要在上游文件**体内**重打一遍，补丁与上游代码混在一起说不清归属。
 > 现在它是我们自己的代码：进 git、有版本、能单独 review；上游插件与许可证已删除。
 >
-> 它依赖的 dsh DOM 钩子只有两个（`data-phase`、`data-sidebar-collapsed`），由
+> 它依赖的 dsh DOM 钩子（`data-*` 属性与哈希类名后缀，当前 8 + 17 个）由
 > `scripts/check-mobile-hooks.mjs` 对着 `scripts/mobile-hooks-contract.json` 守 —— dsh 哪天
 > 改了这些，CI 的 `Mobile adaptation contract` 会红，而不是手机上一声不响地坏掉。
+> 清单以契约文件为准，README 不抄第二份。
 >
 > 设计取舍、能力边界（本版**没有**做手势等）与验证方式见
 > [`docs/mobile-adaptation.md`](docs/mobile-adaptation.md)；三层验证见
