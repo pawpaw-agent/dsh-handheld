@@ -630,7 +630,7 @@ ScrollView（可滚动）
 DshApp.onPageMessage
   三道闸门：用户开关 → 是否在前台 → 系统权限（Notifier.allowed）
         ↓
-Notifier.turnDone → 渠道 dsh-turn（IMPORTANCE_DEFAULT），点开回到 App
+Notifier.turnDone → 渠道 dsh-turn-hi（IMPORTANCE_HIGH，会弹横幅），点开回到 App
 ```
 
 开关在连接屏「任务完成时提醒我」（默认关闭，打开时才申请 `POST_NOTIFICATIONS`）。
@@ -670,12 +670,12 @@ Notifier.turnDone → 渠道 dsh-turn（IMPORTANCE_DEFAULT），点开回到 App
 3. 等这一轮结束，通知栏应出现「dsh 做完了 / <会话标题>」
 4. 反向：留在 App 前台做同样的事 —— **不应该**有通知（`turn-done` 会记进
    `DiagLog`：「App 在前台，不发通知」）
-5. 取证不必看屏幕：`adb shell dumpsys notification --noredact | grep -A3 dsh-turn`
+5. 取证不必看屏幕：`adb shell dumpsys notification --noredact | grep -A3 dsh-turn-hi`
 
 ### 2026-09-17：漏掉的是「一条 turn-done 都没有」——判据取错了节点（1.0.19）
 
 用户报「完成后没有收到弹窗提醒」。先排除掉最容易误判的三项，全部正常：
-`POST_NOTIFICATIONS=granted`、`appops` 默认允许、`dsh-turn` 渠道存在（importance 3）、
+`POST_NOTIFICATIONS=granted`、`appops` 默认允许、`dsh-turn` 渠道存在（当时是 importance 3）、
 App 内的开关 `notif_turn_done=true`（日志里 `开关=true`）。
 
 真机日志（`adb logcat -s DshApp`，0.1.11 + 插件 1.0.18）：
@@ -699,3 +699,24 @@ App 内的开关 `notif_turn_done=true`（日志里 `开关=true`）。
 
 教训一句话：**判「在不在」不能只看 `isConnected`，要看它是否真的被布局出来**
 （`getClientRects().length`）—— 同一份 UI 被挂两份是这个前端里的常态。
+
+### 同日追加：通知到了，但只躺在通知栏、不弹横幅
+
+修完上一条，用户的下一条反馈是「有通知但不是弹出横幅通知」。原因在**渠道重要性**：
+`dsh-turn` 建的时候是 `IMPORTANCE_DEFAULT`（3）——当初的设计是「响一声就够」，
+而**只有 `IMPORTANCE_HIGH`（4）及以上才允许 heads-up（浮到屏幕上）**。
+
+Android 的渠道重要性**创建之后 App 改不动**（只有用户能在设置里改），所以修法是换 id 重建：
+
+| | 旧 | 新 |
+|---|---|---|
+| id | `dsh-turn` | `dsh-turn-hi` |
+| 重要性 | `IMPORTANCE_DEFAULT` | `IMPORTANCE_HIGH` |
+| 表现 | 通知栏里躺着 | 浮到屏幕上（横幅） |
+
+`ensureChannels(CHANNEL_TURN)` 里顺带 `deleteNotificationChannel("dsh-turn")` ——
+留着只会让设置页多一条永远不会响的「任务完成」。这条只动渠道 id/重要性，
+页面侧与消息格式一个字没改。
+
+> 还有一层是**系统设置**，App 管不着：One UI 的「通知弹出风格」要开着（简要/详细），
+> 且该渠道没被单独关掉横幅。渠道建出来是 `mImportance=4` 之后，剩下的就归系统与用户。
