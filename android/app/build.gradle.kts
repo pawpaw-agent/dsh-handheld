@@ -59,8 +59,8 @@ android {
         // 另注：AGP 9 起 `android.sdk.defaultTargetSdkToCompileSdkIfUnset` 默认为 true，
         // 即**不写 targetSdk 就会自动跟随 compileSdk** —— 这里必须显式写死。
         targetSdk = 34
-        versionCode = 39
-        versionName = "0.1.12"
+        versionCode = 40
+        versionName = "0.1.13"
     }
 
     buildTypes {
