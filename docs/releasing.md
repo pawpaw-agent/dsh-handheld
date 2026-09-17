@@ -25,8 +25,8 @@ Android 不允许覆盖安装，必须先卸载旧版（已保存的连接配置
 GPL-3.0。**原因是 `java/com/termux/shared/terminal/io/` 下那 7 个 vendored 文件为
 GPLv3-only**（Termux `v0.118.1` 的 `termux-shared` 主许可；其 MIT 例外逐文件列举，不含
 `terminal/io/*`）。Gradle 依赖 `terminal-view` / `terminal-emulator` 本身是 Apache-2.0。
-完整核对见 `README.md` 的「Termux 组件的 vendoring」与 `docs/terminal-rewrite-plan.md`
-附录 B。
+完整核对见 `docs/terminal-rewrite-plan.md` 附录 B；7 个文件「哪几个被本地改过、
+为什么必须 vendoring」见 `docs/consolidation-audit.md` §4.1。
 
 另打包 Dropbear `dbclient` / `dropbearkey`（MIT 风格）。手机端适配层
 （`assets/plugins/dsh-handheld-mobile.js`）是本仓库自研，无第三方代码 —— 此前 vendored 的
@@ -41,7 +41,11 @@ GPLv3-only**（Termux `v0.118.1` 的 `termux-shared` 主许可；其 MIT 例外�
 
 工具链：Gradle **9.7.1** + AGP **9.4.0** + AGP **内置 Kotlin**（KGP 2.2.10）+ JDK **17**，
 `compileSdk` **36** / `targetSdk` **34**（未动）/ `minSdk` 26。`org.jetbrains.kotlin.android`
-插件已移除：AGP 9 起 `android.builtInKotlin` 默认 true，再应用它会直接构建失败。
+插件已移除：AGP 9 起 `android.builtInKotlin` 默认 true，再应用它会直接构建失败。同理
+`android.kotlinOptions{}` 也没了（内置 Kotlin 的 `jvmTarget` 默认取 `compileOptions.targetCompatibility`，
+写与不写等价）。要换比 AGP 自带的 2.2.10 更高的 KGP，只能走顶级 build 文件的
+`buildscript { classpath(...) }` —— **不能**再用 `plugins{}` 块（AGP 9 起 KGP 是 AGP 的运行时依赖，
+在 `plugins{}` 里声明它是非法组合）。
 
 依赖升级上限受**两个独立约束**，必须同时满足：① AAR 元数据的 `minCompileSdk` ≤ 当前
 `compileSdk`（36）；② 传递依赖的 `kotlin-stdlib` metadata 版本 ≤ Kotlin 编译器可读上限。
@@ -57,5 +61,5 @@ incompatible version of Kotlin`）。改用内置 Kotlin（KGP 2.2.10）后**该
 > 最吃 insets，需真机回归后再动。注意 AGP 9 起不写 `targetSdk` 会自动跟随 `compileSdk`，
 > 故必须显式写死。
 
-> 同一约束在 `android/app/build.gradle.kts` 的 `dependencies` 注释与 `README.md`
-> 的「依赖上限」里各有展开；本节是给发布说明用的短版本，结论以本节为准。
+> 同一约束在 `android/app/build.gradle.kts` 的 `dependencies` 注释里有展开，README 只留结论
+> 并指回本节；结论以本节为准。
