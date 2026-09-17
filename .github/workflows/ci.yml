@@ -334,12 +334,17 @@ jobs:
                         -storepass android -alias androiddebugkey 2>/dev/null \
                       | openssl x509 -inform DER -noout -fingerprint -sha256 \
                       | sed 's/.*=//' | tr -d ':' | tr 'A-Z' 'a-z')
-          APK_PRINT=$("$APKSIGNER" verify --print-certs "$APK" \
-                      | sed -n 's/^Signer #1 certificate SHA-256 digest: //p' | head -n1 | tr -d ' ' | tr 'A-Z' 'a-z')
+          CERTS=$("$APKSIGNER" verify --print-certs "$APK" 2>&1)
+          # 不锚定前缀：apksigner 各版本的措辞变过（本仓库踩过一次），只认「SHA-256 digest」这一行。
+          APK_PRINT=$(printf '%s\n' "$CERTS" | grep -m1 -i "sha-256 digest" \
+                      | sed 's/.*: *//' | tr -d ' :' | tr 'A-Z' 'a-z')
           echo "调试证书指纹: $DBG_PRINT"
           echo "APK 证书指纹: $APK_PRINT"
           if [ -z "$DBG_PRINT" ] || [ -z "$APK_PRINT" ]; then
             echo "::error::指纹取不到（keytool / openssl / apksigner 有一处没成）—— 拒绝把「没检查」当通过"
+            echo "--- apksigner 原始输出（前 12 行）---"
+            printf '%s\n' "$CERTS" | head -n12
+            rm -f "$RUNNER_TEMP/release.keystore" 2>/dev/null || true
             exit 1
           fi
           if [ "$APK_PRINT" = "$DBG_PRINT" ]; then
