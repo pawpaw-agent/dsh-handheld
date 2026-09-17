@@ -85,8 +85,9 @@ Width 判、`in:tabs` 去掉 `contains("H")` 那条恒真支；本地复算语�
 - **M15** —— `scripts/mirror-via-api.py` / `push-via-api.py` 以**当前远端 head** 为 parent、
   文件清单取自本地索引，能把 main 推到意外状态；这两个脚本本轮没动（我用的
   `push-chain-via-api.py` 自带 `base` 断言，不在仓库里）。
-- **M21 / M25** —— M21 要真机看清第二份 `_turnStatus` 怎么藏的（心跳 payload 已备好）；
-  M25 一半要在**完整检查**里补「属性取值」断言（要用已安装的 dsh），另一半
+- **M21** —— ✅ 已定案并修掉（rev 1.0.22：外层容器 + 嵌套子节点，两份都在视口里，
+  只有几何能区分；见上面的「M21 已定案」）。
+- **M25** —— 一半要在**完整检查**里补「属性取值」断言（要用已安装的 dsh），另一半
   （`requiredClasses` 算而不用、「仅插件包」不计入失败）可以直接改。
 
 **L6/L7/L8 改了网络与注入边界，装包后值得各跑一次冒烟**（网页能开、终端能连、会话日志能导出）。
@@ -104,6 +105,28 @@ Width 判、`in:tabs` 去掉 `contains("H")` 那条恒真支；本地复算语�
 
 | **H7** | `dsh-handheld-mobile.js` 的 `pick()`/`check()`（1.0.19 起） | 完成判据绑在**当前可见视图**上：`pick()` 要求节点被布局出来；而 `_turnStatus` 只由当前显示的会话渲染（本机 dsh 0.1.5-rc.1：chat `client.js:2553` 是 `running && <TurnStatus>`，轨迹视图里 0 处）。切会话/切「轨迹」视图时可见节点消失 → 立刻 post 一条**假 turn-done**（标题还是新会话的），随后真正的结束什么都不发 | 发一条长消息 → 切到别的会话或「轨迹」→ 离开 App | 后台收不到「做完了」通知（与用户报过的症状同族）；同时 `pageBusy` 被错误清零 | 判据按**会话身份**绑定（同一会话根/同一身份下才把「消失」当结束），或换一个不随视图卸载的宿主信号 |
 | **H8** | `dsh-handheld-mobile.js`（`if (ms < MIN_TURN_MS) return;`）、`DshApp.kt:133/137/175`、`MainActivity.kt:2108-2110` | `<1.5s` 的轮次只发 `turn-start`、不发 `turn-done`；`running=false` 只是页面局部状态 → App 侧 `pageBusy` 永远停在 true。第七路把它定为**高**（原编号 M16） | 任何 <1.5s 的指示器闪现（代码注释自己说切会话会闪） | `MainActivity.onPause` 永远走「保留定时器」分支：后台省电开关静默失效且**无界**（不会自愈） | 短轮次也补一条结束消息（由 App 决定要不要通知），或把「开始」延迟到确认不是闪现之后再发 |
+
+### M21 已定案：第二份 `_turnStatus` 是**嵌套子节点**，不是「另一个面板」
+
+真机心跳（rev 1.0.22，2026-09-17 20:44）给的现场：
+
+```json
+{"type":"turn-state","running":true,"present":true,
+ "watching":{"connected":1,"rects":1,"vis":"visible","x":32,"y":664,"w":130,"h":25,"on":1},
+ "nodes":[{"connected":1,"rects":1,"vis":"visible","disp":"flex","x":32,"y":664,"w":130,"h":25,"on":1},
+          {"connected":1,"rects":1,"vis":"visible","disp":"block","x":114,"y":667,"w":48,"h":19,"on":1}]}
+```
+
+两份节点**都在视口里、都有布局、computed visibility 都是 visible**，且第二份的矩形完全落在
+第一份里面（x 114 ∈ [32,162]、y 667 ∈ [664,689]）—— 所以它不是「对话/轨迹各挂一份」，也不是
+「两个 ChatView 实例」，而是**同一个指示器里一个嵌套元素也命中了 `[class*="_turnStatus"]`**
+（外层容器 + 内层文本/图标）。仓库里 §八 与 `mobile-adaptation.md` 的根因说明（两个面板各挂一份）
+得按这条订正。
+
+判据因此也定了：**只有几何能区分**（`rects` 与 `visibility` 两份完全一样）。1.0.22 起
+`pick()` 三级 = 「真的在视口里」→「至少被布局过且连着」→「第一个连着的」，心跳同时报
+`watching`（我们正在跟踪的那一个）—— 本次真机日志里 `watching` 正是外层容器（那个 130×25 的），
+即**挑对了**。
 
 ### H1 的证据（值得单独看）
 
