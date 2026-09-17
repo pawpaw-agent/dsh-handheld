@@ -50,20 +50,37 @@ jobs:
             echo "::error::MainActivity 里又出现了内联的注入脚本 —— 必须只从 assets 读取"
             exit 1
           fi
-          echo "✓ 注入脚本只有 assets 一份"
+          # 光有否定断言不够（审计 M13）：把「读资产 / 注入脚本」那两行删掉，上面两条都不会红，
+          # 而适配注入就静默消失了。补正向断言。
+          grep -q 'assets.open("plugins/mobile-bootstrap.js")' \
+            android/app/src/main/java/com/dshhandheld/app/MainActivity.kt \
+            || { echo "::error::MainActivity 不再从 assets 读 mobile-bootstrap.js"; exit 1; }
+          grep -q 'addDocumentStartJavaScript' \
+            android/app/src/main/java/com/dshhandheld/app/MainActivity.kt \
+            || { echo "::error::MainActivity 不再注入引导脚本（addDocumentStartJavaScript 消失）"; exit 1; }
+          echo "✓ 注入脚本只有 assets 一份，且 App 确实在读它、注入它"
 
       - name: Verify nothing CI-only ships inside the APK
         run: |
           # assets/ 会被**整个**打进 APK。这里放的东西必须是运行时真正需要的，
           # 否则每个用户都会下载到一份只对 CI 有意义的文件。
           # 真实教训：契约文件曾被放在 assets/plugins/ 下，随 0.1.4 发布包一起发了出去。
-          allowed='dsh-handheld-mobile\.js|mobile-bootstrap\.js'
-          unexpected=$(ls android/app/src/main/assets/plugins | grep -vEx "$allowed" || true)
-          if [ -n "$unexpected" ]; then
-            echo "::error::assets/plugins 里有非运行时文件（会被打进 APK）：$unexpected"
+          #
+          # 审计 M13：原先只枚举 assets/plugins/ 一个子目录（注释说的却是整个 assets/），
+          # 且 `|| true` 会把 ls 失败一起吞掉 —— 现在对整棵 assets/ 做白名单，并断言文件数非零。
+          allowed='plugins/dsh-handheld-mobile\.js|plugins/mobile-bootstrap\.js'
+          found=$(cd android/app/src/main/assets && find . -type f | sed 's|^\./||' | sort)
+          total=$(printf '%s\n' "$found" | grep -c . || true)
+          if [ "$total" -eq 0 ]; then
+            echo "::error::assets/ 里一个文件都没有 —— 这条检查空转了"
             exit 1
           fi
-          echo "✓ assets/plugins 只含运行时文件"
+          unexpected=$(printf '%s\n' "$found" | grep -vEx "$allowed" || true)
+          if [ -n "$unexpected" ]; then
+            echo "::error::assets/ 里有非运行时文件（会被打进 APK）：$unexpected"
+            exit 1
+          fi
+          echo "✓ assets/ 只含运行时文件（$total 个）"
 
   # Terminal conformance gate: proves the differential test bed still works.
   # Runs first and needs no Android SDK — it is pure JVM, so it finishes in seconds
@@ -107,12 +124,15 @@ jobs:
       - name: Verify the harness stays out of the app's dependency graph
         run: |
           cd android
+          # 必须开 pipefail（审计 M12）：默认 shell 只看管道最后一个命令的退出码，
+          # gradle 失败/配置改名时 stdout 为空 → grep 退 1 → 这步会打印 ✓ —— 不变量永久空转。
+          set -o pipefail
           if ./gradlew :app:dependencies --configuration releaseRuntimeClasspath --no-daemon \
                | grep -q "terminal-conformance"; then
             echo "::error:::app must never depend on :terminal-conformance (android.* stubs would enter the APK)"
             exit 1
           fi
-          echo "✓ :app does not depend on :terminal-conformance"
+          echo "✓ :app does not depend on :terminal-conformance（且这次查询确实跑完了）"
 
   build-dropbear:
     name: Build dropbear dbclient (arm64)
@@ -163,6 +183,8 @@ jobs:
         with:
           name: dropbear-arm64
           path: build-dropbear-output
+          # 缓存/构建写空目录时默认只 warning（审计 L10）——下游 build job 会因此拿到空 artifact。
+          if-no-files-found: error
 
   build:
     name: Build debug APK
@@ -216,13 +238,26 @@ jobs:
           ls -la android/app/src/main/jniLibs/arm64-v8a/
 
       # 签名材料只在此步落地，构建后立即删除；绝不写入仓库。
+      #
+      # ⚠️ 判据必须与 Gradle 的 `hasReleaseSigning` **逐项一致**（审计 H3）：那边要求四个
+      # 变量全部非空，这边原先只看 keystore 一个 —— 于是「keystore 有、密码类 secret 缺一个」
+      # 时这里不告警、还报 available=true，而 Gradle 用公开的 debug.keystore 签，
+      # 产物名却与正式包一模一样。现在四缺一就明确标记 + 告警。
       - name: Materialize release signing material
         id: signing
         env:
           KEYSTORE_B64: ${{ secrets.SIGNING_KEYSTORE_BASE64 }}
+          STORE_PASSWORD: ${{ secrets.SIGNING_STORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.SIGNING_KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.SIGNING_KEY_PASSWORD }}
         run: |
-          if [ -z "$KEYSTORE_B64" ]; then
-            echo "::warning::签名 secrets 缺失，release 将回退 debug 签名；该产物不可对外分发。"
+          missing=""
+          [ -z "$KEYSTORE_B64" ] && missing="$missing SIGNING_KEYSTORE_BASE64"
+          [ -z "$STORE_PASSWORD" ] && missing="$missing SIGNING_STORE_PASSWORD"
+          [ -z "$KEY_ALIAS" ] && missing="$missing SIGNING_KEY_ALIAS"
+          [ -z "$KEY_PASSWORD" ] && missing="$missing SIGNING_KEY_PASSWORD"
+          if [ -n "$missing" ]; then
+            echo "::warning::签名 secrets 缺项：$missing —— release 将回退 debug 签名，该产物不可对外分发（artifact 会带 -debugsigned 后缀）。"
             echo "available=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
@@ -246,7 +281,11 @@ jobs:
       # 硬校验：发布产物必须「不可调试」。debuggable=true 会让 `run-as` 无需 root
       # 即可读取应用私有目录（含经 Keystore 加密前的明文回退路径），并使 WebView
       # 远程调试对整个局域网开放。此步失败即构建失败，避免误发布。
-      - name: Verify APK is not debuggable
+      #
+      # 2026-09-17 审计 M11/H3 追加三条：native 库真的进了包、versionCode 与源码一致、
+      # 签名者身份与本次 secrets 状态相符 —— 原先只查了「不可调试」这一条，
+      # 而它和「这个包能不能用」几乎正交。
+      - name: Verify release APK identity
         run: |
           APK=android/app/build/outputs/apk/release/app-release.apk
           test -f "$APK" || { echo "::error::未找到 release APK"; exit 1; }
@@ -260,11 +299,51 @@ jobs:
           echo "✓ application-debuggable 不存在（不可调试）"
           "$AAPT" dump badging "$APK" | grep -E "^package|^application-label|sdkVersion|targetSdkVersion"
 
+          # 1) native 库必须在包里：dbclient/dropbearkey 是**子进程 exec** 的，缺 .so 不是崩溃，
+          #    而是「隧道永远起不来」（binPath=null）。useLegacyPackaging=true 才会解包出真实路径。
+          #    （dropbearconvert 要等私钥导入那支合进来才进包，那时把 libdropbearconvert.so 加进这个列表。）
+          for lib in libdbclient.so libdropbearkey.so; do
+            unzip -l "$APK" | grep -q "lib/arm64-v8a/$lib" \
+              || { echo "::error::APK 里没有 lib/arm64-v8a/$lib"; exit 1; }
+          done
+          echo "✓ native 库都进包了"
+
+          # 2) versionCode 必须与源码一致：发版忘了提版本号时，两个包无法互相覆盖升级。
+          SRC_CODE=$(sed -n 's/^ *versionCode = \([0-9]*\).*/\1/p' android/app/build.gradle.kts | head -n1)
+          APK_CODE=$("$AAPT" dump badging "$APK" | sed -n "s/.*versionCode='\([0-9]*\)'.*/\1/p" | head -n1)
+          if [ -z "$SRC_CODE" ] || [ "$SRC_CODE" != "$APK_CODE" ]; then
+            echo "::error::versionCode 不一致：源码=$SRC_CODE APK=$APK_CODE"
+            exit 1
+          fi
+          echo "✓ versionCode 一致（$APK_CODE）"
+
+          # 3) 签名者身份与本次 secrets 状态相符（审计 H3）：正式签名时**不得**是 Android 调试
+          #    证书；回退时必须是它（上面已经告警，产物名也会带 -debugsigned）。
+          APKSIGNER=$(ls "$ANDROID_HOME"/build-tools/*/apksigner | sort | tail -n1)
+          DN=$("$APKSIGNER" verify --print-certs "$APK" \
+                 | sed -n 's/^Signer #1 certificate DN: //p' | head -n1)
+          echo "签名者 DN: $DN"
+          case "$DN" in
+            *"Android Debug"*)
+              if [ "${{ steps.signing.outputs.available }}" = "true" ]; then
+                echo "::error::secrets 齐全，却签成了 debug 证书 —— 拒绝把这份产物当正式包"
+                exit 1
+              fi
+              echo "::warning::回退 debug 签名（secrets 缺项），该产物不可对外分发"
+              ;;
+            *)
+              echo "✓ 使用发布签名（非调试证书）"
+              ;;
+          esac
+
       - name: Upload APK
         uses: actions/upload-artifact@v7
         with:
-          name: dsh-handheld-release
+          # 回退签名的产物换名字：免得「同名 artifact」被当成正式包拿走（审计 H3）。
+          name: ${{ steps.signing.outputs.available == 'true' && 'dsh-handheld-release' || 'dsh-handheld-release-debugsigned' }}
           path: android/app/build/outputs/apk/release/app-release.apk
+          # artifact 路径写错时默认只 warning（审计 L10）——这里要它直接失败。
+          if-no-files-found: error
 
       # 另出一份 **debug** 包，专供真机验证移动端适配。
       #
@@ -287,3 +366,6 @@ jobs:
         with:
           name: dsh-handheld-debug
           path: android/app/build/outputs/apk/debug/app-debug.apk
+          # 这份是文档里真机取证的**唯一来源**（docs/mobile-ui-verification.md），
+          # 缺了必须红，不能只 warning（审计 L10）。
+          if-no-files-found: error
