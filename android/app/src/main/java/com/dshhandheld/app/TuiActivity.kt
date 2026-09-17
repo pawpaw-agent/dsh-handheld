@@ -399,6 +399,23 @@ class TuiActivity : Activity() {
         terminalView?.setTerminalCursorBlinkerState(false, true)
     }
 
+    /**
+     * 终端模式也算「App 在前台」（审计 M17）。
+     *
+     * 前台计数（[DshApp.onActivityStarted]）原先只有 MainActivity 参与，而它判的是
+     * 「页面报告任务完成时要不要弹通知」—— 用户在终端里时 App 明明在前台，
+     * 却会被当成「不在前台」而弹一条通知，与文档写的「App 在前台时不打扰」矛盾。
+     */
+    override fun onStart() {
+        super.onStart()
+        (application as? DshApp)?.onActivityStarted()
+    }
+
+    override fun onStop() {
+        (application as? DshApp)?.onActivityStopped()
+        super.onStop()
+    }
+
     override fun onResume() {
         super.onResume()
         startCursorBlinker()

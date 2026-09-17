@@ -50,6 +50,8 @@ object DiagLog {
     private val queue = ArrayBlockingQueue<String>(QUEUE_CAP)
 
     @Volatile private var writer: Thread? = null
+    /** 磁盘写入是否已经中断（审计 L3）：写线程因 IO 异常退出后，页头不能再说「队列满」。 */
+    @Volatile private var diskFailed = false
     @Volatile private var dir: File? = null
     @Volatile private var ringCleared = 0
     private var dropped = 0
@@ -97,6 +99,10 @@ object DiagLog {
         } catch (_: InterruptedException) {
         } catch (e: Exception) {
             android.util.Log.w(TAG, "diag.log 写入中断: ${e.message}")
+            // 置位并清 writer（审计 L3）：否则此后每行照旧入队、4096 行后 dropped 增长，
+            // 诊断页只说「队列满丢弃 N 条」—— 真正的原因（写线程死了）永远看不到。
+            diskFailed = true
+            writer = null
         }
     }
 
@@ -107,6 +113,7 @@ object DiagLog {
             ring.addLast(e)
         }
         if (writer != null && !queue.offer(line(e))) dropped++
+        // writer == null 时不再入队：diskFailed 已在 stats() 里单独说明
     }
 
     /**
@@ -159,6 +166,7 @@ object DiagLog {
             append("$n/$RING_CAP 条")
             if (cl > 0) append("，已清空过 $cl 次")
             if (d > 0) append("，队列满丢弃 $d 条")
+            if (diskFailed) append("，**磁盘写入已中断**（IO 异常后不再写文件）")
         }
     }
 
@@ -167,7 +175,21 @@ object DiagLog {
      * 只读最后 [TAIL_BYTES]，避免为了看一眼日志把整个文件读进内存。
      */
     fun persistedTail(): String {
-        val f = dir?.let { File(it, FILE_NAME) } ?: return ""
+        // 审计 M18：旋转会把上一代整体 rename 成 `diag.log.1`，而原先**全项目没有任何地方读它**
+        // —— 诊断页标着「含上一次运行」，真到崩溃后重启（最需要它的时刻）反而看不到。
+        // 现在两代都读，分段标注。
+        val prev = dir?.let { File(it, "$FILE_NAME.1") }
+        val prevText = prev?.takeIf { it.exists() && it.length() > 0L }?.let { readTail(it) }
+        val cur = readTail(dir?.let { File(it, FILE_NAME) })
+        return when {
+            prevText.isNullOrBlank() -> cur
+            cur.isBlank() -> "── 上一代（diag.log.1）──\n$prevText"
+            else -> "── 上一代（diag.log.1）──\n$prevText\n\n── 本次（diag.log）──\n$cur"
+        }
+    }
+
+    private fun readTail(f: File?): String {
+        if (f == null) return ""
         return try {
             if (!f.exists() || f.length() == 0L) return ""
             val len = f.length()

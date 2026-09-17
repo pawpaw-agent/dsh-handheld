@@ -107,6 +107,14 @@ object Notifier {
     fun allowed(context: Context): Boolean {
         val nm = context.getSystemService(NotificationManager::class.java) ?: return false
         if (!nm.areNotificationsEnabled()) return false
+        // App 级开着，用户仍可能把**单个渠道**关成 IMPORTANCE_NONE（设置里「任务完成」那一类）。
+        // 那时 notify() 是静默 no-op，而我们照样写「已发任务完成通知」——把静默失效伪装成成功
+        // （审计 M19）。渠道还没建出来时视为可用（建之前的调用本来就少见）。
+        val ch = nm.getNotificationChannel(CHANNEL_TURN)
+        if (ch != null && ch.importance == NotificationManager.IMPORTANCE_NONE) {
+            DiagLog.w(TAG, "「任务完成」渠道被用户在系统设置里关掉了，通知不会显示")
+            return false
+        }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             return context.checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) ==
                 PackageManager.PERMISSION_GRANTED

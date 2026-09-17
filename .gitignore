@@ -1,4 +1,5 @@
 node_modules/
+android/build/
 android/app/build/
 # The terminal conformance module is pure JVM; its output is local-only.
 android/terminal-conformance/build/

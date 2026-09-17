@@ -279,6 +279,19 @@ class DshApp : Application() {
      */
     fun liveTunnel(): SshTunnel? = sshTunnel?.takeIf { it.isUp }
 
+    /**
+     * 适配层 bundle 的字节（读一次，缓存）。
+     *
+     * 给 [MainActivity.DetachedWebViewClient] 用：Activity 销毁后 WebView 仍由本 Application
+     * 保活，页面若在这期间重载，`shouldInterceptRequest` 还得把 bundle 喂出去 ——
+     * 而那个 client 刻意不持 Activity，只能从 Application 拿（审计 M1）。
+     */
+    val pluginBundleBytes: ByteArray? by lazy {
+        runCatching {
+            assets.open("plugins/dsh-handheld-mobile.js").use { it.readBytes() }
+        }.onFailure { DiagLog.w(TAG, "读取适配层 bundle 失败：${it.message}") }.getOrNull()
+    }
+
     private fun notifyTunnelAlive(alive: Boolean) {
         DiagLog.i(TAG, "隧道可用性：alive=$alive（通知 ${tunnelObservers.size} 个观察者）")
         tunnelObservers.forEach { o ->

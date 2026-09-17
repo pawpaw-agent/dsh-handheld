@@ -28,6 +28,11 @@
       set: function(v){
         try {
           if (v && Array.isArray(v.entries) && Array.isArray(v.batches)) {
+            // 幂等（审计 L16）：同一文档里第二次写 __DSH_BOOT__ 时再 push 一遍，宿主解析器会抛
+            // `duplicate graph entry`，整个前端停在「Failed to load plugins」。按 id 去重即可免疫。
+            for (var i = 0; i < v.entries.length; i++) {
+              if (v.entries[i] && v.entries[i].id === "{{ID}}") { stored = v; return; }
+            }
             v.entries.push({
               id: "{{ID}}",
               url: "{{URL}}",

@@ -117,6 +117,29 @@ class MainActivity : Activity() {
             }
         }
     }
+    /**
+     * 不持 Activity 的兜底 WebViewClient（审计 M1）。
+     *
+     * 只保留一件事：把适配层 bundle 喂给页面（`shouldInterceptRequest`）——
+     * 页面在 Activity 被销毁期间重载时，这一条仍然必须成立，否则移动端适配会静默消失。
+     *
+     * 注意它是 `private class`（**不是** `inner class`）：Kotlin 的嵌套类不持有外部实例，
+     * 这正是它存在的理由。
+     */
+    private class DetachedWebViewClient(private val app: DshApp) : WebViewClient() {
+        override fun shouldInterceptRequest(
+            view: WebView?,
+            request: android.webkit.WebResourceRequest?
+        ): android.webkit.WebResourceResponse? {
+            val u = request?.url?.toString() ?: return null
+            if (!u.contains("/plugins/") || !u.contains("$MOBILE_PLUGIN_ID/client.js")) return null
+            val bytes = app.pluginBundleBytes ?: return null
+            return android.webkit.WebResourceResponse(
+                "text/javascript", "utf-8", ByteArrayInputStream(bytes)
+            )
+        }
+    }
+
     private var pendingAuth: HttpAuthHandler? = null
     private var statusView: TextView? = null
     private var sshKeyPathInput: EditText? = null
@@ -1724,8 +1747,21 @@ class MainActivity : Activity() {
         sshHost: String, sshPort: Int, sshUser: String, remotePort: Int, auth: SshTunnel.Auth
     ) {
         try {
-            SshConfig.save(prefs, buildSshConfig(sshHost, sshPort, sshUser, remotePort, auth))
-        } catch (_: Exception) {}
+            // 合并、而不是整串覆盖（审计 M20）：`toJson` 只写当前登录方式那一半，而这里是
+            // 整串覆盖 —— 于是「切到私钥连一次」就把密码删了，「切回密码」要重填。
+            // 两份都是密文存储，留着另一种方式的凭据没有额外泄漏面。
+            val prev = SshConfig.load(prefs)
+            val next = buildSshConfig(sshHost, sshPort, sshUser, remotePort, auth)
+            val merged = if (next.usesKey) {
+                next.copy(password = prev?.password.orEmpty())
+            } else {
+                next.copy(keyPath = prev?.keyPath.orEmpty(), keyPass = prev?.keyPass.orEmpty())
+            }
+            SshConfig.save(prefs, merged)
+        } catch (e: Exception) {
+            // 空 catch 是审计 A4 点过的另一件事：落盘失败必须留痕，否则「配置没了」无从查起。
+            DiagLog.w(TAG, "persistSshConfig 失败：${e.javaClass.simpleName}: ${e.message}")
+        }
     }
 
     // ── Basic Auth（WebView 隧道/反代场景）────────────────────
@@ -2150,6 +2186,19 @@ class MainActivity : Activity() {
         // WebView 仍由 DshApp 保活，但必须把它的 context 从本 Activity 上摘下来，
         // 否则旧 Activity（含整棵连接屏视图树）会被这个 Application 级引用拖住。
         app?.releaseWebViewContext()
+        // **还要摘掉三个 client**（审计 M1）：webViewClient / webChromeClient /
+        // downloadListener 都是捕获 `this@MainActivity` 的匿名对象，而它们挂在
+        // Application 保活的 WebView 上 —— 只换 context 的话，旧 Activity 依然不可回收，
+        // 而且页面回调（onPageFinished → hideErrorPage() 等）会继续打到死实例上。
+        // 换成一个只持 Application 的兜底 client：页面在没有 Activity 时重载，
+        // 仍然要能从 assets 拿到适配层 bundle。
+        val wv = webView
+        if (wv != null && app != null) {
+            wv.webViewClient = DetachedWebViewClient(app)
+            wv.webChromeClient = android.webkit.WebChromeClient()
+            wv.setDownloadListener(null)
+            DiagLog.i(TAG, "onDestroy: 已把 WebView 的三个 client 换成不持 Activity 的兜底实现")
+        }
         super.onDestroy()
     }
 

@@ -42,11 +42,15 @@
         </activity>
 
         <!-- TUI 模式（远程 dsh-tui）：软键盘需跟随终端渲染，adjustResize 保证键排不被遮挡 -->
+        <!-- configChanges 比 MainActivity 多几项（审计 M9）：深色模式 / 系统字号 / 显示大小 /
+             语言都会重建 Activity，而重建会 `startDbclient()` 新开一条 SSH、并在 onDestroy 里
+             对旧会话 `finishIfRunning()`（上游实现是 SIGKILL）—— 用户在终端里跑着东西时改一下
+             字号，远端前台进程就被连带杀掉、回看内容也没了。终端不需要因这些重建。 -->
         <activity
             android:name=".TuiActivity"
             android:exported="false"
             android:launchMode="singleTop"
-            android:configChanges="orientation|screenSize|keyboardHidden|screenLayout"
+            android:configChanges="orientation|screenSize|keyboardHidden|screenLayout|uiMode|density|fontScale|smallestScreenSize|locale|layoutDirection"
             android:windowSoftInputMode="adjustResize" />
 
         <!-- 隧道保活。specialUse：端口转发不属预置类型（dataSync 在 Android 15+ 还有
