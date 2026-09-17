@@ -55,7 +55,16 @@ bootstrap 幂等）。
 复用快路径再确认身份）、**L1**（`execOnce` 异常路径也收子进程）、**L2**（解密失败在连接屏说出来）、
 **L4**（光标闪烁回调）、**L5**（两处与实现相反的注释）。
 
-第六批（本次）：**L6**（明文 HTTP 从「全应用开关」收窄成只给 `127.0.0.1`/`localhost` 的
+第七批（`3d0222e2`）：**M6**（新增 `conformanceOracleVersion`：oracle jar 的版本必须与
+`android/app/build.gradle.kts` 里声明的 `terminal-*` 一致，取不到就失败；README 的能力声明从
+「对任何终端改动都成立」收窄成「对 oracle 的回归」）、**M7**（`in:wide-chars` 改按 East Asian
+Width 判、`in:tabs` 去掉 `contains("H")` 那条恒真支；本地复算语料：两者仍各有 3/2 个用例命中 →
+能力不落空）、**L12**（`Trace.of` 支持半程 `resize()` 且为尺寸变化本身记一步；用例名带 `resize`
+的走这条路径；oracle 的 `snapshot()` 改从当前 buffer 读行列数）。CI 输出为证：
+`✓ oracle 与 :app 的 terminal 版本一致：0.118.1`、`all 22 required capabilities are exercised ✓`、
+`ok: all 52 cases detect a terminal that draws nothing`。
+
+第六批：**L6**（明文 HTTP 从「全应用开关」收窄成只给 `127.0.0.1`/`localhost` 的
 `networkSecurityConfig`）、**L7**（`shouldInterceptRequest` 从「URL 含子串」收紧成「回环 origin +
 插件 id」）、**L8**（`addDocumentStartJavaScript` 的 origin 从 `*` 收到两个回环 origin；句柄记在
 `DshApp` 上，重建时先移除旧的，不再累积）。
@@ -70,9 +79,17 @@ bootstrap 幂等）。
 **M21**（可见性判据 —— 等真机看清第二份 `_turnStatus` 怎么藏的）、**M25**（契约只守属性名不守取值）、
 **L2 的真机面**（解密失败的提示要看得到）、**L12**（conformance 的 resize 从未触发）。
 
-已修共 36 条（H1–H3、H5–H8、M1–M5、M8–M20、M22–M24、L1、L3、L4、L5、L6、L7、L8、L9、L10、L11、
-L13–L17）。**L6/L7/L8 这三条改了网络与注入的边界，装包后值得各跑一次冒烟**（网页能开、终端能连、
-会话日志能导出）。
+**已修共 46 条**（H1–H3、H5–H8；M1–M14、M16–M20、M22–M24；L1–L17 全部）。仍未动的只剩四条：
+
+- **H4** —— 等 PR #1 合并（它已含 `resetKnownHosts` + `tunnelFailureHint`）。
+- **M15** —— `scripts/mirror-via-api.py` / `push-via-api.py` 以**当前远端 head** 为 parent、
+  文件清单取自本地索引，能把 main 推到意外状态；这两个脚本本轮没动（我用的
+  `push-chain-via-api.py` 自带 `base` 断言，不在仓库里）。
+- **M21 / M25** —— M21 要真机看清第二份 `_turnStatus` 怎么藏的（心跳 payload 已备好）；
+  M25 一半要在**完整检查**里补「属性取值」断言（要用已安装的 dsh），另一半
+  （`requiredClasses` 算而不用、「仅插件包」不计入失败）可以直接改。
+
+**L6/L7/L8 改了网络与注入边界，装包后值得各跑一次冒烟**（网页能开、终端能连、会话日志能导出）。
 
 ## 二、高 / 中高
 
