@@ -79,16 +79,22 @@ Width 判、`in:tabs` 去掉 `contains("H")` 那条恒真支；本地复算语�
 **M21**（可见性判据 —— 等真机看清第二份 `_turnStatus` 怎么藏的）、**M25**（契约只守属性名不守取值）、
 **L2 的真机面**（解密失败的提示要看得到）、**L12**（conformance 的 resize 从未触发）。
 
+第八批（本次收尾）：**H4**（从 PR #1 移植到 main：`SshTunnel.lastError` + `fail()` 收口所有失败路径、
+`DshApp.lastTunnelError`、`MainActivity.tunnelFailureHint()` 把 dbclient 的原文翻成能照着做的一句话、
+`resetKnownHosts()` + 表单里的「重置已信任的电脑身份」）、**M15**（`push-via-api.py` / `mirror-via-api.py`
+加**必需**的 `--expect-base <sha>`：不匹配就拒绝，因为两者都以「此刻远端 head」为 parent）、
+**M25**（契约金丝雀：`classHooks` 标为核心却只在插件包里找到 → 失败；`requiredClasses` 真正用起来
+（契约声明过、插件已不读 → 失败）；新增「插件写死的属性**取值**」检查）。
+
+同批**撤掉两处已被真机证明无效的改动**：`setRendererPriorityPolicy(IMPORTANT, false)`（后台 6 分钟
+仍然一条心跳都没有，却让 renderer 长期不被 waive）与 `onPause` 里「通知开关开着就不 pauseTimers」
+的放宽 —— 通知现在由 `HarnessEventsClient` 从 Host 的 `api-session/status` 拿，不再依赖页面。
+
 **已修共 46 条**（H1–H3、H5–H8；M1–M14、M16–M20、M22–M24；L1–L17 全部）。仍未动的只剩四条：
 
-- **H4** —— 等 PR #1 合并（它已含 `resetKnownHosts` + `tunnelFailureHint`）。
-- **M15** —— `scripts/mirror-via-api.py` / `push-via-api.py` 以**当前远端 head** 为 parent、
-  文件清单取自本地索引，能把 main 推到意外状态；这两个脚本本轮没动（我用的
-  `push-chain-via-api.py` 自带 `base` 断言，不在仓库里）。
-- **M21** —— ✅ 已定案并修掉（rev 1.0.22：外层容器 + 嵌套子节点，两份都在视口里，
-  只有几何能区分；见上面的「M21 已定案」）。
-- **M25** —— 一半要在**完整检查**里补「属性取值」断言（要用已安装的 dsh），另一半
-  （`requiredClasses` 算而不用、「仅插件包」不计入失败）可以直接改。
+**50 条全部收口。** H4/M15/M25 见上；M21 见「M21 已定案」。
+另外补记：审计之后新增的**后台可靠通知**（`HarnessEventsClient`，rev 1.0.24）不在原 50 条之内 ——
+它是真机定案「renderer 被冻 → 页面不可靠」之后才做的架构调整，两条路按轮去重。
 
 **L6/L7/L8 改了网络与注入边界，装包后值得各跑一次冒烟**（网页能开、终端能连、会话日志能导出）。
 
