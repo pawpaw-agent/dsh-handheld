@@ -4,15 +4,30 @@
 
 它是「终端自研」计划的**阶段 0**，但**不依赖那个计划**：自研已于 2026-09-11 中止
 （见 [`docs/terminal-rewrite-plan.md`](../../docs/terminal-rewrite-plan.md)），这个模块被保留
-下来，因为它对**任何**终端改动都成立——升级 `terminal-view`、改额外键栏、调整渲染，都在
-它的判据之内；若哪天重新考虑自研，它又是现成的起点，新实现只需在
-`Harness.implementations()` 里注册一行。
+下来，因为它是现成的起点：新实现只需在 `Harness.implementations()` 里注册一行。
+
+⚠️ **它验的是注册在 `implementations()` 里的那份实现**（今天只有一份：`libs/` 里 vendored 的
+Termux oracle）。所以准确的说法是「对 oracle 的回归」：**升级 app 的 `terminal-view` 不会自动
+被它验到** —— 那要同时更新 oracle（`tools/fetch-oracle.sh`）与语料。2026-09-17 审计（M6）
+为此加了一条断言 `conformanceOracleVersion`：oracle jar 文件名里的版本必须与
+`android/app/build.gradle.kts` 里声明的 `terminal-view`/`terminal-emulator` 版本一致，
+取不到任一边直接失败（原先两者零绑定，升级依赖后门禁照样全绿）。
 
 它不实现任何终端功能，只回答一个问题——「什么叫做对了」。
 
 本模块是**纯 JVM**（自带 `android.util` / `android.graphics` 桩类）、**不是 `:app` 的依赖**；
 CI 里有不变量在守这条：`:app` 的 release runtime classpath 一旦出现 `terminal-conformance`，
 构建直接失败。
+
+## 覆盖到哪一层
+
+- **逐片比对**：每个用例按 128 片喂入，每片都比一次屏幕摘要（不是只比最终屏幕）。
+- **中途 resize**：用例名里带 `resize` 的（如 `syn-resize-baseline`）会在流中点改一次窗口尺寸
+  （24×80 → 26×90），并**为尺寸变化本身记一步**。2026-09-17 审计（L12）发现
+  `TerminalUnderTest.resize` 此前**零调用** —— 而真机上最容易撞到的回归（旋转、软键盘弹出改
+  行列→重排）恰恰在那条路径上。
+- **覆盖率**：`conformanceCoverage` 断言语料仍覆盖一份能力清单（含按 East Asian Width 判的
+  「宽字符」；2026-09-17 审计 M7 之前那条判据是「有任一字节 ≥0x80」，等于没在守）。
 
 ## 为什么需要它
 

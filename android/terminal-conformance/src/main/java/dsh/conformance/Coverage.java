@@ -106,13 +106,23 @@ public final class Coverage {
         if (text.contains("?7l") || text.matches("(?s).*\\u001b\\[[0-9;]*[CHf].*")) {
             tags.add("in:wrap");
         }
-        if (text.contains("\t") || text.contains("H") && text.contains("\u001b[")) {
+        // 只认**真的用了 tab**（制表符字节，或 tab-clear/HT 相关序列）。
+        // 原先还有一支 `text.contains("H") && text.contains("\u001b[")`：`H` 是 CUP
+        // （`ESC[…H`）的终结字节，于是**任何**定位过光标的用例都被算成「覆盖了 tabs」
+        // —— 判据恒真（2026-09-17 审计 M7）。语料里真含 `\t` 的用例有 2 个
+        // （syn-controls-basic、syn-tab-stops），这条能力不会因此落空。
+        if (text.contains("\t")) {
             tags.add("in:tabs");
         }
         if (text.matches("(?s).*\\u001b\\[[0-9;]*g.*") || text.contains("\u001bH")) {
             tags.add("in:tabs");
         }
-        if (input.length > 0 && !isAsciiOnly(input)) {
+        // 「宽字符」按 East Asian Width 的 W/F 判（2026-09-17 审计 M7）：原先判的是
+        // 「输入里有任一字节 ≥0x80」—— 组合重音、制表符画框、Latin-1 全都算「宽」。
+        // 实测 8 个命中里 5 个一个宽字符都没有（real-dpkg-list / real-htop-screen /
+        // real-man-page / syn-utf8-box-drawing / syn-utf8-combining），于是把真正含
+        // 宽字符的 3 个用例删掉，门禁依旧全绿 —— 这条能力等于没在守。
+        if (hasWideCharacters(utf8)) {
             tags.add("in:wide-chars");
         }
         if (containsCombining(utf8)) {
@@ -233,6 +243,40 @@ public final class Coverage {
     }
 
     /** Whether the text carries a Unicode combining mark (category Mn/Mc/Me, approximated by range). */
+    /**
+     * 是否含「宽 / 全角」字符（Unicode East Asian Width = W 或 F）。
+     *
+     * <p>不引第三方表，按常用区间判：CJK 与假名/谚文、全角形式、CJK 标点与兼容表意，
+     * 以及 emoji（绝大多数属 W）。判宽了会退化成「有非 ASCII」——所以要排除
+     * 组合重音（{@code in:combining} 单独判）与制表符画框这类**窄**字符。</p>
+     */
+    private static boolean hasWideCharacters(String text) {
+        for (int i = 0; i < text.length(); ) {
+            int cp = text.codePointAt(i);
+            i += Character.charCount(cp);
+            if (isEastAsianWide(cp)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static boolean isEastAsianWide(int cp) {
+        return cp >= 0x1100 && cp <= 0x115F        // Hangul Jamo（初声）
+                || cp >= 0x2E80 && cp <= 0x303E    // CJK 部首补充 / 标点
+                || cp >= 0x3041 && cp <= 0x33FF    // 假名 … CJK 兼容
+                || cp >= 0x3400 && cp <= 0x4DBF    // CJK 扩展 A
+                || cp >= 0x4E00 && cp <= 0x9FFF    // CJK 统一表意
+                || cp >= 0xA000 && cp <= 0xA4CF    // 彝文
+                || cp >= 0xAC00 && cp <= 0xD7A3    // Hangul 音节
+                || cp >= 0xF900 && cp <= 0xFAFF    // CJK 兼容表意
+                || cp >= 0xFE30 && cp <= 0xFE6F    // CJK 兼容形式
+                || cp >= 0xFF00 && cp <= 0xFF60    // 全角形式
+                || cp >= 0xFFE0 && cp <= 0xFFE6
+                || cp >= 0x1F300 && cp <= 0x1FAFF  // emoji / 符号
+                || cp >= 0x20000 && cp <= 0x3FFFD; // CJK 扩展 B 及以后
+    }
+
     private static boolean containsCombining(String text) {
         for (int i = 0; i < text.length(); i++) {
             char ch = text.charAt(i);
@@ -244,15 +288,6 @@ public final class Coverage {
             }
         }
         return false;
-    }
-
-    private static boolean isAsciiOnly(byte[] input) {
-        for (byte b : input) {
-            if ((b & 0x80) != 0) {
-                return false;
-            }
-        }
-        return true;
     }
 
     /**

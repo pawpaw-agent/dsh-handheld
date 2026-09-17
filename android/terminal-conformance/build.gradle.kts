@@ -67,8 +67,48 @@ harnessTask("conformanceList", "List the corpus cases", "list")
  * fail. `check` is included because with one implementation registered it still
  * verifies determinism under sliced feeding.
  */
+/**
+ * Bind the vendored oracle's version to the version the app compiles against (audit M6).
+ *
+ * The oracle is a **vendored** jar (`libs/termux-terminal-emulator-<version>-classes.jar`) while
+ * `:app` resolves `terminal-view`/`terminal-emulator` from JitPack at build time. Nothing tied
+ * those two together: bumping the app to `terminal-view:0.119.0` while leaving the oracle and the
+ * corpus untouched kept this gate green — even though "upgrading terminal-view" is one of the
+ * things the README claims the gate covers. This task fails when they disagree, and also fails
+ * when either side cannot be determined (a check that cannot see its inputs must not pass).
+ */
+val oracleVersions = fileTree("libs") { include("termux-terminal-emulator-*-classes.jar") }
+    .files.map { it.name.removePrefix("termux-terminal-emulator-").removeSuffix("-classes.jar") }
+val appTerminalVersions = Regex("com\\.github\\.termux\\.termux-app:terminal-(?:view|emulator):([0-9][^\"'\\s]*)")
+    .findAll(file("../app/build.gradle.kts").readText())
+    .map { it.groupValues[1] }
+    .toSet()
+
+tasks.register("conformanceOracleVersion") {
+    group = "verification"
+    description = "Bind the vendored oracle version to :app's terminal-view/terminal-emulator version"
+    doLast {
+        val oracle = oracleVersions.singleOrNull()
+            ?: throw GradleException(
+                "libs/ 下应有且只有一个 termux-terminal-emulator-*-classes.jar（实际 ${oracleVersions.size} 个）" +
+                    " —— 取不到就说明这条检查做不了，不能当通过")
+        if (appTerminalVersions.isEmpty()) {
+            throw GradleException(
+                "在 android/app/build.gradle.kts 里没解析出 terminal-view/terminal-emulator 的版本" +
+                    " —— 依赖改名/换声明方式后这条检查会静默失效，所以这里直接失败")
+        }
+        if (!appTerminalVersions.contains(oracle)) {
+            throw GradleException(
+                "oracle 版本（$oracle）与 :app 声明的 terminal-* 版本（${appTerminalVersions.joinToString()}）不一致。" +
+                    "升级依赖时必须一起更新 oracle（tools/fetch-oracle.sh）与语料，" +
+                    "否则这道门禁验的不是 app 真正用的那份实现。")
+        }
+        logger.lifecycle("✓ oracle 与 :app 的 terminal 版本一致：$oracle")
+    }
+}
+
 tasks.register("conformance") {
     group = "verification"
-    description = "Run the full terminal conformance gate (coverage + selftest + check)"
-    dependsOn("conformanceCoverage", "conformanceSelftest", "conformanceCheck")
+    description = "Run the full terminal conformance gate (version binding + coverage + selftest + check)"
+    dependsOn("conformanceOracleVersion", "conformanceCoverage", "conformanceSelftest", "conformanceCheck")
 }

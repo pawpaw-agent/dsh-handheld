@@ -38,6 +38,16 @@ public final class Harness {
     /** Scrollback beyond the visible screen, matching a default Termux session. */
     private static final Integer TRANSCRIPT_ROWS = 200;
 
+    /**
+     * Mid-stream window size for the {@code *resize*} corpus cases (audit L12).
+     *
+     * <p>Rows and columns both change so that <em>reflow</em> is exercised, not just a
+     * plain clear: {@code TerminalUnderTest.resize} used to have zero callers, which
+     * meant the one regression a phone hits most (rotation / soft keyboard changing
+     * the pty size) was not covered by the gate at all.</p>
+     */
+    private static final int[] RESIZE_TO = {ROWS + 2, COLUMNS + 10};
+
     private Harness() {
     }
 
@@ -98,7 +108,10 @@ public final class Harness {
     }
 
     private static Trace run(TerminalUnderTest terminal, Path file) throws IOException {
-        return Trace.of(terminal, Files.readAllBytes(file));
+        String name = file.getFileName().toString();
+        // 用例名里带 resize 的走「中途改窗口尺寸」那条路径（审计 L12）。
+        int[] resizeTo = name.contains("resize") ? RESIZE_TO : null;
+        return Trace.of(terminal, Files.readAllBytes(file), resizeTo);
     }
 
     private static void dump(Path corpus, String name) throws IOException {

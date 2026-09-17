@@ -97,6 +97,11 @@ public final class TermuxOracle implements TerminalUnderTest {
     @Override
     public Screen snapshot() {
         TerminalBuffer buffer = emulator.getScreen();
+        // 尺寸从**当前** buffer 读，不能再用构造时的 rows/columns（审计 L12）：
+        // resize() 之后 screen 会换成新的 TerminalBuffer，行列数都变了；照旧尺寸读会越界
+        // 或者截掉一部分屏幕，而门禁最该覆盖的正是「resize 之后对不对」。
+        int rows = buffer.mScreenRows;
+        int columns = buffer.mColumns;
         Screen.Cell[][] cells = new Screen.Cell[rows][columns];
         boolean[] lineWrap = new boolean[rows];
         for (int row = 0; row < rows; row++) {

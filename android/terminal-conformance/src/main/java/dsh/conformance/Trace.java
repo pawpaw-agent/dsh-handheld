@@ -46,6 +46,23 @@ public final class Trace {
      * @return the recorded trace.
      */
     public static Trace of(TerminalUnderTest terminal, byte[] input) {
+        return of(terminal, input, null);
+    }
+
+    /**
+     * Same as {@link #of(TerminalUnderTest, byte[])} but, when {@code resizeTo} is
+     * non-null, changes the window size at the midpoint of the stream and records a
+     * step for the change itself.
+     *
+     * <p>Why it matters (2026-09-17 audit, L12): {@link TerminalUnderTest#resize} was
+     * declared but **never called by anything** — so reflow after a window-size change,
+     * which is the regression a phone actually hits (rotation, soft keyboard), was
+     * outside the gate entirely. The corpus case named {@code *resize*} now goes
+     * through this path.</p>
+     *
+     * @param resizeTo {@code {rows, columns}} to switch to mid-stream, or null to skip.
+     */
+    public static Trace of(TerminalUnderTest terminal, byte[] input, int[] resizeTo) {
         Trace trace = new Trace();
         // Small cases get byte-at-a-time feeding (maximum boundary stress); large
         // cases get a slice size that keeps the step count bounded, so the trace
@@ -53,9 +70,24 @@ public final class Trace {
         int slice = Math.max(1, (input.length + TARGET_SLICES - 1) / TARGET_SLICES);
         trace.sliceSize = slice;
         terminal.reset();
+        int resizeAt = input.length / 2;
+        boolean resized = false;
         for (int offset = 0; offset < input.length; offset += slice) {
+            if (resizeTo != null && !resized && offset >= resizeAt) {
+                terminal.resize(resizeTo[0], resizeTo[1]);
+                resized = true;
+                // 尺寸变化本身就是一个可观测状态（换行/回绕/光标位置都该跟着变），
+                // 所以它也占一步 —— 否则「resize 之后立刻错了、下一步才被后续输出掩盖」
+                // 这种漂移会漏过去。
+                trace.steps.add(digest(terminal.snapshot().dump()));
+            }
             int length = Math.min(slice, input.length - offset);
             terminal.feed(input, offset, length);
+            trace.steps.add(digest(terminal.snapshot().dump()));
+        }
+        if (resizeTo != null && !resized) {
+            // 空/极短用例也要覆盖到这条路径，否则「resize 从未被触发」会以另一种形式回来。
+            terminal.resize(resizeTo[0], resizeTo[1]);
             trace.steps.add(digest(terminal.snapshot().dump()));
         }
         if (input.length == 0) {
