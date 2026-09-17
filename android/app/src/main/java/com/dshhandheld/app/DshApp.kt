@@ -423,8 +423,14 @@ class DshApp : Application() {
             if (!force && cur != null && tunnelFingerprint == fp) cur else null
         }
         if (reusable != null && reusable.isHealthy()) {
-            DiagLog.i(TAG, "ensureTunnel: 复用已有隧道 ${reusable.localBaseUrl}")
-            return reusable
+            // 探针期间用户可能点了「断开连接」（closeTunnel 把 sshTunnel 置空）——
+            // 返回一条已经不在册的隧道等于把「断开」逆转（审计 M10）。这里再确认一次身份。
+            val stillOurs = synchronized(tunnelLock) { sshTunnel === reusable }
+            if (stillOurs && reusable.isUp) {
+                DiagLog.i(TAG, "ensureTunnel: 复用已有隧道 ${reusable.localBaseUrl}")
+                return reusable
+            }
+            DiagLog.i(TAG, "ensureTunnel: 复用判定期间现场已变（仍是当前隧道=$stillOurs），重新拨号")
         }
         synchronized(dialLock) {
             // 等上一次「断开」的回收线程收完旧 owner：否则新拨号会看到端口还被占着，

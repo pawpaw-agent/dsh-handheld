@@ -33,11 +33,13 @@ import com.dshhandheld.diag.DiagLog
  *    键盘/渲染/滚动/光标全部走 Termux 标准路径 —— 无任何手动桥。
  *  - 注意：argv 数组第一个元素必须是程序名（execvp(cmd, argv) 的约定）。
  *
- * 认证：dropbear 客户端密码认证依赖 getpass()（Android 无），官方 CI 采用
- * pubkey-only（DROPBEAR_CLI_PASSWORD_AUTH 0）。因此本模式使用私钥：
- *  - 连接屏已导入的私钥（ssh_json authType=key）直接使用；
- *  - 否则本 Activity 用 dropbearkey 生成一对（app 私有目录），启动一次后
- *    把公钥加到服务端 ~/.ssh/authorized_keys（日志/提示给出命令）。
+ * 认证（2026-09-17 订正，审计 L5）：本项目**两条路都可用** ——
+ *  - 密码：dropbear 的 getpass() 在 Android 上不可用，但 `scripts/localoptions.h` 开了
+ *    `DROPBEAR_CLI_PASSWORD_AUTH 1` + `DROPBEAR_USE_PASSWORD_ENV 1`，并用构建期补丁把
+ *    getpass 换成读 `DROPBEAR_PASSWORD` 环境变量（见 [launchSession] 的密码分支）。
+ *    本节此前写「官方 CI 采用 pubkey-only，因此本模式使用私钥」——与 localoptions.h 相反。
+ *  - 私钥：连接屏导入的私钥（ssh_json authType=key）直接用；没有则本 Activity 用
+ *    dropbearkey 生成一对（app 私有目录），把公钥加到服务端 authorized_keys（日志给命令）。
  *
  * 许可：Termux terminal-view/emulator 与 Dropbear 均为 permissive/GPL-3.0，
  * 本项目对应以 GPL-3.0 分发。
@@ -51,6 +53,8 @@ class TuiActivity : Activity() {
 
     private companion object {
         const val TAG = "TuiActivity"
+        /** `dropbearkey` 的等待上限（审计 M8）：挂住时不能永久停在「准备 SSH 密钥…」。 */
+        const val KEYGEN_TIMEOUT_SEC = 10L
         // 配色与连接屏共用一份定义（见 UiKit）；此前两个 Activity 各写一遍。
         const val COL_BG = UiKit.BG
         const val COL_TEXT = UiKit.TEXT
@@ -94,8 +98,10 @@ class TuiActivity : Activity() {
             isFocusable = true
             isFocusableInTouchMode = true
             defaultFocusHighlightEnabled = false
-            // 字号：Termux setTextSize 直接用 px（其 KDoc 误导）；
-            // 按密度换算，默认 15dp，A+/A- 可调（prefs tui_font_size_px）。
+            // 字号：Termux setTextSize 直接用 px（其 KDoc 误导）；按密度换算，默认 15dp。
+            // ⚠️ `tui_font_size_px` 现在**只有读、没有写**（审计 L5：全仓没有任何写入者，
+            // 也没有 A+/A- 的 UI）——所以那个 pref 恒为默认值；注释里承诺「可调」是空头支票，
+            // 要么补 UI，要么等真有需求再说。
             val density = resources.displayMetrics.density
             val defaultPx = (15 * density).toInt()
             val savedPx = getSharedPreferences("dsh-handheld", MODE_PRIVATE)
@@ -164,13 +170,13 @@ class TuiActivity : Activity() {
         val libDir = applicationInfo.nativeLibraryDir
         val dbclient = File(libDir, "libdbclient.so")
         if (!dbclient.exists()) {
-            statusView?.text = "dbclient 缺失（APK 未包含？）\n$libDir"
+            showStatus("dbclient 缺失（APK 未包含？）\n$libDir")
             return
         }
 
         val cfg = SshConfig.load(getSharedPreferences("dsh-handheld", MODE_PRIVATE))
         if (cfg == null || !cfg.isComplete) {
-            statusView?.text = "未配置 SSH，请先回连接屏填写"
+            showStatus("未配置 SSH，请先回连接屏填写")
             return
         }
 
@@ -183,13 +189,14 @@ class TuiActivity : Activity() {
 
         if (cfg.authType == SshConfig.AUTH_KEY) {
             // 认证方式：-i 导入的私钥；缺私钥时尝试自动生成（dropbearkey）。
-            statusView?.text = "准备 SSH 密钥…"
+            showStatus("准备 SSH 密钥…")
             Thread {
                 val keyPath = resolveKeyPath()
                 runOnUiThread {
                     if (isDestroyed) return@runOnUiThread
                     if (keyPath == null) {
-                        statusView?.text = "SSH 密钥不可用，请回连接屏导入私钥"
+                        // 可点重连：导入私钥后回这一屏不用退出重进（审计 M5）
+                        showStatus("SSH 密钥不可用，请回连接屏导入私钥", retryable = true)
                     } else {
                         launchSession(dbclient, cfg, baseEnv, arrayOf("-i", keyPath))
                     }
@@ -224,7 +231,7 @@ class TuiActivity : Activity() {
         //  但缩短键名/换认证方式就会漏 —— 不能靠运气。）
         DiagLog.i(TAG, "dbclient: args=${args.toList()} envKeys=${env.map { it.substringBefore('=') }}")
 
-        statusView?.text = "连接 ${cfg.user}@${cfg.host}:${cfg.port} …"
+        showStatus("连接 ${cfg.user}@${cfg.host}:${cfg.port} …")
         val client = object : TerminalSessionClient {
             // Termux 同款：新数据到达必须 onScreenUpdated() → invalidate() + 滚回底部，
             // 否则字节进了 emulator 但没人重绘，只能等光标闪烁（500ms）时机性刷新 → 打字卡顿。
@@ -233,7 +240,10 @@ class TuiActivity : Activity() {
             }
             override fun onTitleChanged(changedSession: TerminalSession) {}
             override fun onSessionFinished(finishedSession: TerminalSession) {
-                runOnUiThread { statusView?.text = "SSH 会话结束"; statusView?.visibility = View.VISIBLE }
+                // 可点重连（审计 M5）：原先这条提示**永驻**、且整个 Activity 没有任何重连入口
+                // —— 终端已死，用户只能按返回键退出重进。慢速链路下 vim 之类的退出也算一次
+                // 「会话结束」，重连按钮在这里是刚需。
+                runOnUiThread { showStatus("SSH 会话结束", retryable = true) }
             }
             override fun onCopyTextToClipboard(session: TerminalSession, text: String) {
                 // Termux 同款：长按选择 → 复制菜单 → 写入系统剪贴板。
@@ -250,7 +260,13 @@ class TuiActivity : Activity() {
             }
             override fun onBell(session: TerminalSession) {}
             override fun onColorsChanged(session: TerminalSession) {}
-            override fun onTerminalCursorStateChange(state: Boolean) {}
+            // Termux 同款（审计 L4）：远端程序 DECSET/DECRST 25（隐藏/恢复光标）时，
+            // TerminalView 的 KDoc 明确要求在这个回调里重启闪烁 —— 而 setTerminalCursorBlinkerState
+            // 一进来就把「闪烁」关掉，只在光标不可见时提前 return。空实现的结果是：
+            // 远端隐藏过光标、又经历一次后台↔前台，此后光标常亮不闪，直到下一次尺寸变化。
+            override fun onTerminalCursorStateChange(state: Boolean) {
+                if (state) startCursorBlinker()
+            }
             override fun getTerminalCursorStyle(): Int = 0
             override fun logError(tag: String, message: String) {}
             override fun logWarn(tag: String, message: String) {}
@@ -265,7 +281,7 @@ class TuiActivity : Activity() {
         )
         session = s
         terminalView?.attachSession(s)
-        statusView?.visibility = View.GONE
+        clearStatus()
 
         // Termux 同款启动逻辑：聚焦终端 + 延迟拉起软键盘（等窗口/焦点稳定）。
         // attachSession 后 TerminalView 会经 updateSize() 拿到实际尺寸并回调
@@ -273,6 +289,39 @@ class TuiActivity : Activity() {
         terminalView?.requestFocus()
         terminalView?.postDelayed({ showSoftKeyboard() }, 300)
         DiagLog.i(TAG, "dbclient started via TerminalSession")
+    }
+
+    /**
+     * 显示覆盖整屏的状态提示。
+     *
+     * `retryable = true` 时点它一下就能重新发起会话（审计 M5：会话结束/失败的提示原先永驻，
+     * 而整个 Activity 没有任何重连路径 —— 只能退出重进）。
+     */
+    private fun showStatus(text: String, retryable: Boolean = false) {
+        val v = statusView ?: return
+        v.text = if (retryable) "$text\n\n（点这里重连）" else text
+        v.visibility = View.VISIBLE
+        v.isClickable = retryable
+        v.setOnClickListener(if (retryable) View.OnClickListener { retrySession() } else null)
+    }
+
+    /** 收起提示（连上以后）。 */
+    private fun clearStatus() {
+        statusView?.apply {
+            visibility = View.GONE
+            isClickable = false
+            setOnClickListener(null)
+        }
+    }
+
+    /** 丢掉旧会话再走一遍启动流程（[showStatus] 的可点重连）。 */
+    private fun retrySession() {
+        DiagLog.i(TAG, "retrySession: 用户点了重连")
+        session?.let { runCatching { it.finishIfRunning() } }
+        session = null
+        terminalView?.let { runCatching { it.onScreenUpdated() } }
+        clearStatus()
+        startDbclient()
     }
 
     /**
@@ -294,10 +343,25 @@ class TuiActivity : Activity() {
         if (!key.exists()) {
             val dbkey = File(libDir, "libdropbearkey.so")
             if (!dbkey.exists()) return null
-            val gen = ProcessBuilder(dbkey.absolutePath, "-t", "ed25519", "-f", key.absolutePath)
-                .redirectErrorStream(true).start()
-            gen.waitFor()
-            if (!key.exists()) { DiagLog.e(TAG, "dropbearkey failed"); return null }
+            // 整段兜住（审计 M8）：`start()` 在文件在但不可执行/SELinux 拒绝时抛 IOException，
+            // 而这是**后台线程**——未捕获异常会让 Android 直接杀掉整个进程（不是弹个提示）。
+            // 同时 waitFor 必须带超时：dropbearkey 挂住时原先会永久停在「准备 SSH 密钥…」。
+            val ok = try {
+                val gen = ProcessBuilder(dbkey.absolutePath, "-t", "ed25519", "-f", key.absolutePath)
+                    .redirectErrorStream(true).start()
+                if (!gen.waitFor(KEYGEN_TIMEOUT_SEC, java.util.concurrent.TimeUnit.SECONDS)) {
+                    DiagLog.e(TAG, "dropbearkey 超时（${KEYGEN_TIMEOUT_SEC}s），杀掉它")
+                    gen.destroy()
+                    if (!gen.waitFor(1, java.util.concurrent.TimeUnit.SECONDS)) gen.destroyForcibly()
+                    false
+                } else {
+                    true
+                }
+            } catch (e: Exception) {
+                DiagLog.e(TAG, "dropbearkey 起不来/被中断：${e.javaClass.simpleName}: ${e.message}")
+                false
+            }
+            if (!ok || !key.exists()) { DiagLog.e(TAG, "dropbearkey failed"); return null }
             DiagLog.i(TAG, "generated key at ${key.absolutePath}")
         }
         // 输出公钥到日志（方便用户加到服务端 authorized_keys）

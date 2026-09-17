@@ -353,6 +353,14 @@ class SshTunnel(
                 }
                 continue
             }
+            // 探针最长 4.5s，期间用户可能已经「断开连接」（= close()）——发布前**再复查一次**
+            // （审计 M10：原先那次复查在探针之前，覆盖不到这个窗口；命中后会把一条已经作废的
+            // 隧道认领回来，「断开」被后台结果逆转）。
+            if (!started.get()) {
+                DiagLog.i(TAG, "探针期间隧道已被关闭，放弃本次连接结果")
+                reap(p)
+                return false
+            }
             proc = p
             localPort = port
             val base = "http://127.0.0.1:$port"
@@ -468,34 +476,49 @@ class SshTunnel(
         )
         if (auth is Auth.KeyPair) args += listOf("-i", auth.privateKeyFile.absolutePath)
         args += listOf("$sshUser@$sshHost", cmd)
+        // `p` 声明在 try **外面**（审计 L1）：异常路径（线程被中断等）原先直接 return null，
+        // 把这个子进程留到远端命令结束或 keepalive 超时（~90s）；而它又从不进 `spawned`，
+        // `killAll()` 也够不着它。
+        var p: Process? = null
         return try {
             val pb = ProcessBuilder(args).redirectErrorStream(true)
             pb.environment().clear()
             baseEnv().forEach { (k, v) -> pb.environment().put(k, v) }
-            val p = pb.start()
+            val proc = pb.start()
+            p = proc
             val out = StringBuffer()
             val reader = Thread {
-                try { p.inputStream.bufferedReader().forEachLine { out.append(it).append('\n') } }
+                try { proc.inputStream.bufferedReader().forEachLine { out.append(it).append('\n') } }
                 catch (_: Exception) {}
             }.apply { isDaemon = true; start() }
             val deadline = System.currentTimeMillis() + timeoutMs
-            while (p.isAlive && System.currentTimeMillis() < deadline) Thread.sleep(100)
-            if (p.isAlive) {
+            while (proc.isAlive && System.currentTimeMillis() < deadline) Thread.sleep(100)
+            if (proc.isAlive) {
                 // 超时也要**确实**收掉：留着的话它占着一条 SSH 会话不下来
-                p.destroy()
-                if (!p.waitFor(1_000, TimeUnit.MILLISECONDS)) p.destroyForcibly()
+                proc.destroy()
+                if (!proc.waitFor(1_000, TimeUnit.MILLISECONDS)) proc.destroyForcibly()
             }
             reader.join(500)
             out.toString().trim().takeIf { it.isNotEmpty() }
         } catch (e: Exception) {
             DiagLog.w(TAG, "execOnce failed: ${e.message}")
+            runCatching {
+                p?.let { if (it.isAlive) { it.destroy(); if (!it.waitFor(1_000, TimeUnit.MILLISECONDS)) it.destroyForcibly() } }
+            }
             null
         }
     }
 
     override fun close() {
         started.set(false)
-        reconnectThread?.interrupt()
+        // join 一下（审计 M10）：原先只 interrupt，看门狗可能正好在 connectOnce 里，
+        // 于是 close 返回之后它还会把结果发布出来 —— 「断开必须赢」就又漏了一个窗口。
+        // close() 的调用方都在后台线程（DshApp.closeTunnel 起 worker、ensureTunnel 在拨号线程）。
+        reconnectThread?.let { th ->
+            th.interrupt()
+            runCatching { th.join(WATCHDOG_JOIN_MS) }
+                .onFailure { Thread.currentThread().interrupt() }
+        }
         reconnectThread = null
         killAll()
         localBaseUrl = null
@@ -508,6 +531,9 @@ class SshTunnel(
         private const val LOCAL_READY_TIMEOUT_MS = 15_000L
         private const val MAX_ATTEMPTS = 3
         private const val REAP_WAIT_MS = 1_500L
+
+        /** `close()` 等看门狗收尾的上限（审计 M10）。 */
+        private const val WATCHDOG_JOIN_MS = 1_000L
 
         /** 隧道 keepalive / 健康检查周期。 */
         private const val PROBE_INTERVAL_MS = 30_000L

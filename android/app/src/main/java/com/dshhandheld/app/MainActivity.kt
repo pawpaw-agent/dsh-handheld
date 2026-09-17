@@ -346,7 +346,14 @@ class MainActivity : Activity() {
      */
     private fun heroSubtitle(tunneled: Boolean): String {
         val saved = SshConfig.load(prefs)
-        if (saved == null || !saved.isComplete) return "还没配置过"
+        if (saved == null || !saved.isComplete) {
+            // 区分「从来没配过」与「配置在、但解不开」（审计 L2）：后者是密钥失效/密文损坏，
+            // 用户需要知道「要重新填」而不是以为 App 自己忘了。
+            if (SecurePrefs.lastUndecryptableKey == SshConfig.PREF_KEY) {
+                return "保存的连接配置无法解密，请重新填写"
+            }
+            return "还没配置过"
+        }
         // SSH 端口是 22 就不写出来：默认值写出来只是噪音（dsh 端口同理，见设置卡摘要）
         val port = if (saved.port == SshConfig.DEFAULT_SSH_PORT) "" else ":${saved.port}"
         return if (tunneled) "${saved.user}@${saved.host}$port"

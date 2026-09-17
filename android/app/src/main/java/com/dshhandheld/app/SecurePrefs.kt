@@ -132,6 +132,16 @@ object SecurePrefs {
      * 读敏感项。读到明文旧值时**顺带迁移**为密文（best-effort：加密不可用则保持明文，
      * 不阻断功能——宁可暂时明文也不要让用户连不上）。
      */
+    /**
+     * 最近一次「密文在、但解不开」的 key（审计 L2）。
+     *
+     * 进程内一次性信号：上层（连接屏）据此把「还没配置过」换成一句能让人行动的提示。
+     * 不做持久化 —— 它描述的是**本次进程**读配置时的状态。
+     */
+    @Volatile
+    var lastUndecryptableKey: String? = null
+        private set
+
     fun getString(prefs: SharedPreferences, key: String): String? {
         val raw = prefs.getString(key, null) ?: return null
         if (!raw.startsWith(CIPHER_PREFIX)) {
@@ -140,7 +150,12 @@ object SecurePrefs {
             return raw
         }
         val plain = decrypt(raw)
-        if (plain == null) DiagLog.w(TAG, "SecurePrefs: $key 解密失败（密钥失效？），按未配置处理")
+        if (plain == null) {
+            DiagLog.w(TAG, "SecurePrefs: $key 解密失败（密钥失效？），按未配置处理")
+            // 记下「是密文但解不开」这件事（审计 L2）：否则上层无法区分它与「从来没配过」，
+            // 用户看到的是 App「忘了」配置、也没有任何解释，只能全部重填。
+            lastUndecryptableKey = key
+        }
         return plain
     }
 
