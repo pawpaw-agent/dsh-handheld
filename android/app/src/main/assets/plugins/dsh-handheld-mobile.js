@@ -656,6 +656,11 @@ window.__ModuleLoader__.load({
         var TURN_STATUS = '[class*="_turnStatus"]';
         var MIN_TURN_MS = 1500;
         var HEARTBEAT_MS = 60000;
+        // 存活探针周期（2026-09-17 真机诊断）：renderer 被系统 waive/冻结时它就会消失 ——
+        // 「在后台收不到完成通知」到底是「信号没发出来」还是「页面根本没在跑」，靠它分辨。
+        var TICK_MS = 300000;
+        var checks = 0;
+        var mutations = 0;
         var found = null;
         var running = false;
         var startedAt = 0;
@@ -751,6 +756,7 @@ window.__ModuleLoader__.load({
 
         var check = function () {
           if (disposed) return;
+          checks++;
           if (!live(found)) found = pick();
           var present = found !== null;
           var at = now();
@@ -784,12 +790,30 @@ window.__ModuleLoader__.load({
           }
         };
 
-        var observer = new MutationObserver(check);
+        var observer = new MutationObserver(function () {
+          mutations++;
+          check();
+        });
         observer.observe(document.documentElement, { childList: true, subtree: true });
+        // 定时器也跑 check()：mutation 只是**触发源**之一，定时复查能在「DOM 变了但回调被合并/
+        // 漏掉」时兜住；它同时是存活探针的载体（renderer 被冻时这条就没了）。
+        var tickTimer = window.setInterval(function () {
+          if (disposed) return;
+          check();
+          post({
+            type: "turn-tick",
+            checks: checks,
+            mutations: mutations,
+            present: present,
+            running: running,
+            vis: document.visibilityState || "?",
+          });
+        }, TICK_MS);
         check();
         return function () {
           disposed = true;
           observer.disconnect();
+          window.clearInterval(tickTimer);
         };
       }, "dsh-handheld-mobile: turn watcher");
 

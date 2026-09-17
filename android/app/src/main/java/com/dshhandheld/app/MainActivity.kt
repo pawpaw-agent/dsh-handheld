@@ -433,7 +433,7 @@ class MainActivity : Activity() {
         // id 必须与那个 bundle 内的 `id: "dsh-handheld-mobile"` 一致，改不得（CI 有断言）。
         // rev 只是 WebView 侧的缓存键：内容变更必须换 rev，否则可能命中旧缓存。
         const val MOBILE_PLUGIN_ID = "dsh-handheld-mobile"
-        const val MOBILE_PLUGIN_REV = "dsh-handheld-mobile-1.0.22"
+        const val MOBILE_PLUGIN_REV = "dsh-handheld-mobile-1.0.23"
         const val MOBILE_PLUGIN_URL = "/plugins/??$MOBILE_PLUGIN_ID/client.js&rev=$MOBILE_PLUGIN_REV"
 
         /**
@@ -2247,9 +2247,17 @@ class MainActivity : Activity() {
         // JavaScript timers"），而「这一轮结束了」这个信号要靠页面里的 React 重新渲染出来
         // —— 定时器一停，渲染与观察者都可能推迟到用户回到 App 才跑，任务完成通知就永远不会响。
         // 代价是后台时多耗一点电，所以只在真有活干的时候让路（空闲即暂停）。
-        val busy = (application as? DshApp)?.pageBusy == true
-        if (busy) DiagLog.i(TAG, "onPause: 页面正在生成，保留定时器（任务完成通知依赖它）")
-        else webView?.pauseTimers()
+        // 只要**通知开关开着**就让路（2026-09-17 真机诊断把这条判断收窄了）：任务完成通知
+        // 完全依赖页面把「结束了」渲染出来，而 renderer 一旦被系统 waive/冻结 JS 就停了 ——
+        // 所以用户要通知时后台必须让页面活着。代价是多耗一点电，用户可以用开关自己关掉。
+        val app = application as? DshApp
+        val notifyOn = app?.turnNotifyEnabled() == true
+        val busy = app?.pageBusy == true
+        if (notifyOn) {
+            DiagLog.i(TAG, "onPause: 通知开关开着，保留定时器（busy=$busy，任务完成通知依赖页面渲染）")
+        } else {
+            webView?.pauseTimers()
+        }
     }
 
     @Deprecated("Deprecated in Java")

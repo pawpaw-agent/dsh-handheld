@@ -78,6 +78,15 @@ class DshApp : Application() {
         retainedWebViewContext = w
         return WebView(w).also { view ->
             retainedWebView = view
+            // 渲染进程优先级（2026-09-17 真机诊断）：页面里的「这一轮结束了」信号靠 React 重新
+            // 渲染，而 WebView 的 renderer 是**独立子进程**（dumpsys 里那串 SandboxedProcessService，
+            // 不可见时状态就是 WPRI = waived priority）—— 它被系统 waive/冻结之后 JS 不再跑、
+            // DOM 不再更新，于是「在后台收不到完成通知」：实测 21:01 那次成功是退到后台 31s 内
+            // 结束的（还没被冻），更久的两次连一条 turn-start/turn-done 都没有（页面根本没渲染）。
+            // IMPORTANT + waivedWhenNotVisible=false = 明确要求「不可见也别放弃这个 renderer」。
+            runCatching {
+                view.setRendererPriorityPolicy(WebView.RENDERER_PRIORITY_IMPORTANT, false)
+            }.onFailure { DiagLog.w(TAG, "setRendererPriorityPolicy 失败：${it.message}") }
             attachPageBridge(view)
         }
     }
@@ -152,6 +161,11 @@ class DshApp : Application() {
                     foreground -> DiagLog.i(TAG, "App 在前台，不发通知")
                     else -> Notifier.turnDone(this, title)
                 }
+            }
+            "turn-tick" -> {
+                // 每 5 分钟一条的存活探针：JS 到底有没有在跑（renderer 被冻就没有这一条）。
+                // 2026-09-17 那几次「后台收不到通知」就是靠它定性的，别删。
+                DiagLog.i(TAG, "页面存活探针：${json}")
             }
             "turn-state" -> {
                 // 诊断心跳：页面每隔 60s（且这期间有过 DOM 变化）自报一次「它看见什么」。
@@ -285,6 +299,9 @@ class DshApp : Application() {
      * 判据是非阻塞的 [SshTunnel.isUp]（进程在 + 端口占着），主线程可以随时调。
      */
     fun liveTunnel(): SshTunnel? = sshTunnel?.takeIf { it.isUp }
+
+    /** 「任务完成」通知开关是否开着（页面在后台是否必须保持活着由它决定，见 MainActivity.onPause）。 */
+    fun turnNotifyEnabled(): Boolean = prefs.getBoolean(PREF_NOTIF_TURN, false)
 
     /**
      * 适配层 bundle 的字节（读一次，缓存）。
