@@ -44,9 +44,17 @@ const REPO = path.resolve(path.dirname(new URL(import.meta.url).pathname), '..')
 const BUNDLE = path.join(REPO, 'android/app/src/main/assets/plugins/dsh-handheld-mobile.js');
 const BOOTSTRAP_SRC = path.join(REPO, 'android/app/src/main/assets/plugins/mobile-bootstrap.js');
 
-// 与 MainActivity 的常量保持一致（id 必须与 bundle 内部一致；rev 是缓存键）
-const PLUGIN_ID = 'dsh-handheld-mobile';
-const PLUGIN_REV = 'dsh-handheld-mobile-1.0.16';
+// id / rev **从 MainActivity.kt 解析**（审计 L9）：原先手抄第二份，注释还写着「与 MainActivity
+// 的常量保持一致」——而它已经停在 1.0.16（App 早就是 1.0.19+），且没有任何断言守这件事。
+// harness 必须跑与 App 同一份常量，否则它验证的「引导逻辑」和 App 执行的不是一个东西。
+const MAIN_ACTIVITY = path.join(REPO, 'android/app/src/main/java/com/dshhandheld/app/MainActivity.kt');
+const ktConst = (name) => {
+  const m = readFileSync(MAIN_ACTIVITY, 'utf8').match(new RegExp(`${name}\\s*=\\s*"([^"]+)"`));
+  if (!m) throw new Error(`MainActivity.kt 里找不到 ${name}`);
+  return m[1];
+};
+const PLUGIN_ID = ktConst('MOBILE_PLUGIN_ID');
+const PLUGIN_REV = ktConst('MOBILE_PLUGIN_REV');
 const PLUGIN_URL = `/plugins/??${PLUGIN_ID}/client.js&rev=${PLUGIN_REV}`;
 
 const CHROME = process.env.CHROME_BIN

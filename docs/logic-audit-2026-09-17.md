@@ -50,8 +50,20 @@
 另一种凭据）、**L3**（写线程死掉→`diskFailed`）、**L13/L14/L16**（文档版本头、`.gitignore`、
 bootstrap 幂等）。
 
-仍未动：H4（等 PR #1 合并，它已有 `resetKnownHosts`/`tunnelFailureHint`）、M5–M8、M10、M14、
-M21、M23、M25、L1、L2、L4–L12、L15、L17。
+第四批（`de33922c`）：**M5**（终端会话结束/失败可点重连 + 5 处提示统一收口）、**M8**（生成私钥的
+后台线程兜异常 + `waitFor` 超时）、**M10**（探针后复查 `started`；`close()` join 看门狗；
+复用快路径再确认身份）、**L1**（`execOnce` 异常路径也收子进程）、**L2**（解密失败在连接屏说出来）、
+**L4**（光标闪烁回调）、**L5**（两处与实现相反的注释）。
+
+第五批（本次）：**M23**（抽屉的「点一下收起来」跟 `MOBILE_QUERY` 一起退场）、**L15**（那条 padding
+规则锚定到会话头）、**L17**（标记观察者也听 `data-handheld` 的属性删除）、**L11**（契约提取器补
+运算符写法与 `getAttribute`/`hasAttribute`）、**M14**（NDK 版本进 dropbear 缓存键 + 命中时校验产物）、
+**L9**（`ui-verify.mjs` 的 id/rev 改成从 `MainActivity.kt` 解析，不再手抄）。插件 rev 1.0.21。
+
+仍未动：H4（等 PR #1 合并）、M6（conformance 的「oracle 自己和自己比」）、M7（覆盖率判据部分恒真）、
+M21（可见性判据 —— 等真机看清第二份 `_turnStatus` 怎么藏的）、M25（契约只守属性名不守取值）、
+L6（明文 HTTP 收窄 —— 需要真机验证下载路径）、L7/L8（注入与拦截的 origin 收窄）、L10(done)、
+L12（conformance 的 resize 从未触发）、L13–L17(done)。
 
 ## 二、高 / 中高
 

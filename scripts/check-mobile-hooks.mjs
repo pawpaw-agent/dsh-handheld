@@ -97,7 +97,14 @@ const PLUGIN_OWN = ['data-handheld'];
  */
 function readHostHooks(text) {
   const found = new Set();
-  for (const m of text.matchAll(/\[(data-[a-z-]+)(?:[=\]])/g)) found.add(m[1]);
+  // 属性选择器：`[data-x]`、`[data-x=v]`，以及带运算符的 `[data-x^=v]` / `[data-x*=v]` /
+  // `[data-x~=v]` 与 `[data-x = v]`（审计 L11：原先只认紧跟属性名的 `=` 或 `]`，
+  // 这些写法整类漏掉）。
+  for (const m of text.matchAll(/\[\s*(data-[a-z-]+)\s*(?:[\^$*~|]?=|\])/g)) found.add(m[1]);
+  // 纯属性 API 读取也会产生依赖，但**不产生** `[data-x]` 这种字面量：`getAttribute("data-x")`
+  // / `hasAttribute("data-x")` 原先一个都不进契约（今天没漏是因为这些钩子恰好也写在选择器里，
+  // 也就是「碰巧成立」而不是「被守住」）。
+  for (const m of text.matchAll(/\b(?:get|has)Attribute\(\s*["'](data-[a-z-]+)["']/g)) found.add(m[1]);
   return found;
 }
 

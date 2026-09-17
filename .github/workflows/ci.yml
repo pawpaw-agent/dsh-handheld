@@ -151,31 +151,50 @@ jobs:
           # 本项目不需要 `tools`：NDK 由镜像预装，platform / build-tools 在下面自己装。
           packages: platform-tools
 
-      # 缓存按「构建脚本 + localoptions.h」的哈希取键：dropbear 版本号写在脚本里，
+      # NDK 必须先定位（审计 M14）：它是构建的**真实输入之一**（脚本里的 CC/AR/RANLIB/STRIP
+      # 全部来自 $ANDROID_NDK_HOME，而 NDK 来自 runner 镜像、会随镜像滚动），
+      # 所以它的版本要进缓存键 —— 原先不含它，命中缓存时整步跳过，产物与「当前工具链」脱钩，
+      # 日志里连「这版二进制由哪个 NDK 编出来」都看不到。
+      - name: Locate NDK
+        id: ndk
+        run: |
+          ndk="$($ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager \
+                 --list_installed | sed -E 's/( +[|] +)/|/g;s/ +$//' | \
+                 grep '^  ndk' | cut -d '|' -f 4 | sort | head -n1)"
+          if [ -z "$ndk" ]; then
+            echo "::error::镜像里没有 NDK —— 这一步是构建的前提，不能静默继续"
+            exit 1
+          fi
+          echo "NDK: $ndk"
+          echo "ndk=$ndk" >> "$GITHUB_OUTPUT"
+
+      # 缓存键 = 脚本 + localoptions.h + **NDK 版本** + runner OS。dropbear 版本号写在脚本里，
       # 脚本一改键就变，所以不会用旧产物冒充新版本。命中时省掉 clone + 交叉编译。
       - name: Cache dropbear build
         id: dropbear-cache
         uses: actions/cache@v6
         with:
           path: build-dropbear-output
-          key: dropbear-${{ runner.os }}-${{ hashFiles('scripts/build-dropbear.sh', 'scripts/localoptions.h') }}
+          key: dropbear-${{ runner.os }}-ndk${{ steps.ndk.outputs.ndk }}-${{ hashFiles('scripts/build-dropbear.sh', 'scripts/localoptions.h') }}
 
-      - name: Locate NDK and build dbclient
+      - name: Build dbclient
         if: steps.dropbear-cache.outputs.cache-hit != 'true'
         run: |
-          ndk="$($ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager \
-                 --list_installed | sed -E 's/( +[|] +)/|/g;s/ +$//' | \
-                 grep '^  ndk' | cut -d '|' -f 4 | sort | head -n1)"
-          echo "NDK: $ndk"
-          ANDROID_NDK_HOME="$ANDROID_HOME/$ndk" ./scripts/build-dropbear.sh
+          ANDROID_NDK_HOME="$ANDROID_HOME/${{ steps.ndk.outputs.ndk }}" ./scripts/build-dropbear.sh
 
       - name: Report cache status
         run: |
           ls -la build-dropbear-output/
+          # 缓存命中时**也**要检查内容（审计 M14）：空目录 / 截断的缓存原先会被当成可用产物，
+          # 一路传到 build job 才以别的方式炸掉。
+          for f in dbclient dropbearkey; do
+            test -s "build-dropbear-output/$f" \
+              || { echo "::error::build-dropbear-output/$f 缺失或为空（缓存不可用）"; exit 1; }
+          done
           if [ "${{ steps.dropbear-cache.outputs.cache-hit }}" = "true" ]; then
-            echo "✓ 复用缓存的 dbclient（scripts/ 未变）"
+            echo "✓ 复用缓存的 dbclient（脚本与 NDK 版本都未变：${{ steps.ndk.outputs.ndk }}）"
           else
-            echo "✓ 重新编译 dbclient"
+            echo "✓ 重新编译 dbclient（NDK ${{ steps.ndk.outputs.ndk }}）"
           fi
 
       - name: Upload dbclient

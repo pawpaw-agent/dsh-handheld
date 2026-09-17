@@ -195,7 +195,10 @@ window.__ModuleLoader__.load({
   }
   /* 标题行给绝对定位的目录按钮（left:8px + 28px 宽）让出左边距：宿主本来的
      header padding-left 是 20px，再加 20px = 40px，与按钮右缘留 4px 间隙。 */
-  [data-handheld="frame"] [data-phase] header > :first-child {
+  /* ️ 必须锚定**会话头**（审计 L15）：[data-phase] 挂在会话根上，它下面还有别的
+     header（提问卡的头、轨迹视图的头），原来那条会给它们也加 20px 左内边距 ——
+     卡片标题相对左边距凭空多一截、与右侧动作按钮错位。 */
+  [data-handheld="frame"] [data-phase] header:has([class*="_titleRow"]) > :first-child {
     padding-left: 20px !important;
   }
   [data-handheld="frame"] [data-phase] header [class*="_titleRow"] {
@@ -481,6 +484,11 @@ window.__ModuleLoader__.load({
         frame.setAttribute("data-handheld", "frame");
 
         var onFrameClick = function (event) {
+          // 宽视口 + 触摸主指针（平板横屏 / 展开态折叠屏 / DeX）时这一层本该**整体退场**：
+          // CSS 退了（文件末尾那个媒体查询），但这条捕获阶段的点击启发式原先没退 ——
+          // 会话行是 `role=treeitem`（不在 INERT_TARGETS 里），点一下就顺手把桌面布局的
+          // 常驻侧栏收掉了（审计 M23）。
+          if (!window.matchMedia || !window.matchMedia(MOBILE_QUERY).matches) return;
           var target = event.target;
           if (!target || typeof target.closest !== "function") return;
           var col = frame.querySelector('[class*="_sidebarCol"]');
@@ -612,7 +620,13 @@ window.__ModuleLoader__.load({
           });
         };
         var observer = new MutationObserver(schedule);
-        observer.observe(document.documentElement, { childList: true, subtree: true });
+        // attributes 也要听（审计 L17）：`data-handheld` 有两个写者 —— ShellOverlay 的 cleanup
+        // 会 `removeAttribute`，而这里原先只订阅 childList，看不见属性删除；卸载顺序不利时
+        // 标记会短暂丢失（整套移动 CSS 失效）。
+        observer.observe(document.documentElement, {
+          childList: true, subtree: true,
+          attributes: true, attributeFilter: ["data-handheld"],
+        });
         mark();
         return function () {
           disposed = true;
