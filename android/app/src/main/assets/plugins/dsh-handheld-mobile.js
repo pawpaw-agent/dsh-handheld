@@ -764,7 +764,9 @@ window.__ModuleLoader__.load({
             running = true;
             startedAt = at;
             lastBeat = at;
-            post({ type: "turn-start" });
+            // 标题也带上：页面被冻时「结束」由 Host 的事件流报告（见 HarnessEventsClient），
+            // 那条路径拿不到 DOM，只能用这里记下的标题。
+            post({ type: "turn-start", title: sessionLabel() });
           } else if (!present && running) {
             running = false;
             var ms = Math.round(at - startedAt);

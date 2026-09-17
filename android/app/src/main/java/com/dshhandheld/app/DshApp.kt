@@ -11,6 +11,7 @@ import androidx.annotation.RequiresApi
 import androidx.webkit.WebViewCompat
 import androidx.webkit.WebViewFeature
 import com.dshhandheld.diag.DiagLog
+import com.dshhandheld.protocol.HarnessEventsClient
 import com.dshhandheld.protocol.SshTunnel
 import java.io.File
 import java.text.SimpleDateFormat
@@ -140,10 +141,18 @@ class DshApp : Application() {
         when (json.optString("type")) {
             "turn-start" -> {
                 pageBusy = true
-                DiagLog.i(TAG, "页面报告：一轮生成开始（pageBusy=true）")
+                lastTurnTitle = json.optString("title").takeIf { it.isNotBlank() } ?: lastTurnTitle
+                // 认下「这一轮属于哪支会话」（见 syncEventsClient）：权柄在事件流那边 ——
+                // 页面被系统冻住时它不会报结束，靠这条把两路信号对上。
+                watchSession = lastRunningSession
+                pendingWatch = watchSession == null
+                DiagLog.i(TAG, "页面报告：一轮生成开始（pageBusy=true，watch=${watchSession ?: "待对齐"}）")
             }
             "turn-done" -> {
                 pageBusy = false
+                // 页面这条路已经报过了：把事件流那边的等待清掉，免得同一轮弹两条通知。
+                watchSession = null
+                pendingWatch = false
                 val title = json.optString("title").takeIf { it.isNotBlank() }
                 val ms = json.optLong("ms", 0L)
                 // 页面侧现在**一律上报结束**（含 <1.5s 的闪现，带 short=true）——只上报「开始」
@@ -303,6 +312,71 @@ class DshApp : Application() {
     /** 「任务完成」通知开关是否开着（页面在后台是否必须保持活着由它决定，见 MainActivity.onPause）。 */
     fun turnNotifyEnabled(): Boolean = prefs.getBoolean(PREF_NOTIF_TURN, false)
 
+    /** 订阅 Host 权威回合状态的客户端（见 [HarnessEventsClient] 的类注释）。 */
+    private var eventsClient: HarnessEventsClient? = null
+    private var eventsBase: String? = null
+
+    /** 事件流最近一次报告「在跑」的会话（turn-start 时用它把两路信号对上）。 */
+    @Volatile private var lastRunningSession: String? = null
+    /** 正在等哪一支会话跑完；null 表示「页面还没报告开始」或「已经报过了」。 */
+    @Volatile private var watchSession: String? = null
+    /** 页面已经报了开始，但事件流还没告诉我们「谁在跑」—— 等下一帧 running=true 认领。 */
+    @Volatile private var pendingWatch = false
+    /** 最近一次 turn-start 带的标题，给事件流那条通知用。 */
+    @Volatile private var lastTurnTitle: String? = null
+
+    /**
+     * 按「通知开关 + 当前隧道」同步事件订阅。
+     *
+     * 三个入口都要调它：隧道起来/关掉、用户改开关、进程重建。独立成一处是为了不出现
+     * 「隧道换了端口而订阅还指着旧端口」这种静默失效（3080 ⇄ 13080）。
+     */
+    fun syncEventsClient() {
+        if (!turnNotifyEnabled()) { stopEventsClient(); return }
+        val base = liveTunnel()?.localBaseUrl
+        if (base == null) { stopEventsClient(); return }
+        if (eventsClient != null && eventsBase == base) return
+        stopEventsClient()
+        eventsBase = base
+        eventsClient = HarnessEventsClient(base) { sessionId, running ->
+            onHostTurnStatus(sessionId, running)
+        }.also { it.start() }
+        DiagLog.i(TAG, "事件流：订阅 $base（权威回合状态）")
+    }
+
+    private fun stopEventsClient() {
+        eventsClient?.stop()
+        eventsClient = null
+        eventsBase = null
+    }
+
+    /**
+     * Host 报告的权威回合状态。页面被冻时它是**唯一**还能到达的「跑完了」信号。
+     */
+    private fun onHostTurnStatus(sessionId: String, running: Boolean) {
+        if (running) {
+            lastRunningSession = sessionId
+            if (pendingWatch) {
+                watchSession = sessionId
+                pendingWatch = false
+                DiagLog.i(TAG, "事件流：认领本轮会话 $sessionId")
+            }
+            return
+        }
+        if (watchSession == null && !pendingWatch) return   // 页面没报过开始 → 不由事件流发通知
+        val watched = watchSession
+        if (watched != null && watched != sessionId) return // 别的会话结束了，与我们无关
+        watchSession = null
+        pendingWatch = false
+        // 页面被冻时它自己不会报结束：这里顺手把 pageBusy 复位（省电那套依赖它）。
+        pageBusy = false
+        val foreground = visibleActivities.get() > 0
+        DiagLog.i(TAG, "事件流报告回合结束（session=$sessionId，前台=$foreground）")
+        if (!turnNotifyEnabled()) return
+        if (foreground) { DiagLog.i(TAG, "App 在前台，不发通知"); return }
+        Notifier.turnDone(this, lastTurnTitle)
+    }
+
     /**
      * 适配层 bundle 的字节（读一次，缓存）。
      *
@@ -355,6 +429,9 @@ class DshApp : Application() {
             Notifier.ensureChannels(this, Notifier.CHANNEL_TURN)
             Notifier.ensureChannels(this, Notifier.CHANNEL_ASK)
         }
+        // 冷启动时隧道可能还没恢复：syncEventsClient 自己会在没有隧道时什么都不做，
+        // 等 ensureTunnel 成功那条路径再把它挂上。
+        syncEventsClient()
     }
 
     private fun pkgVersion(): String = try {
@@ -535,6 +612,8 @@ class DshApp : Application() {
             // 免得拨号失败也留下一个常驻前台服务。
             TunnelService.start(this, "已连接到 ${cfg.host}")
             DiagLog.i(TAG, "ensureTunnel: 已建立 ${t.localBaseUrl}")
+            // 隧道刚起来：把权威回合状态的订阅挂上（页面被冻时通知只能靠它）。
+            syncEventsClient()
             return t
         }
     }
@@ -557,6 +636,8 @@ class DshApp : Application() {
         }
         // 隧道没了就不该继续占着前台服务
         TunnelService.stop(this)
+        // 订阅也停掉：它的目标是那条隧道里的 127.0.0.1:3080，隧道没了重连只会白转。
+        stopEventsClient()
         // 明确告诉界面「已经不可用」：主动断开时界面自己会刷新，但看门狗/后台路径不一定。
         notifyTunnelAlive(false)
         if (closing != null) {

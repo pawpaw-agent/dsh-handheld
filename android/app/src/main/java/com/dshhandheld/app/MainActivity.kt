@@ -433,7 +433,7 @@ class MainActivity : Activity() {
         // id 必须与那个 bundle 内的 `id: "dsh-handheld-mobile"` 一致，改不得（CI 有断言）。
         // rev 只是 WebView 侧的缓存键：内容变更必须换 rev，否则可能命中旧缓存。
         const val MOBILE_PLUGIN_ID = "dsh-handheld-mobile"
-        const val MOBILE_PLUGIN_REV = "dsh-handheld-mobile-1.0.23"
+        const val MOBILE_PLUGIN_REV = "dsh-handheld-mobile-1.0.24"
         const val MOBILE_PLUGIN_URL = "/plugins/??$MOBILE_PLUGIN_ID/client.js&rev=$MOBILE_PLUGIN_REV"
 
         /**
@@ -1225,6 +1225,8 @@ class MainActivity : Activity() {
             Notifier.ensureChannels(this@MainActivity, Notifier.CHANNEL_ASK)
             status("已开启提醒")
             refreshNotifHint()
+            // 开了就要有权威信号兜底（页面被冻时它才管用）。见 HarnessEventsClient。
+            (application as? DshApp)?.syncEventsClient()
             DiagLog.i(TAG, "通知开关：开（系统允许=${Notifier.allowed(this@MainActivity)}）")
         }
 
@@ -1247,6 +1249,7 @@ class MainActivity : Activity() {
                 Notifier.cancelTurn(this@MainActivity)
                 status("已关闭提醒")
                 refreshNotifHint()
+                (application as? DshApp)?.syncEventsClient()
                 DiagLog.i(TAG, "通知开关：关")
             }
         }
