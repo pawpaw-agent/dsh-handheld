@@ -153,6 +153,13 @@ class DshApp : Application() {
                     else -> Notifier.turnDone(this, title)
                 }
             }
+            "turn-state" -> {
+                // 诊断心跳：页面每隔 60s（且这期间有过 DOM 变化）自报一次「它看见什么」。
+                // 它是「一次都没命中」那种失败形态的唯一证据，所以只记日志、不参与通知。
+                // 审计 M21 的答案就是靠它拿到的：两份 _turnStatus 在 rects/visibility 上
+                // 完全一样，只有几何能区分。
+                DiagLog.i(TAG, "页面心跳：${json}")
+            }
             "needs-input" -> {
                 val title = json.optString("title").takeIf { it.isNotBlank() }
                 val key = json.optString("key")

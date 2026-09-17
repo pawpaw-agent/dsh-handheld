@@ -683,35 +683,68 @@ window.__ModuleLoader__.load({
          * 新会话的），而真正结束时反而什么都不发 —— 用户就等不到通知了。用 `isConnected` 判则
          * 相反：藏起来不算结束，**卸载**（React 在 `running` 变 false 时移除节点）才算。
          */
+        /**
+         * 「这个节点现在真的在屏幕上吗」—— 用**几何**判，不能用 rects/visibility。
+         *
+         * 2026-09-17 真机心跳（payload 里两份 `_turnStatus` 都是
+         * `connected:1, rects:1, vis:"visible"`）证明：隐藏的那份既不是 `display:none`
+         * 也不是 `visibility:hidden`（多半是被父容器裁剪 / 挪出视口 / 被别的层盖住）——
+         * 也就是说「优先挑可见的」那条判据**区分不了这两份**。能区分的只有位置。
+         */
+        var onScreen = function (el) {
+          var r = el.getBoundingClientRect();
+          var vw = window.innerWidth || 0;
+          var vh = window.innerHeight || 0;
+          if (vw === 0 || vh === 0) return false;   // 视口尺寸拿不到（页面在后台）→ 不敢下结论
+          return r.width > 0 && r.height > 0 && r.bottom > 0 && r.right > 0 && r.top < vh && r.left < vw;
+        };
+
+        /** 一个节点的可观测几何/样式（心跳 payload 用，诊断 H7/M21 就靠它）。 */
+        var geom = function (el) {
+          var r = el.getBoundingClientRect();
+          var cs = window.getComputedStyle ? window.getComputedStyle(el) : null;
+          return {
+            connected: el.isConnected ? 1 : 0,
+            rects: el.getClientRects().length,
+            vis: cs ? cs.visibility : "?",
+            disp: cs ? cs.display : "?",
+            x: Math.round(r.left), y: Math.round(r.top),
+            w: Math.round(r.width), h: Math.round(r.height),
+            on: onScreen(el) ? 1 : 0
+          };
+        };
+
+        /**
+         * 挑一个节点来跟踪。顺序：
+         *   1. **真的在视口里**的那个（几何判据）；
+         *   2. 退一步：至少被布局过、还连着的（页面在后台时视口尺寸拿不到，只能这样）；
+         *   3. 再退：第一个还连着的。
+         * 一旦挑中就**不再重挑**（只在它卸载时才重挑）—— 用户切会话/切视图时它是被藏起来、
+         * 不是被卸载，跟踪着它才不会误报结束（见 [live]）。
+         */
         var pick = function () {
           var list = document.querySelectorAll(TURN_STATUS);
           var fallback = null;
+          var connected = null;
           for (var i = 0; i < list.length; i++) {
             var el = list[i];
             if (!el.isConnected) continue;
-            if (el.getClientRects().length > 0) return el;
-            if (fallback === null) fallback = el;
+            if (connected === null) connected = el;
+            if (onScreen(el)) return el;
+            if (fallback === null && el.getClientRects().length > 0) fallback = el;
           }
-          return fallback;
+          return fallback !== null ? fallback : connected;
         };
         var live = function (el) {
           return el !== null && el.isConnected;
         };
 
-        /** 心跳 payload：每个候选节点是死是活、被不被布局、visibility/display 是什么。
-         *  诊断用 —— 审计 H7/M21 悬着的那个问题（第二份 `_turnStatus` 到底怎么藏的）就靠它。 */
+        /** 心跳 payload：每个候选节点的几何与样式 —— 诊断 H7/M21 悬着的问题就靠它。 */
         var probe = function () {
           var list = document.querySelectorAll(TURN_STATUS);
           var out = [];
           for (var i = 0; i < list.length && i < 4; i++) {
-            var el = list[i];
-            var cs = window.getComputedStyle ? window.getComputedStyle(el) : null;
-            out.push({
-              connected: el.isConnected ? 1 : 0,
-              rects: el.getClientRects().length,
-              vis: cs ? cs.visibility : "?",
-              disp: cs ? cs.display : "?"
-            });
+            out.push(geom(list[i]));
           }
           return out;
         };
@@ -739,7 +772,15 @@ window.__ModuleLoader__.load({
           // 所以取 60s（再密也没用）；驱动源仍是 mutation，不依赖定时器。
           if (at - lastBeat >= HEARTBEAT_MS) {
             lastBeat = at;
-            post({ type: "turn-state", running: running, present: present, nodes: probe() });
+            // `watching` = 我们此刻**在跟踪**的那个节点（它的几何就是判据的现场证据）；
+            // `nodes` = 全部候选。两者放一起，日志里一眼能看出「挑对了没有」。
+            post({
+              type: "turn-state",
+              running: running,
+              present: present,
+              watching: found !== null ? geom(found) : null,
+              nodes: probe(),
+            });
           }
         };
 
