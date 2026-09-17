@@ -317,24 +317,40 @@ jobs:
           fi
           echo "✓ versionCode 一致（$APK_CODE）"
 
-          # 3) 签名者身份与本次 secrets 状态相符（审计 H3）：正式签名时**不得**是 Android 调试
-          #    证书；回退时必须是它（上面已经告警，产物名也会带 -debugsigned）。
-          APKSIGNER=$(ls "$ANDROID_HOME"/build-tools/*/apksigner | sort | tail -n1)
-          DN=$("$APKSIGNER" verify --print-certs "$APK" \
-                 | sed -n 's/^Signer #1 certificate DN: //p' | head -n1)
-          echo "签名者 DN: $DN"
-          case "$DN" in
-            *"Android Debug"*)
-              if [ "${{ steps.signing.outputs.available }}" = "true" ]; then
-                echo "::error::secrets 齐全，却签成了 debug 证书 —— 拒绝把这份产物当正式包"
-                exit 1
-              fi
-              echo "::warning::回退 debug 签名（secrets 缺项），该产物不可对外分发"
-              ;;
-            *)
-              echo "✓ 使用发布签名（非调试证书）"
-              ;;
-          esac
+          # 3) 签名者身份与本次 secrets 状态相符（审计 H3）：正式签名时**不得**是仓库里那把
+          #    公开的调试证书；回退时必须是它（上面已告警，产物名也带 -debugsigned）。
+          #
+          #    判据用**证书指纹**而不是 DN 字符串：本仓库的 debug.keystore 不是 AOSP 默认那把
+          #    （subject 是 C=NA, ST=NA, L=NA, O=pawpaw-agent, OU=Dev, CN=PiMobile Debug），
+          #    按 "Android Debug" 判永远匹配不上 —— 第一版就是这么写成「空 DN 也照样打勾」的。
+          #    指纹从仓库里那把 debug.keystore 现取，不需要任何 secret；任何一步取不到指纹
+          #    就**直接失败**（拒绝用「没检查」换「绿」）。
+          APKSIGNER=$(find "$ANDROID_HOME/build-tools" -maxdepth 2 -name apksigner -type f 2>/dev/null | sort | tail -n1)
+          if [ -z "$APKSIGNER" ] || [ ! -x "$APKSIGNER" ]; then
+            echo "::error::找不到 apksigner，签名校验做不了"
+            exit 1
+          fi
+          DBG_PRINT=$(keytool -exportcert -keystore android/app/debug.keystore \
+                        -storepass android -alias androiddebugkey 2>/dev/null \
+                      | openssl x509 -inform DER -noout -fingerprint -sha256 \
+                      | sed 's/.*=//' | tr -d ':' | tr 'A-Z' 'a-z')
+          APK_PRINT=$("$APKSIGNER" verify --print-certs "$APK" \
+                      | sed -n 's/^Signer #1 certificate SHA-256 digest: //p' | head -n1 | tr -d ' ' | tr 'A-Z' 'a-z')
+          echo "调试证书指纹: $DBG_PRINT"
+          echo "APK 证书指纹: $APK_PRINT"
+          if [ -z "$DBG_PRINT" ] || [ -z "$APK_PRINT" ]; then
+            echo "::error::指纹取不到（keytool / openssl / apksigner 有一处没成）—— 拒绝把「没检查」当通过"
+            exit 1
+          fi
+          if [ "$APK_PRINT" = "$DBG_PRINT" ]; then
+            if [ "${{ steps.signing.outputs.available }}" = "true" ]; then
+              echo "::error::secrets 齐全，却签成了仓库里的调试证书 —— 拒绝把这份产物当正式包"
+              exit 1
+            fi
+            echo "::warning::回退调试签名（secrets 缺项），该产物不可对外分发"
+          else
+            echo "✓ 使用发布签名（不是仓库里的调试证书）"
+          fi
 
       - name: Upload APK
         uses: actions/upload-artifact@v7
