@@ -287,13 +287,17 @@ class DshApp : Application() {
      * 而那个 client 刻意不持 Activity，只能从 Application 拿（审计 M1）。
      */
     /**
-     * 已注入的 `document-start` 脚本句柄（审计 L8/B3）。
+     * 「移除已注入的那份 document-start 脚本」的动作（审计 L8/B3）。
      *
      * WebView 是 Application 保活的，所以「注入了几份」这件事也必须跟它同寿命记在一处：
      * 记在 Activity 上就会随重建丢引用、于是每重建一次就多一份脚本在同一个 WebView 上累积。
+     *
+     * 存**动作**而不是句柄：`WebViewCompat.addDocumentStartJavaScript` 返回的句柄类型名
+     * 在 androidx.webkit 各版本里变过（写死它会让整个 App 编译不过 —— CI 实测踩过一次），
+     * 由调用方就地捕获、这里只负责在下次注入前把它调用掉。
      */
     @Volatile
-    var bootstrapScriptHandler: androidx.webkit.WebViewCompat.ScriptHandler? = null
+    var bootstrapRemover: (() -> Unit)? = null
 
     val pluginBundleBytes: ByteArray? by lazy {
         runCatching {

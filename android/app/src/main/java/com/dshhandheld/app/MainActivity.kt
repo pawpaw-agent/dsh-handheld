@@ -523,10 +523,11 @@ class MainActivity : Activity() {
                     // 免得同一个 WebView 上累积 N 份（= §六 B3）。句柄不随 Activity 销毁而移除 ——
                     // 没有 Activity 时页面若重载，注入仍需生效。
                     val app = application as DshApp
-                    runCatching { app.bootstrapScriptHandler?.remove() }
-                    app.bootstrapScriptHandler = WebViewCompat.addDocumentStartJavaScript(
+                    runCatching { app.bootstrapRemover?.invoke() }
+                    val handler = WebViewCompat.addDocumentStartJavaScript(
                         this, bootstrap, tunnelOrigins()
                     )
+                    app.bootstrapRemover = { handler.remove() }
                 }
             }
             webViewClient = object : WebViewClient() {
