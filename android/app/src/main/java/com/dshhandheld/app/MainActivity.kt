@@ -376,7 +376,7 @@ class MainActivity : Activity() {
         // id 必须与那个 bundle 内的 `id: "dsh-handheld-mobile"` 一致，改不得（CI 有断言）。
         // rev 只是 WebView 侧的缓存键：内容变更必须换 rev，否则可能命中旧缓存。
         const val MOBILE_PLUGIN_ID = "dsh-handheld-mobile"
-        const val MOBILE_PLUGIN_REV = "dsh-handheld-mobile-1.0.19"
+        const val MOBILE_PLUGIN_REV = "dsh-handheld-mobile-1.0.20"
         const val MOBILE_PLUGIN_URL = "/plugins/??$MOBILE_PLUGIN_ID/client.js&rev=$MOBILE_PLUGIN_REV"
 
         /**
@@ -1515,7 +1515,9 @@ class MainActivity : Activity() {
         val token = SecurePrefs.getString(prefs, PREF_SERVER_TOKEN)?.trim().orEmpty()
         val needsToken = token.isNotEmpty() && !sshTokenAck
         // 认证决策是 401/431 类问题的第一现场：是否带 token、cookie jar 是否清了、
-        // 最终请求的 URL 长什么样，全部留痕（token 本身不记，只记长度）。
+        // 最终请求的 URL 长什么样，全部留痕。token 本身不记、只记长度；而**带 token 的 URL**
+        // （WebView 的当前 URL 就是它）由 `DiagLog.redact()` 在唯一收口处统一打码成
+        // `token=***` —— 审计 H2 之前这里是整条凭据进日志。
         DiagLog.i(TAG, "connectWeb: url=$url ack=$sshTokenAck " +
             "tokenLen=${token.length} needsToken=$needsToken")
         if (needsToken) {
@@ -2254,6 +2256,23 @@ class MainActivity : Activity() {
 
     private fun endConnect() { connecting.set(false) }
 
+    /**
+     * 作废在飞的连接尝试，**并把连接守卫放掉**。
+     *
+     * 为什么必须成对：被作废的回程（`connectViaSsh` / `rebuildTunnel` / `autoConnectSsh` 里那些
+     * `if (connectAttempt != attempt) { …; return@onUi }`）**刻意不调 [endConnect]** —— 它只是
+     * 「丢弃这次回调」，释放责任落在**作废者**身上。
+     *
+     * 2026-09-17 审计 H1：`cancelConnect` 履行了这件事，`disconnectCurrent` 漏了 —— 在
+     * 「连接中」窗口里点一次「断开连接」（回前台探针失败后的重建期间、冷启动自动恢复期间都
+     * 可达），守卫就永远停在 true：此后主按钮只回「正在连接中，请稍候…」，`revalidateTunnel`
+     * 也被同一道守卫挡成「让位」，**只能杀进程**。抽成一个函数，免得下次再漏。
+     */
+    private fun invalidateAttempt() {
+        connectAttempt++
+        endConnect()
+    }
+
     // ── 引导流进度行（类级：connectViaSsh/autoConnectSsh/onPageFinished 共用）────
     /** 进入「连接中」：相位 + ① 行文案一起复位。 */
     private fun guideStep3Show() {
@@ -2333,11 +2352,10 @@ class MainActivity : Activity() {
      */
     private fun cancelConnect() {
         DiagLog.i(TAG, "cancelConnect: 用户取消连接（作废在飞的拨号 attempt=$connectAttempt）")
-        connectAttempt++
+        invalidateAttempt()
         connectFailed = false
         closeCurrentTunnel()
         sshTokenAck = false
-        endConnect()
         showPhase(ConnectPhase.IDLE)
         status("已取消连接")
     }
@@ -2351,7 +2369,8 @@ class MainActivity : Activity() {
         // 重建不重载）保持一致。
         DiagLog.i(TAG, "disconnectCurrent: 关隧道 + 删 prefs[url]（保留页面，重连同 origin 可复用），" +
             "webUrl=${webView?.url}")
-        connectAttempt++
+        // 作废 + **释放守卫**：漏掉释放就是审计 H1 那条「永久连不上」（见 invalidateAttempt）
+        invalidateAttempt()
         connectFailed = false
         closeCurrentTunnel()
         prefs.edit().remove("url").apply()

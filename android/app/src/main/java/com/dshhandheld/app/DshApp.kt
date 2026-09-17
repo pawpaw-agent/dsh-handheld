@@ -137,6 +137,13 @@ class DshApp : Application() {
                 pageBusy = false
                 val title = json.optString("title").takeIf { it.isNotBlank() }
                 val ms = json.optLong("ms", 0L)
+                // 页面侧现在**一律上报结束**（含 <1.5s 的闪现，带 short=true）——只上报「开始」
+                // 会让 pageBusy 永远卡在 true，后台的 pauseTimers 省电设计就静默失效了
+                // （2026-09-17 审计 H8）。太短的一轮由这里决定不打扰用户。
+                if (json.optBoolean("short", false)) {
+                    DiagLog.i(TAG, "页面报告：一轮生成结束（${ms}ms），太短，不通知")
+                    return
+                }
                 val on = prefs.getBoolean(PREF_NOTIF_TURN, false)
                 val foreground = visibleActivities.get() > 0
                 DiagLog.i(TAG, "页面报告：一轮生成结束（${ms}ms，标题=$title，开关=$on，前台=$foreground）")

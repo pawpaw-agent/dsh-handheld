@@ -101,7 +101,7 @@ object DiagLog {
     }
 
     private fun record(level: Char, tag: String, msg: String) {
-        val e = Entry(System.currentTimeMillis(), level, tag, msg)
+        val e = Entry(System.currentTimeMillis(), level, tag, redact(msg))
         synchronized(ring) {
             if (ring.size >= RING_CAP) ring.removeFirst()
             ring.addLast(e)
@@ -109,17 +109,37 @@ object DiagLog {
         if (writer != null && !queue.offer(line(e))) dropped++
     }
 
-    fun i(tag: String, msg: String) { Log.i(tag, msg); record('I', tag, msg) }
-    fun w(tag: String, msg: String) { Log.w(tag, msg); record('W', tag, msg) }
-    fun e(tag: String, msg: String) { Log.e(tag, msg); record('E', tag, msg) }
+    /**
+     * dsh 浏览器 token 的打码正则（token 是 32 字节 base64url ⇒ 至少 40 字符，这里放宽到 16）。
+     *
+     * 为什么必须兜底：`connectWeb` 把 token 拼进 URL，而 WebView 的当前 URL 就是那个带 token 的
+     * URL —— 任何打印 URL 的日志都会顺带带上整条凭据（2026-09-17 审计 H2：它落进
+     * `filesDir/diag.log`（重启不丢）、上诊断页、还能被「复制全部」带走，与代码里那句
+     * 「token 本身不记，只记长度」直接矛盾）。
+     *
+     * 打在 [record] 这一处**唯一的收口**上：内存环形缓冲与磁盘文件都走它，以后新加的日志
+     * 也不会再漏。幂等（打码后不再匹配）。
+     */
+    private val TOKEN_RE = Regex("""(?i)\btoken=[A-Za-z0-9_\-.]{16,}""")
+
+    /** 把文本里的 `token=…` 打码成 `token=***`（幂等）。 */
+    fun redact(text: String): String = if (text.contains("token=")) TOKEN_RE.replace(text, "token=***") else text
+
+    fun i(tag: String, msg: String) { val m = redact(msg); Log.i(tag, m); record('I', tag, m) }
+    fun w(tag: String, msg: String) { val m = redact(msg); Log.w(tag, m); record('W', tag, m) }
+    fun e(tag: String, msg: String) { val m = redact(msg); Log.e(tag, m); record('E', tag, m) }
 
     /**
      * 平台 `Log` 的 Throwable 重载也必须照抄 —— 少一个就是**编译期**才发现，
      * 而且只有真正用了 3 参数那个调用点会报错（0.1.6 的 CI 就栽在这上面：
      * `TuiActivity.kt:334` 的 `Log.e(TAG, "...", e)`）。
      */
-    fun w(tag: String, msg: String, tr: Throwable) { Log.w(tag, msg, tr); record('W', tag, withTrace(msg, tr)) }
-    fun e(tag: String, msg: String, tr: Throwable) { Log.e(tag, msg, tr); record('E', tag, withTrace(msg, tr)) }
+    fun w(tag: String, msg: String, tr: Throwable) {
+        val m = redact(msg); Log.w(tag, m, tr); record('W', tag, withTrace(m, tr))
+    }
+    fun e(tag: String, msg: String, tr: Throwable) {
+        val m = redact(msg); Log.e(tag, m, tr); record('E', tag, withTrace(m, tr))
+    }
 
     /** 堆栈并进同一条目（缩进续行），免得「一行一条」的日志看起来像是别人打的。 */
     private fun withTrace(msg: String, tr: Throwable): String =

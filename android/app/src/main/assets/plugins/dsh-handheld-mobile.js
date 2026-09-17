@@ -656,27 +656,50 @@ window.__ModuleLoader__.load({
         var post = postToApp;
 
         /**
-         * 「在跑」的判据必须是**可见**的那一个 —— 这是 2026-09-17 真机取证换来的。
+         * 「谁在跑」拆成两层判据，别再合成一条（2026-09-17 审计 H7 / M21 / M24）：
          *
-         * 原先只按 `found.isConnected` 判、用 `document.querySelector` 取第一个
-         * `_turnStatus`。真机上（对话 / 轨迹两个面板各挂一份）隐藏的那份 `isConnected`
-         * 永远为真 → `running` 卡在 true → **此后再也不报结束**：日志里 turn-start 收到过
-         * 两次、turn-done 只在第一次收到，之后整整一小时没有任何「页面报告」，
-         * 通知功能静默失效（用户的原话：「完成后没有收到弹窗提醒」）。
+         *  - [pick] 只在需要**挑一个**时用，**优先挑可见的**：目的是别一上来就 latch 到隐藏的
+         *    那份副本（1.0.18「卡死」的成因）。挑不到可见的才退回第一个还连着的。
+         *  - [live] 是热路径（每个 mutation 批都跑），只用 `isConnected`（O(1)）：
+         *    `getClientRects()` 会**强制同步布局**，而且它判不出 `visibility:hidden` / 被挪出
+         *    视口 —— 宿主确实用 `visibility:hidden`。
          *
-         * 判据改成「isConnected 且 getClientRects().length > 0」：后者表示真的被布局出来
-         * （display:none / 零尺寸都为 0），两个面板谁可见就认谁。
+         * 为什么「在跑」**不能**用可见性判：切会话 / 切「轨迹」视图时，正在跑的那个指示器是
+         * **被藏起来、不是被卸载**。用可见性判会立刻误报一次「结束」（用时=已用时间、标题还是
+         * 新会话的），而真正结束时反而什么都不发 —— 用户就等不到通知了。用 `isConnected` 判则
+         * 相反：藏起来不算结束，**卸载**（React 在 `running` 变 false 时移除节点）才算。
          */
         var pick = function () {
           var list = document.querySelectorAll(TURN_STATUS);
+          var fallback = null;
           for (var i = 0; i < list.length; i++) {
             var el = list[i];
-            if (el.isConnected && el.getClientRects().length > 0) return el;
+            if (!el.isConnected) continue;
+            if (el.getClientRects().length > 0) return el;
+            if (fallback === null) fallback = el;
           }
-          return null;
+          return fallback;
         };
         var live = function (el) {
-          return el !== null && el.isConnected && el.getClientRects().length > 0;
+          return el !== null && el.isConnected;
+        };
+
+        /** 心跳 payload：每个候选节点是死是活、被不被布局、visibility/display 是什么。
+         *  诊断用 —— 审计 H7/M21 悬着的那个问题（第二份 `_turnStatus` 到底怎么藏的）就靠它。 */
+        var probe = function () {
+          var list = document.querySelectorAll(TURN_STATUS);
+          var out = [];
+          for (var i = 0; i < list.length && i < 4; i++) {
+            var el = list[i];
+            var cs = window.getComputedStyle ? window.getComputedStyle(el) : null;
+            out.push({
+              connected: el.isConnected ? 1 : 0,
+              rects: el.getClientRects().length,
+              vis: cs ? cs.visibility : "?",
+              disp: cs ? cs.display : "?"
+            });
+          }
+          return out;
         };
 
         var check = function () {
@@ -684,30 +707,26 @@ window.__ModuleLoader__.load({
           if (!live(found)) found = pick();
           var present = found !== null;
           var at = now();
-          if (present) {
-            if (!running) {
-              running = true;
-              startedAt = at;
-              lastBeat = at;
-              post({ type: "turn-start" });
-            } else if (at - lastBeat >= HEARTBEAT_MS) {
-              // 心跳：这一层的失败模式是「一声不响地不再报」。拿不到页面日志时，
-              // 只有周期性自报能证明观察者还活着、以及它此刻看到几个候选节点。
-              // 后台的定时器会被节流到分钟级，所以取 60s（再密也没用）。
-              lastBeat = at;
-              post({
-                type: "turn-state",
-                nodes: document.querySelectorAll(TURN_STATUS).length
-              });
-            }
-            return;
+          if (present && !running) {
+            running = true;
+            startedAt = at;
+            lastBeat = at;
+            post({ type: "turn-start" });
+          } else if (!present && running) {
+            running = false;
+            var ms = Math.round(at - startedAt);
+            // **一律上报结束**（`short` 只是给 App 的一个提示）：只发开始、不发结束会让
+            // App 的 pageBusy 永远卡在 true，后台 pauseTimers 的省电设计静默失效且无界
+            // （审计 H8）。要不要因此打扰用户，交给 App 判。
+            post({ type: "turn-done", title: sessionLabel(), ms: ms, short: ms < MIN_TURN_MS });
           }
-          // 指示器不在了：只有在「我们确实见过它」时才算一次结束
-          if (!running) return;
-          running = false;
-          var ms = Math.round(at - startedAt);
-          if (ms < MIN_TURN_MS) return;
-          post({ type: "turn-done", title: sessionLabel(), ms: ms });
+          // 心跳**无条件**发（不放在 running 分支里）：它要诊断的恰恰是「一次都没看见节点」
+          // 那种形态 —— 挂在 running 里面就正好漏掉它（审计 M22）。后台定时器会被节流到分钟级，
+          // 所以取 60s（再密也没用）；驱动源仍是 mutation，不依赖定时器。
+          if (at - lastBeat >= HEARTBEAT_MS) {
+            lastBeat = at;
+            post({ type: "turn-state", running: running, present: present, nodes: probe() });
+          }
         };
 
         var observer = new MutationObserver(check);
