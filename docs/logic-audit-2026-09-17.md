@@ -38,8 +38,20 @@
 | M24 | 热路径回到 O(1) 的 `isConnected`（不再每个 mutation 批强制同步布局） |
 | L10 | 三处 upload 加 `if-no-files-found: error` |
 
-仍未动：H4（等 PR #1 合并，它已有 `resetKnownHosts`/`tunnelFailureHint`）、H5、H6、M1–M10、
-M14–M21、M23、M25、L1–L9、L11–L17。
+第二批（`b452cf7c`）：**H5**（`SshTunnel.isUp` + 看门狗失败清 `localBaseUrl` + `onTunnelAliveChanged`
++ `liveTunnel()`，界面不再谎报「已连上电脑」）、**H6**（`connectWeb(retry, switchScreen)`：重试不重置
+预算、不抢屏）、**M2**（`onCreate` 分支 1 要求隧道活着）、**M3**（`navFailed`：覆盖层不再被
+`onPageFinished` 自己盖掉；`showConnectScreen()` 收覆盖层；BACK 优先关它）、**M4**（连接中忽略
+「连接设置」头部点击）。
+
+第三批（`02ef1bda`）：**M1**（`onDestroy` 把三个 client 换成不持 Activity 的 `DetachedWebViewClient`，
++ `DshApp.pluginBundleBytes`）、**M9**（TuiActivity 的 `configChanges` 补齐）、**M17**（终端也算前台）、
+**M18**（诊断页读 `diag.log.1`）、**M19**（渠道被单关时不写「已发」）、**M20**（切登录方式不再抹掉
+另一种凭据）、**L3**（写线程死掉→`diskFailed`）、**L13/L14/L16**（文档版本头、`.gitignore`、
+bootstrap 幂等）。
+
+仍未动：H4（等 PR #1 合并，它已有 `resetKnownHosts`/`tunnelFailureHint`）、M5–M8、M10、M14、
+M21、M23、M25、L1、L2、L4–L12、L15、L17。
 
 ## 二、高 / 中高
 
