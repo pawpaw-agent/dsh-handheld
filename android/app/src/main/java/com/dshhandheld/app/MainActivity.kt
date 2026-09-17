@@ -770,7 +770,10 @@ class MainActivity : Activity() {
                         return@onUi
                     }
                     connectFailed = true
-                    status("自动连接失败，请在连接屏手动重试")
+                    // app.lastTunnelError：隧道自己的判定（dbclient 的真实 stderr）。
+                    // 拿不到签名就退回原来的通用文案，绝不把英文机器文本直接上屏。
+                    status(tunnelFailureHint(app.lastTunnelError)
+                        ?: "自动连接失败，请在连接屏手动重试")
                     refreshConnectState()
                     endConnect()
                 }
@@ -1106,6 +1109,17 @@ class MainActivity : Activity() {
             rowParams(top = dp(16), width = ViewGroup.LayoutParams.MATCH_PARENT))
         theForm.addView(sshTargetPortInput, rowParams(top = dp(7), height = dp(46),
             width = ViewGroup.LayoutParams.MATCH_PARENT))
+        // 主机密钥变更后的**唯一出口**（见 [resetKnownHosts]）。用弱化的文字链：它不是日常
+        // 操作，但出事时必须在手机上够得着 —— 此前只能清应用数据（配置一并丢失）。
+        theForm.addView(
+            UiKit.text(this@MainActivity, "重置已信任的电脑身份", 12f, COL_ACCENT).apply {
+                gravity = Gravity.CENTER
+                isClickable = true
+                setPadding(0, dp(16), 0, dp(2))
+                setOnClickListener { resetKnownHosts() }
+            },
+            rowParams(top = dp(6), width = ViewGroup.LayoutParams.MATCH_PARENT)
+        )
         theForm.addView(hint("dsh 网页的端口，默认 3080。"),
             rowParams(top = dp(6), width = ViewGroup.LayoutParams.MATCH_PARENT))
 
@@ -1687,10 +1701,12 @@ class MainActivity : Activity() {
                         return@onUi
                     }
                     connectFailed = true
-                    status("连不上你的电脑")
                     // 提示词跟登录方式：私钥用户看到「检查密码」会懵
                     val what = if (auth is SshTunnel.Auth.KeyPair) "私钥" else "密码"
-                    guideLine(1, "① 检查电脑 ✗ 连不上你的电脑（检查地址/账号/$what）", state = null)
+                    val hint = tunnelFailureHint(app.lastTunnelError)
+                    status(hint ?: "连不上你的电脑")
+                    guideLine(1, "① 检查电脑 ✗ "
+                        + (hint ?: "连不上你的电脑（检查地址/账号/$what）"), state = null)
                     guideLine(2, "② 建立安全通道 未开始", state = true)
                     // ensureTunnel 已把旧隧道关掉，这里必须刷新，否则
                     // 「断开连接」会留在屏幕上指向一个已死的隧道
@@ -1781,6 +1797,55 @@ class MainActivity : Activity() {
                 keyPass = auth.passphrase ?: "",
             )
         }
+    }
+
+    /**
+     * 把隧道的原始失败原因翻成一句用户能照着做的话。
+     *
+     * 两条约束同时成立，所以不能把 stderr 直接上屏：① 连接屏刻意不出现术语，而 dbclient 的
+     * 原因是英文机器文本；② 但有些失败**必须**改变用户的下一步（主机身份变了、私钥格式不对）
+     * —— 那种情况下「检查地址/账号/密码」是误导，用户会在错误的地方一直试。
+     * 所以只认几个能改变动作的签名，其余返回 null，由调用方沿用原来的通用文案。
+     * 原始值不会丢：它同时在诊断页与 DiagLog 里。
+     */
+    private fun tunnelFailureHint(raw: String?): String? {
+        val r = raw?.lowercase() ?: return null
+        return when {
+            // dbclient: "ssh-ed25519 host key mismatch for <host> !"
+            r.contains("host key mismatch") ->
+                "这台电脑的 SSH 身份和上次不一样（重装过系统？）。展开「连接设置」，" +
+                    "点「重置已信任的电脑身份」之后再连"
+            // dbclient 拒绝 OpenSSH 格式的私钥：本项目不做转换，得先在电脑上换格式
+            r.contains("string too long") || r.contains("failed loading keyfile") ->
+                "私钥读不了：dbclient 只认 dropbear 格式（先在电脑上 dropbearconvert 一下）"
+            r.contains("permission denied") || r.contains("no auth methods") ->
+                "服务器拒绝了登录：账号或密码/私钥不对"
+            r.contains("connection refused") ->
+                "电脑上没有 SSH 服务在监听（端口填对了吗？）"
+            r.contains("timed out") || r.contains("timeout") || r.contains("no route to host") ->
+                "连不上这台电脑：地址或网络不通"
+            else -> null
+        }
+    }
+
+    /**
+     * 清掉 TOFU 记录：`$HOME/.ssh/known_hosts`（HOME = `filesDir`，见 `SshTunnel.homeDir`）。
+     *
+     * 这是手机端**唯一的出路**。服务器重装、容器重建、或 DHCP 把同一个 IP 分给了另一台机器
+     * 之后，`known_hosts` 里的旧指纹会让 dbclient 直接拒绝连接 —— `-y`（本项目的 TOFU）只放行
+     * **未知**主机，不匹配的仍然拒绝（dropbear `cli-kex.c`）。而这个文件在应用私有目录里，
+     * 用户没有别的地方可以删，此前只能清应用数据（配置一并丢失）。
+     */
+    private fun resetKnownHosts() {
+        val f = File(filesDir, ".ssh/known_hosts")
+        val existed = f.exists()
+        val ok = !existed || runCatching { f.delete() }.getOrDefault(false)
+        DiagLog.i(TAG, "重置 known_hosts: path=${f.absolutePath} existed=$existed ok=$ok")
+        status(
+            if (ok) "已清除信任记录，下次连接会重新确认这台电脑"
+            else "清除失败：${f.absolutePath}",
+            err = !ok
+        )
     }
 
     private fun persistSshConfig(
@@ -2250,17 +2315,13 @@ class MainActivity : Activity() {
         // JavaScript timers"），而「这一轮结束了」这个信号要靠页面里的 React 重新渲染出来
         // —— 定时器一停，渲染与观察者都可能推迟到用户回到 App 才跑，任务完成通知就永远不会响。
         // 代价是后台时多耗一点电，所以只在真有活干的时候让路（空闲即暂停）。
-        // 只要**通知开关开着**就让路（2026-09-17 真机诊断把这条判断收窄了）：任务完成通知
-        // 完全依赖页面把「结束了」渲染出来，而 renderer 一旦被系统 waive/冻结 JS 就停了 ——
-        // 所以用户要通知时后台必须让页面活着。代价是多耗一点电，用户可以用开关自己关掉。
-        val app = application as? DshApp
-        val notifyOn = app?.turnNotifyEnabled() == true
-        val busy = app?.pageBusy == true
-        if (notifyOn) {
-            DiagLog.i(TAG, "onPause: 通知开关开着，保留定时器（busy=$busy，任务完成通知依赖页面渲染）")
-        } else {
-            webView?.pauseTimers()
-        }
+        // 只在**真有活干**时让路（2026-09-17 收窄过又退回）：通知此前依赖页面把「结束了」
+        // 渲染出来，所以一度改成「通知开关开着就不 pauseTimers」；现在权威信号来自
+        // [com.dshhandheld.protocol.HarnessEventsClient]（Host 的 api-session/status），
+        // 与页面无关，于是这里退回原来的省电策略。
+        val busy = (application as? DshApp)?.pageBusy == true
+        if (busy) DiagLog.i(TAG, "onPause: 页面正在生成，保留定时器（任务完成通知依赖它）")
+        else webView?.pauseTimers()
     }
 
     @Deprecated("Deprecated in Java")

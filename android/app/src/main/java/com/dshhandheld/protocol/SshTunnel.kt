@@ -104,6 +104,24 @@ class SshTunnel(
 
     @Volatile var onStateChange: ((String) -> Unit)? = null  // connecting / connected / reconnecting
 
+    /**
+     * 最近一次失败的原因（dbclient 的真实 stderr，或本类的判定）；成功时不清空、由调用方读走。
+     *
+     * 为什么需要它：[onStateChange] 在本项目里只被 DshApp 用来记日志，UI 拿不到 —— 于是
+     * 「主机身份变了」「私钥读不了」这类**能改变用户下一步**的失败，全都塌缩成一句
+     * 「连不上你的电脑（检查地址/账号/密码）」，把用户引向错误的方向。
+     * 这个字段是给调用方把原因带到界面上的通道（见 `DshApp.lastTunnelError` 与
+     * `MainActivity.tunnelFailureHint`）。
+     */
+    @Volatile var lastError: String? = null
+        private set
+
+    /** 记下失败原因并广播状态；**所有失败路径都必须走这里**，别再直接 invoke。 */
+    private fun fail(msg: String) {
+        lastError = msg
+        onStateChange?.invoke("failed: $msg")
+    }
+
     /** 本地端口/基址变化（断线重连后会更换端口）；调用方需据此重新加载。 */
     @Volatile var onLocalBaseChanged: ((String) -> Unit)? = null
 
@@ -292,7 +310,7 @@ class SshTunnel(
         val bin = binPath
         if (bin == null) {
             DiagLog.e(TAG, "dbclient path not set — DshApp.onCreate should inject it")
-            onStateChange?.invoke("failed: 内部错误（dbclient 路径未设置）")
+            fail("内部错误（dbclient 路径未设置）")
             return false
         }
         // 先回收旧 owner：固定端口要立刻能重绑，而且不能让残留进程冒名监听
@@ -315,7 +333,7 @@ class SshTunnel(
                 pb.start()
             } catch (e: Exception) {
                 DiagLog.w(TAG, "dbclient launch failed: ${e.message}")
-                if (attempt == MAX_ATTEMPTS) onStateChange?.invoke("failed: ${e.message}")
+                if (attempt == MAX_ATTEMPTS) fail(e.message ?: "dbclient 启动失败")
                 continue
             }
             spawned.add(p)
@@ -330,8 +348,9 @@ class SshTunnel(
                 DiagLog.w(TAG, "dbclient tune #$attempt 未就绪（$state）: ${err.take(200)}")
                 reap(p)
                 if (attempt == MAX_ATTEMPTS) {
-                    val why = err.ifEmpty { "连接超时（$state）" }
-                    onStateChange?.invoke("failed: $why")
+                    // err 是 dbclient 的**真实输出**（认证失败 / host key mismatch / 私钥读不了…），
+                    // 原样交给调用方：它是唯一能区分这些故障的东西。
+                    fail(err.ifEmpty { "连接超时（$state）" })
                 }
                 continue
             }
@@ -347,8 +366,8 @@ class SshTunnel(
                 DiagLog.w(TAG, "dbclient tune #$attempt 端口就绪但探针无响应，丢弃重试")
                 reap(p)
                 if (attempt == MAX_ATTEMPTS) {
-                    onStateChange?.invoke(
-                        "failed: 本地端口已就绪，但对 dsh 的请求无响应"
+                    fail(
+                        "本地端口已就绪，但对 dsh 的请求无响应"
                             + "（隧道可能已断，或电脑上的 dsh 没在运行）")
                 }
                 continue

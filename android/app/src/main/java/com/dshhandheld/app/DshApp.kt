@@ -79,15 +79,10 @@ class DshApp : Application() {
         retainedWebViewContext = w
         return WebView(w).also { view ->
             retainedWebView = view
-            // 渲染进程优先级（2026-09-17 真机诊断）：页面里的「这一轮结束了」信号靠 React 重新
-            // 渲染，而 WebView 的 renderer 是**独立子进程**（dumpsys 里那串 SandboxedProcessService，
-            // 不可见时状态就是 WPRI = waived priority）—— 它被系统 waive/冻结之后 JS 不再跑、
-            // DOM 不再更新，于是「在后台收不到完成通知」：实测 21:01 那次成功是退到后台 31s 内
-            // 结束的（还没被冻），更久的两次连一条 turn-start/turn-done 都没有（页面根本没渲染）。
-            // IMPORTANT + waivedWhenNotVisible=false = 明确要求「不可见也别放弃这个 renderer」。
-            runCatching {
-                view.setRendererPriorityPolicy(WebView.RENDERER_PRIORITY_IMPORTANT, false)
-            }.onFailure { DiagLog.w(TAG, "setRendererPriorityPolicy 失败：${it.message}") }
+            // 注：2026-09-17 曾在这里加 setRendererPriorityPolicy(IMPORTANT, false) 想让被冻的
+            // renderer 活下来 —— 真机实测**没有效果**（后台 6 分钟仍然一条心跳都没有），
+            // 却让一个 renderer 进程长期不被 waive。通知现在由 [HarnessEventsClient] 从 Host 的
+            // 权威状态拿到，不再依赖页面，所以这里已经撤掉。
             attachPageBridge(view)
         }
     }
@@ -258,6 +253,18 @@ class DshApp : Application() {
      */
     @Volatile
     var sshTunnel: SshTunnel? = null
+        private set
+
+    /**
+     * 最近一次拨号失败的原因（**只在 [ensureTunnel] 返回 null 时有意义**；成功路径会清空它）。
+     *
+     * 数据来自 [SshTunnel.lastError]（dbclient 的真实输出）。为什么要有它：失败原因此前只进
+     * DiagLog，UI 上所有失败都塌缩成「连不上你的电脑（检查地址/账号/密码）」，而
+     * 「主机身份变了」是**用户下一步动作完全不同**的事 —— 它还需要一个出口
+     * （见 `MainActivity.resetKnownHosts`）。
+     */
+    @Volatile
+    var lastTunnelError: String? = null
         private set
 
     /** 隧道基址变化的订阅者（目前只有 MainActivity 订阅）。 */
@@ -601,8 +608,10 @@ class DshApp : Application() {
             }
             t.start()
             if (t.localBaseUrl == null) {
+                // 失败原因带到 UI 去（否则只剩一句「检查地址/账号/密码」）
+                lastTunnelError = t.lastError
                 t.close()
-                DiagLog.w(TAG, "ensureTunnel: 拨号失败")
+                DiagLog.w(TAG, "ensureTunnel: 拨号失败（${lastTunnelError ?: "原因未记录"}）")
                 return null
             }
             val published = synchronized(tunnelLock) {
@@ -621,6 +630,7 @@ class DshApp : Application() {
             }
             // 隧道真的起来了才需要保活。放在成功分支里（而不是 build()），
             // 免得拨号失败也留下一个常驻前台服务。
+            lastTunnelError = null
             TunnelService.start(this, "已连接到 ${cfg.host}")
             DiagLog.i(TAG, "ensureTunnel: 已建立 ${t.localBaseUrl}")
             // 隧道刚起来：把权威回合状态的订阅挂上（页面被冻时通知只能靠它）。
