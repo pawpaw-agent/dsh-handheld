@@ -286,6 +286,15 @@ class DshApp : Application() {
      * 保活，页面若在这期间重载，`shouldInterceptRequest` 还得把 bundle 喂出去 ——
      * 而那个 client 刻意不持 Activity，只能从 Application 拿（审计 M1）。
      */
+    /**
+     * 已注入的 `document-start` 脚本句柄（审计 L8/B3）。
+     *
+     * WebView 是 Application 保活的，所以「注入了几份」这件事也必须跟它同寿命记在一处：
+     * 记在 Activity 上就会随重建丢引用、于是每重建一次就多一份脚本在同一个 WebView 上累积。
+     */
+    @Volatile
+    var bootstrapScriptHandler: androidx.webkit.WebViewCompat.ScriptHandler? = null
+
     val pluginBundleBytes: ByteArray? by lazy {
         runCatching {
             assets.open("plugins/dsh-handheld-mobile.js").use { it.readBytes() }

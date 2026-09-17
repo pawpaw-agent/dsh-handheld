@@ -55,15 +55,24 @@ bootstrap 幂等）。
 复用快路径再确认身份）、**L1**（`execOnce` 异常路径也收子进程）、**L2**（解密失败在连接屏说出来）、
 **L4**（光标闪烁回调）、**L5**（两处与实现相反的注释）。
 
-第五批（本次）：**M23**（抽屉的「点一下收起来」跟 `MOBILE_QUERY` 一起退场）、**L15**（那条 padding
+第六批（本次）：**L6**（明文 HTTP 从「全应用开关」收窄成只给 `127.0.0.1`/`localhost` 的
+`networkSecurityConfig`）、**L7**（`shouldInterceptRequest` 从「URL 含子串」收紧成「回环 origin +
+插件 id」）、**L8**（`addDocumentStartJavaScript` 的 origin 从 `*` 收到两个回环 origin；句柄记在
+`DshApp` 上，重建时先移除旧的，不再累积）。
+
+第五批：**M23**（抽屉的「点一下收起来」跟 `MOBILE_QUERY` 一起退场）、**L15**（那条 padding
 规则锚定到会话头）、**L17**（标记观察者也听 `data-handheld` 的属性删除）、**L11**（契约提取器补
 运算符写法与 `getAttribute`/`hasAttribute`）、**M14**（NDK 版本进 dropbear 缓存键 + 命中时校验产物）、
 **L9**（`ui-verify.mjs` 的 id/rev 改成从 `MainActivity.kt` 解析，不再手抄）。插件 rev 1.0.21。
 
-仍未动：H4（等 PR #1 合并）、M6（conformance 的「oracle 自己和自己比」）、M7（覆盖率判据部分恒真）、
-M21（可见性判据 —— 等真机看清第二份 `_turnStatus` 怎么藏的）、M25（契约只守属性名不守取值）、
-L6（明文 HTTP 收窄 —— 需要真机验证下载路径）、L7/L8（注入与拦截的 origin 收窄）、L10(done)、
-L12（conformance 的 resize 从未触发）、L13–L17(done)。
+仍未动：**H4**（等 PR #1 合并）、**M6**（conformance 的「oracle 自己和自己比」+ 与 app 的
+`terminal-view` 版本零绑定）、**M7**（覆盖率判据部分恒真：`in:wide-chars` 只看「有非 ASCII 字节」）、
+**M21**（可见性判据 —— 等真机看清第二份 `_turnStatus` 怎么藏的）、**M25**（契约只守属性名不守取值）、
+**L2 的真机面**（解密失败的提示要看得到）、**L12**（conformance 的 resize 从未触发）。
+
+已修共 36 条（H1–H3、H5–H8、M1–M5、M8–M20、M22–M24、L1、L3、L4、L5、L6、L7、L8、L9、L10、L11、
+L13–L17）。**L6/L7/L8 这三条改了网络与注入的边界，装包后值得各跑一次冒烟**（网页能开、终端能连、
+会话日志能导出）。
 
 ## 二、高 / 中高
 

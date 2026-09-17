@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 明文只允许发生在**设备本地回环**（审计 L6）。
+     隧道模式下的页面地址是 http://127.0.0.1:3080（占用时回退 13080），这正是本项目需要
+     明文 HTTP 的全部理由；其余域名一律按平台默认拒绝明文 —— 原先 `usesCleartextTraffic="true"`
+     是**全应用**开关，等于给任何 https 站点之外的访问都开了口子。
+     注意 DownloadManager（会话日志导出）是另一个进程、用它自己的网络策略，与本文件无关。 -->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="false" />
+    <domain-config cleartextTrafficPermitted="true">
+        <domain includeSubdomains="false">127.0.0.1</domain>
+        <domain includeSubdomains="false">localhost</domain>
+    </domain-config>
+</network-security-config>

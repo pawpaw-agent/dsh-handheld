@@ -18,7 +18,8 @@
         android:label="DSH Handheld"
         android:supportsRtl="true"
         android:theme="@style/Theme.DshHandheld"
-        android:usesCleartextTraffic="true">
+        android:networkSecurityConfig="@xml/network_security_config"
+        android:usesCleartextTraffic="false">
 
         <!-- 这里原先写 android:extractNativeLibs="true"。AGP 9 起在 manifest 里**显式**写这个
              属性会直接构建失败，要求改到 build 脚本里表达（语义不变，AGP 会自己把该属性写进

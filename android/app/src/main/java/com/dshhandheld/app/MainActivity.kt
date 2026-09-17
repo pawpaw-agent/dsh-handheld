@@ -132,7 +132,7 @@ class MainActivity : Activity() {
             request: android.webkit.WebResourceRequest?
         ): android.webkit.WebResourceResponse? {
             val u = request?.url?.toString() ?: return null
-            if (!u.contains("/plugins/") || !u.contains("$MOBILE_PLUGIN_ID/client.js")) return null
+            if (!isPluginBundleUrl(u)) return null
             val bytes = app.pluginBundleBytes ?: return null
             return android.webkit.WebResourceResponse(
                 "text/javascript", "utf-8", ByteArrayInputStream(bytes)
@@ -437,6 +437,27 @@ class MainActivity : Activity() {
         const val MOBILE_PLUGIN_URL = "/plugins/??$MOBILE_PLUGIN_ID/client.js&rev=$MOBILE_PLUGIN_REV"
 
         /**
+         * 这条请求是不是「要我们的适配层 bundle」。
+         *
+         * 判据从「URL 里含子串」收紧成「origin 是隧道那两个回环地址 + 路径含插件 id」（审计 L7）：
+         * 原先任何 origin 上只要路径里出现 `/plugins/` 与插件 id，就会被喂我们 APK 里的 bundle。
+         * 功能上无害，但属于「本机资源被无关页面引用」的松边界。
+         *
+         * 放在 companion 里：兜底的 `DetachedWebViewClient` 是**嵌套类**（刻意不持 Activity），
+         * 它只能调 companion 成员。
+         */
+        fun isPluginBundleUrl(u: String): Boolean {
+            val uri = runCatching { android.net.Uri.parse(u) }.getOrNull() ?: return false
+            if (uri.host != "127.0.0.1") return false
+            if (uri.port !in SshTunnel.PORT_CANDIDATES) return false
+            return u.contains("/plugins/") && u.contains("$MOBILE_PLUGIN_ID/client.js")
+        }
+
+        /** 隧道的两个回环 origin（与 [SshTunnel.PORT_CANDIDATES] 同源，别各写一份）。 */
+        fun tunnelOrigins(): Set<String> =
+            SshTunnel.PORT_CANDIDATES.map { "http://127.0.0.1:$it" }.toSet()
+
+        /**
          * 读注入引导脚本（assets 单一来源），把占位符换成上面的常量。
          *
          * 脚本内容放在 `assets/plugins/mobile-bootstrap.js` 而不是这里的裸字符串：
@@ -496,7 +517,16 @@ class MainActivity : Activity() {
                     null
                 }
                 if (bootstrap != null) {
-                    WebViewCompat.addDocumentStartJavaScript(this, bootstrap, setOf("*"))
+                    // origin 收窄（审计 L8）：原先 `setOf("*")` —— 引导脚本会在**任意**页面上
+                    // 执行（它只定义 __DSH_BOOT__ 的 setter，风险低，但没必要的宽）。
+                    // 同时把句柄记在 Application 上：WebView 是保活的，重建 Activity 时先移除旧的，
+                    // 免得同一个 WebView 上累积 N 份（= §六 B3）。句柄不随 Activity 销毁而移除 ——
+                    // 没有 Activity 时页面若重载，注入仍需生效。
+                    val app = application as DshApp
+                    runCatching { app.bootstrapScriptHandler?.remove() }
+                    app.bootstrapScriptHandler = WebViewCompat.addDocumentStartJavaScript(
+                        this, bootstrap, tunnelOrigins()
+                    )
                 }
             }
             webViewClient = object : WebViewClient() {
@@ -506,8 +536,7 @@ class MainActivity : Activity() {
                     request: android.webkit.WebResourceRequest?
                 ): android.webkit.WebResourceResponse? {
                     val u = request?.url?.toString() ?: return null
-                    // 兜底匹配：?? 可能被编码为 %3F%3F，只锚定 /plugins/ 前缀 + 插件 id
-                    if (!u.contains("/plugins/") || !u.contains("$MOBILE_PLUGIN_ID/client.js")) return null
+                    if (!isPluginBundleUrl(u)) return null
                     val bytes = try {
                         assets.open("plugins/dsh-handheld-mobile.js").use { it.readBytes() }
                     } catch (e: Exception) { return null }
