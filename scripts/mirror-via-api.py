@@ -12,6 +12,8 @@ that the local index lacks (verify with
 — anything remote-only is deleted by a mirror.
 
 Usage: python3 mirror-via-api.py --message MSG
+  --expect-base SHA  required: assert the remote branch is still at SHA (default branch)
+
 """
 import base64
 import json
@@ -47,10 +49,13 @@ def gh(method, url, payload=None):
 
 def main():
     msg = None
+    expect_base = None
     args = sys.argv[1:]
     while args:
         a = args.pop(0)
-        if a == "--message":
+        if a == "--expect-base":
+            expect_base = args.pop(0)
+        elif a == "--message":
             msg = args.pop(0)
         else:
             raise SystemExit(f"unexpected argument: {a}")
@@ -93,6 +98,19 @@ def main():
     print(f"local tracked files: {len(files)}")
 
     head = gh("GET", f"{API}/git/ref/heads/{BRANCH}")["object"]["sha"]
+    # ── base 断言（2026-09-17 审计 M15）────────────────────────────────────
+    # 本脚本按本地索引**重建整棵树**，parent 取「此刻的远端 head」→ 永远 fast-forward，
+    # `force: False` 对「远端内容被换掉」毫无约束（远端独有的文件会被直接删掉）。
+    # 所以要求调用方显式声明「我以为远端在哪」，并在写之前拦住。
+    if expect_base is None:
+        raise SystemExit(
+            "拒绝镜像：缺少 --expect-base <sha>\n"
+            f"  当前 {BRANCH} @ {head}\n"
+            "  镜像会按本地索引重建整棵树（远端独有的文件会被删）——确认无误后把上面这个 sha 传进来。")
+    if expect_base != head:
+        raise SystemExit(
+            f"拒绝镜像：--expect-base {expect_base} 与远端 {BRANCH} {head} 不一致\n"
+            "  远端已经动过（别人推了 / 你看到的是旧状态）——先看清再重来。")
     print(f"{BRANCH} @ {head}")
 
     # 1. one blob per file

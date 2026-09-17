@@ -292,6 +292,7 @@ console.log('');
 console.log(`── 插件依赖的类名后缀（${classHooks.length} 个）──`);
 const classMissing = [];
 const classPluginOnly = [];
+const classPluginOnlyWrong = [];
 for (const h of classHooks) {
   const inCore = frontend.split(h).length - 1;
   const inAll = frontendAll.split(h).length - 1;
@@ -301,13 +302,56 @@ for (const h of classHooks) {
     console.log(`  ✓ ${h.padEnd(20)} 核心 ${inCore} 处${tag}`);
   } else if (inAll > 0) {
     classPluginOnly.push(h);
-    // 只出现在插件包里的后缀**不判失败**：规则仍然命中（那个插件装了就有 UI），
-    // 没装时它只是空转。判失败的是「全量安装里也找不到」——那才是真的静默失效。
-    console.log(`  ✓ ${h.padEnd(20)} 仅插件包 ${inAll} 处${declaredPlugin ? '' : ' ← 建议挪到契约的 classHooksPlugin'}`);
+    // 契约里标为 classHooksPlugin 的：只出现在插件包是**预期**的。
+    // 但契约标为**核心**（classHooks）却只在插件包里找到，就是契约在说谎（审计 M25）：
+    // 之前这里只打一句「建议挪到契约」，CI 照样绿 —— 于是后缀搬家后没人知道。
+    if (declaredPlugin) {
+      console.log(`  ✓ ${h.padEnd(20)} 仅插件包 ${inAll} 处`);
+    } else {
+      classPluginOnlyWrong.push(h);
+      console.log(`  ✗ ${h.padEnd(20)} 契约声明为核心，实际只在插件包里 —— 契约与实现不符`);
+    }
   } else {
     classMissing.push(h);
     console.log(`  ✗ ${h.padEnd(20)} **全量安装里也找不到** —— 这条适配规则已经空转`);
   }
+}
+
+// 反向：契约声明为核心、插件**已经不再读**的后缀 —— 契约过期了（审计 M25：这个数组
+// 之前算出来就没人用）。留着它会让「核心依赖」的清单越来越长，直到没人敢信。
+const staleContractClasses = requiredClasses.filter((h) => !classHooks.includes(h));
+if (staleContractClasses.length) {
+  console.log('');
+  console.log(`  ✗ 契约里声明为核心、但插件已不再使用：${staleContractClasses.join(', ')}`);
+  console.log('      → 要么恢复用法，要么从 scripts/mobile-hooks-contract.json 的 classHooks 里删掉');
+}
+
+// ── 插件写死的属性**取值**（审计 M25）────────────────────────────────────
+// 只守属性名不够：宿主把取值改名（本机 conversationPhase 已经会返回 "engaging"）
+// 时规则会静默空转，而 CI 全绿。判据是 canary 级的：插件写死的取值必须仍能在
+// dsh 前端里找到（弱，但足以在改名时红）。
+const valuePairs = new Map();
+for (const m of bundle.matchAll(/\[data-([a-z-]+)\s*[~^$*|]?=\s*["']?([a-z0-9-]+)["']?\]/g)) {
+  const attr = `data-${m[1]}`;
+  if (isOtherHost(attr) || PLUGIN_OWN.includes(attr)) continue;
+  valuePairs.set(`${attr}=${m[2]}`, `${attr}="${m[2]}"`);
+}
+for (const m of bundle.matchAll(/getAttribute\("(data-[a-z-]+)"\)\s*===\s*"([^"]+)"/g)) {
+  const attr = m[1];
+  if (isOtherHost(attr) || PLUGIN_OWN.includes(attr)) continue;
+  valuePairs.set(`${attr}=${m[2]}`, `${attr} == "${m[2]}"`);
+}
+if (valuePairs.size) {
+  console.log('');
+  console.log(`── 插件写死的属性取值（${valuePairs.size} 个）──`);
+}
+const valueMissing = [];
+for (const [key, label] of valuePairs) {
+  const value = key.slice(key.indexOf('=') + 1);
+  const n = frontend.split(value).length - 1;
+  const ok = n > 0;
+  if (!ok) valueMissing.push(label);
+  console.log(`  ${ok ? '✓' : '✗'} ${label.padEnd(44)} ${ok ? `${n} 处` : '**前端里找不到这个取值**'}`);
 }
 
 if (otherHooks.length) {
@@ -339,7 +383,8 @@ console.log(`  ${usedAll ? '✓' : '✗'} 引导模板用到全部三个占位�
 
 // ── 结论 ───────────────────────────────────────────────────────────────────
 console.log('');
-const failures = missing.length + classMissing.length + (idOk ? 0 : 1) + leftover.length + (usedAll ? 0 : 1);
+const failures = missing.length + classMissing.length + classPluginOnlyWrong.length
+  + staleContractClasses.length + valueMissing.length + (idOk ? 0 : 1) + leftover.length + (usedAll ? 0 : 1);
 if (failures === 0) {
   if (process.argv.includes('--update-contract')) {
     let dshVersion = 'unknown';

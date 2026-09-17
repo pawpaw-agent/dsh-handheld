@@ -4,6 +4,8 @@
 Used when the git:// https transport is unreliable (TLS resets).
 Creates one commit on top of current main.
 Usage: python3 push-via-api.py [--delete PATH]... [--message MSG] FILE1 [FILE2 ...]
+  --expect-base SHA  required: assert the remote branch is still at SHA (default branch)
+
 """
 import base64
 import json
@@ -55,10 +57,13 @@ def main():
     deletes = []
     msg = None
     files = []
+    expect_base = None
     while args:
         a = args.pop(0)
         if a == "--delete":
             deletes.append(args.pop(0))
+        elif a == "--expect-base":
+            expect_base = args.pop(0)
         elif a == "--message":
             msg = args.pop(0)
         else:
@@ -69,6 +74,23 @@ def main():
     ref = gh("GET", f"{API}/git/ref/heads/main")
     head_sha = ref["object"]["sha"]
     print(f"main @ {head_sha}")
+    # ── base 断言（2026-09-17 审计 M15）────────────────────────────────────
+    # 这两个脚本都以**当前远端 head** 为 parent 建提交，于是永远 fast-forward，
+    # `force: False` 对「内容被换掉」毫无约束；mirror 更是按本地索引重建整棵树。
+    # 所以要求调用方显式给出「我以为远端在哪」：
+    #   --expect-base <sha>    与远端 head 不一致就直接拒绝（别人推过 / 我看错了分支）
+    # 取不到或不匹配绝不继续 —— 这条检查的意义就是**在写之前**拦住。
+    if expect_base is None:
+        raise SystemExit(
+            "拒绝推送：缺少 --expect-base <sha>\n"
+            f"  当前 main @ {ref['object']['sha']}\n"
+            "  这样能保证你看到的远端状态与你要提交的 parent 一致（审计 M15）；\n"
+            "  确认无误后把上面那个 sha 传进来：--expect-base <sha>")
+    if expect_base != ref["object"]["sha"]:
+        raise SystemExit(
+            f"拒绝推送：--expect-base {expect_base} 与远端 main {ref['object']['sha']} 不一致\n"
+            "  说明远端已经动过（别人推了 / 你看到的是旧状态）—— 先 fetch 看清再重来。")
+
 
     all_entries = tree_of(head_sha)
     if msg is None:
