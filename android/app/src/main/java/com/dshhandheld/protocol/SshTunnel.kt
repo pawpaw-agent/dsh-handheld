@@ -128,7 +128,14 @@ class SshTunnel(
                         onStateChange?.invoke("reconnecting")
                         if (connecting.compareAndSet(false, true)) {
                             try {
-                                if (!connectOnce()) consecutiveFailures++
+                                if (!connectOnce()) {
+                                    consecutiveFailures++
+                                    // 重建失败：**基址不能留着**。原先刻意不清（为了「重建后端口相同、
+                                    // origin 不变」），但那是成功路径的理由；失败时留着它就等于对外
+                                    // 宣布一个已经不通的地址（审计 H5：界面因此显示「已连上电脑」、
+                                    // 点进去是死页面，且只有切前后台才自愈）。
+                                    localBaseUrl = null
+                                }
                             } finally {
                                 connecting.set(false)
                             }
@@ -145,6 +152,19 @@ class SshTunnel(
         }.apply { isDaemon = true; name = "ssh-tunnel-watchdog"; start() }
         return localPort
     }
+
+    /**
+     * **非阻塞**的存活判据：owner 进程还在、本地监听端口还占着。
+     *
+     * 与 [isHealthy] 的分工：那个要发真流量（最长阻塞 4.5s，只能后台线程用），
+     * 这个只是读两个字段 —— 给 UI 判「现在到底有没有一条活着的隧道」用。
+     *
+     * 为什么需要它（2026-09-17 审计 H5）：界面原先的判据是 `sshTunnel != null`，
+     * 而看门狗重建失败时 `sshTunnel` 与 `localBaseUrl` 都不会变 —— 于是「隧道已死」
+     * 被稳定地显示成「已连上电脑」，点进去就是死页面。
+     */
+    val isUp: Boolean
+        get() = started.get() && localPort > 0 && proc?.isAlive == true
 
     /**
      * 隧道是否可用：owner 存活 **且真的能过流量**（[probeDataPlane]）。

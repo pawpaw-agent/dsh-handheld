@@ -70,6 +70,19 @@ class MainActivity : Activity() {
     private var webView: WebView? = null
     private var connectView: View? = null
     private var errorView: View? = null
+
+    /**
+     * 这一次导航失败过吗（error / HTTP error，仅主框架）。
+     *
+     * 审计 M3：错误覆盖层的**唯一**自动隐藏点是 `onPageFinished`，而且原先无条件隐藏 ——
+     * 而 4xx/5xx 在 WebView 里也算「导航正常结束」。于是 `handleUnauthorized` 刚弹出的
+     * 401 令牌页、`showErrorPage` 刚弹出的错误页，会在同一次导航结束时**被自己盖掉**，
+     * 用户看不到唯一入口「自动获取令牌并重连」。反过来（错误不回调 onPageFinished 的平台），
+     * 覆盖层会永久盖住连接屏、BACK「回连接屏」成了空操作。
+     *
+     * 现在：`onPageStarted` 清、主框架错误回调置、`onPageFinished` 仅在**未置位**时隐藏。
+     */
+    private var navFailed = false
     /** 诊断信息页（机内取证）的容器与正文；见 [showDiagPage]。 */
     private var diagView: View? = null
     private var diagBody: TextView? = null
@@ -87,6 +100,20 @@ class MainActivity : Activity() {
                 // 本地基址变了 → cookie 失效，必须重新走 token 交换。
                 sshTokenAck = false
                 connectWeb(base)
+            }
+        }
+
+        /**
+         * 隧道可用性变了（看门狗重建失败、拨号失败、被断开…）。
+         *
+         * 修的是审计 H5：**这条路径原先只写日志** —— 隧道死了而 `sshTunnel` 还在，
+         * 连接屏就一直显示「已连上电脑」，点主按钮进网页就是死页面，只有切前后台才自愈。
+         * 现在：不可用时把状态块刷新成「未连接」并在状态条上说明一句，可用时同样刷新。
+         */
+        override fun onTunnelAliveChanged(alive: Boolean) {
+            onUi {
+                if (!alive) status("连接断了，请重新连接")
+                refreshConnectState()
             }
         }
     }
@@ -252,7 +279,7 @@ class MainActivity : Activity() {
      * 现在所有分支都只读事实（相位、失败标志、隧道、页面），不记忆上一次画了什么。
      */
     private fun syncConnectUi() {
-        val tunneled = (application as DshApp).sshTunnel != null
+        val tunneled = (application as DshApp).liveTunnel() != null
         val pageAlive = webView?.url?.startsWith("http") == true
         val connecting = connectPhase == ConnectPhase.CONNECTING && !connectFailed
 
@@ -458,6 +485,12 @@ class MainActivity : Activity() {
                         "text/javascript", "utf-8", ByteArrayInputStream(bytes)
                     )
                 }
+                override fun onPageStarted(view: WebView?, url: String?, favicon: android.graphics.Bitmap?) {
+                    // 新导航开始 → 清掉上一次的失败标记（它决定 onPageFinished 要不要隐藏覆盖层）
+                    if (navFailed) DiagLog.i(TAG, "onPageStarted: 清掉上一次的导航失败标记")
+                    navFailed = false
+                }
+
                 override fun onPageFinished(view: WebView?, url: String?) {
                     // 带 ?token= 的成功页面：服务端已 303 换 cookie 并落地干净 URL；
                     // 后续加载成功也记住认证态（cookie 有效期内无需重复 token 交换）。
@@ -472,11 +505,15 @@ class MainActivity : Activity() {
                         // about:blank / 带 token 的中间页：刻意不置 ack（1.5.2 的 401 回归源于此）
                         DiagLog.i(TAG, "onPageFinished: 非正式页面，不置 ack url=$u")
                     }
-                    hideErrorPage()
+                    // 只在**这一次导航没失败**时隐藏（审计 M3）：否则错误响应一结束就把
+                    // 刚弹出的令牌页/错误页自己盖掉。
+                    if (!navFailed) hideErrorPage()
+                    else DiagLog.i(TAG, "onPageFinished: 这次导航失败过，保留覆盖层")
                 }
                 override fun onReceivedError(view: WebView?, request: WebResourceRequest?, error: WebResourceError?) {
                     // ERR_ABORTED(-3) = 导航被取消（重载/加载 about:blank 打断上一请求），不算失败
                     if (request?.isForMainFrame == true && error?.errorCode != -3) {
+                        navFailed = true
                         // 错误描述此前只上屏（给用户看的文案会随场景改写），日志里必须留原始值
                         DiagLog.w(TAG, "onReceivedError: code=${error?.errorCode} " +
                             "desc=${error?.description} url=${request.url}")
@@ -486,6 +523,7 @@ class MainActivity : Activity() {
                 }
                 override fun onReceivedHttpError(view: WebView?, request: WebResourceRequest?, resp: android.webkit.WebResourceResponse?) {
                     if (request?.isForMainFrame == true) {
+                        navFailed = true
                         val code = resp?.statusCode ?: 0
                         // 431（cookie 累积顶爆头部上限）当年就是在这里静默失败、只能靠 CDP 手工挖
                         DiagLog.w(TAG, "onReceivedHttpError: HTTP $code url=${request.url} " +
@@ -612,10 +650,15 @@ class MainActivity : Activity() {
                 DiagLog.i(TAG, "onCreate: 分支3 停留连接屏（有 url 但 ssh 配置不可用）")
                 showScreen(Screen.CONNECT)
             }
-        } else if (currentUrl?.startsWith("http") == true) {
-            // 必须是**正式页面**才算「已在网页上」。此前判的是 `!isNullOrBlank()`，
-            // 于是「断开连接」载入的 about:blank 也命中这一支 → 连接屏被 GONE 掉、
-            // WebView 又是空白，重开 App 就是一条无 UI 出口的死路（BACK 只 moveTaskToBack）。
+        } else if (currentUrl?.startsWith("http") == true &&
+            (application as DshApp).liveTunnel() != null
+        ) {
+            // 必须是**正式页面**、**且隧道还活着**才算「已在网页上」。
+            // 前半句是 0.1.9 为堵 about:blank 那条死路加的（此前判的是 `!isNullOrBlank()`，
+            // 于是载入 about:blank 也命中 → 连接屏被 GONE 掉、WebView 又空白 → 无 UI 出口）。
+            // 后半句是审计 M2：`断开连接` 改成「保留页面」之后，断开再重开 Activity 的现场是
+            // 「prefs[url] 已删、隧道已关、而 webView.url 仍是 http」—— 只看 URL 就会把人直接
+            // 送进一个打不开的页面，连连接屏入口都没有；隧道不在时自然落到下面那支。
             DiagLog.i(TAG, "onCreate: 分支1 直接回网页（复用保活 WebView，不重连不重载）")
             showScreen(Screen.WEB)
         } else {
@@ -1073,6 +1116,13 @@ class MainActivity : Activity() {
                 ViewGroup.LayoutParams.WRAP_CONTENT, dp(48)
             ).apply { gravity = Gravity.CENTER_VERTICAL })
             setOnClickListener {
+                // 连接中不给切相位（审计 M4）：切走 CONNECTING 会让 syncConnectUi 立刻重算成
+                // 「未连接」、藏掉 ①②③ 与主按钮的「取消连接」，而后台的拨号还在飞 ——
+                // 用户既看到假状态，又失去了取消入口（最坏等 45s）。
+                if (connectPhase == ConnectPhase.CONNECTING && !connectFailed) {
+                    DiagLog.i(TAG, "连接设置：连接进行中，忽略展开/收起")
+                    return@setOnClickListener
+                }
                 val next =
                     if (connectPhase == ConnectPhase.EDIT) ConnectPhase.IDLE else ConnectPhase.EDIT
                 showPhase(next)
@@ -1210,7 +1260,7 @@ class MainActivity : Activity() {
          */
         fun onPrimaryAction() {
             val app = application as DshApp
-            val tunneled = app.sshTunnel != null
+            val tunneled = app.liveTunnel() != null
             val pageAlive = webView?.url?.startsWith("http") == true
 
             if (connectPhase == ConnectPhase.CONNECTING && !connectFailed) {
@@ -1505,12 +1555,14 @@ class MainActivity : Activity() {
      * 注意：SSH 隧道断线重连会换本地端口（cookie 按 host:port 绑定失效），
      * 此时 [sshTokenAck] 为 false，会重新走 token 交换。
      */
-    private fun connectWeb(url: String) {
+    private fun connectWeb(url: String, retry: Boolean = false, switchScreen: Boolean = true) {
         status("连接中… $url")
-        showScreen(Screen.WEB)
+        if (switchScreen) showScreen(Screen.WEB)
         lastUrl = url
         unauthorizedCleanTried = false
-        loadRetriesLeft = 3
+        // 重试路径**不重置预算**（审计 H6）：原先每次调用都重置回 3，而重试正是通过调用它
+        // 实现的 → 计数器恒为 3，「3 次余量」永不生效，页面每 5s 无限重载。
+        if (!retry) loadRetriesLeft = 3
         prefs.edit().putString("url", url).apply()
         val token = SecurePrefs.getString(prefs, PREF_SERVER_TOKEN)?.trim().orEmpty()
         val needsToken = token.isNotEmpty() && !sshTokenAck
@@ -2077,7 +2129,9 @@ class MainActivity : Activity() {
                     // origin 变了：服务端 cookie 名含 authority，必然失效 → 必须重走 token 交换并重载
                     DiagLog.i(TAG, "rebuildTunnel: origin 变了（$prevBase → $base）→ 重新加载")
                     sshTokenAck = false
-                    connectWeb(base)
+                    // 页面必须重载（cookie 随 authority 变），但**不抢屏**（审计 H6）：这是后台
+                    // 自动走的路径，用户可能正停在连接屏改配置 —— 网页屏在 WebView 里照样加载。
+                    connectWeb(base, switchScreen = false)
                     refreshConnectState()
                     endConnect()
                 }
@@ -2117,6 +2171,12 @@ class MainActivity : Activity() {
         when {
             // 覆盖层优先关掉：否则连接屏的 BACK 语义（moveTaskToBack）会把 App 退到后台、
             // 而诊断页还盖在上面 —— 回来时仍是一个"按什么都没反应"的页面。
+            // 错误页/401 令牌页与诊断页同级：它盖在最上面，所以先关它（审计 M3）。
+            errorView?.visibility == View.VISIBLE -> {
+                DiagLog.i(TAG, "BACK: 关闭错误/令牌覆盖层")
+                navFailed = false
+                hideErrorPage()
+            }
             diagView?.visibility == View.VISIBLE -> {
                 DiagLog.i(TAG, "BACK: 关闭诊断页")
                 diagView?.visibility = View.GONE
@@ -2390,7 +2450,7 @@ class MainActivity : Activity() {
      */
     private fun refreshConnectState() {
         syncConnectUi()
-        val tunneled = (application as DshApp).sshTunnel != null
+        val tunneled = (application as DshApp).liveTunnel() != null
         // 按钮可见性此前不可观测：连接失败后按钮残留（指向死隧道）就是这类问题，只能靠截图发现。
         DiagLog.i(TAG, "refreshConnectState: phase=$connectPhase failed=$connectFailed tunneled=$tunneled " +
             "webUrl=${webView?.url} primary=${connectMainBtn?.text} " +
@@ -2409,6 +2469,11 @@ class MainActivity : Activity() {
      */
     private fun showConnectScreen() {
         connectFailed = false
+        // 回连接屏必须把覆盖层一起收掉（审计 M3）：它是 root 里后加的 MATCH_PARENT 兄弟视图，
+        // 不收就出现「screen 已切成 CONNECT、屏幕上却一点变化都没有」——再按一次 BACK
+        // 因为 screen==CONNECT 直接退到后台，「回连接屏」成了空操作。
+        navFailed = false
+        hideErrorPage()
         DiagLog.i(TAG, "showConnectScreen: 回连接屏（tunnel=${(application as DshApp).sshTunnel != null}）")
         showPhase(
             if (savedConfigUsable()) ConnectPhase.IDLE else ConnectPhase.EDIT,
@@ -2435,10 +2500,11 @@ class MainActivity : Activity() {
                 DiagLog.i(TAG, "auto-retry 放弃：Activity 已销毁")
                 return@postDelayed
             }
-            if ((application as DshApp).sshTunnel != null && lastUrl != null) {
+            if ((application as DshApp).liveTunnel() != null && lastUrl != null) {
                 DiagLog.i(TAG, "auto-retry page load (retriesLeft=$loadRetriesLeft) via $lastUrl")
                 sshTokenAck = false
-                connectWeb(lastUrl!!)
+                // 重试：不重置预算、也不把停在连接屏（改配置/看诊断）的用户抢回网页屏
+                connectWeb(lastUrl!!, retry = true, switchScreen = false)
             }
         }, 5000)
     }

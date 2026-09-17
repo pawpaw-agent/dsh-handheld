@@ -226,6 +226,16 @@ class DshApp : Application() {
     /** 隧道基址变化的订阅者（目前只有 MainActivity 订阅）。 */
     interface TunnelObserver {
         fun onTunnelBaseChanged(base: String) {}
+
+        /**
+         * 隧道「可用 ↔ 不可用」变了。
+         *
+         * 为什么要单独一条（2026-09-17 审计 H5）：看门狗的 `onStateChange` 原先只被
+         * [ensureTunnel] 写成一行日志，而界面判「连上没有」用的是 `sshTunnel != null` ——
+         * 看门狗重建失败时那个对象还在，于是界面稳定地显示「已连上电脑」、
+         * 点进去是死页面，只有切前后台才自愈。
+         */
+        fun onTunnelAliveChanged(alive: Boolean) {}
     }
 
     private val tunnelObservers = CopyOnWriteArrayList<TunnelObserver>()
@@ -259,6 +269,22 @@ class DshApp : Application() {
 
     fun removeTunnelObserver(o: TunnelObserver) {
         tunnelObservers.remove(o)
+    }
+
+    /**
+     * 界面上判「现在有没有一条**活着**的隧道」用这个，不要直接读 [sshTunnel]。
+     *
+     * 区别在隧道死掉之后：`sshTunnel` 仍指向那个对象（复用判定还要用它），而这里返回 null。
+     * 判据是非阻塞的 [SshTunnel.isUp]（进程在 + 端口占着），主线程可以随时调。
+     */
+    fun liveTunnel(): SshTunnel? = sshTunnel?.takeIf { it.isUp }
+
+    private fun notifyTunnelAlive(alive: Boolean) {
+        DiagLog.i(TAG, "隧道可用性：alive=$alive（通知 ${tunnelObservers.size} 个观察者）")
+        tunnelObservers.forEach { o ->
+            runCatching { o.onTunnelAliveChanged(alive) }
+                .onFailure { DiagLog.w(TAG, "观察者 onTunnelAliveChanged 抛异常：${it.message}") }
+        }
     }
 
     override fun onCreate() {
@@ -418,6 +444,12 @@ class DshApp : Application() {
                 // 只记日志：状态条由 ①②③ 引导流程表达，connecting/connected 属内部
                 // 状态（曾显示为「隧道: connected」，是术语）。
                 DiagLog.i(TAG, "tunnel state: $s")
+                // 但「可用性」必须告诉界面（审计 H5）：看门狗重建失败时原先只有这行日志。
+                when {
+                    s == "connected" -> notifyTunnelAlive(true)
+                    s.startsWith("failed") -> notifyTunnelAlive(false)
+                    else -> Unit   // connecting / reconnecting 还不改变「可用」判定
+                }
             }
             t.onLocalBaseChanged = { b ->
                 DiagLog.i(TAG, "tunnel base changed: $b")
@@ -469,6 +501,8 @@ class DshApp : Application() {
         }
         // 隧道没了就不该继续占着前台服务
         TunnelService.stop(this)
+        // 明确告诉界面「已经不可用」：主动断开时界面自己会刷新，但看门狗/后台路径不一定。
+        notifyTunnelAlive(false)
         if (closing != null) {
             val th = Thread { closing.close() }
             th.name = "tunnel-close"
