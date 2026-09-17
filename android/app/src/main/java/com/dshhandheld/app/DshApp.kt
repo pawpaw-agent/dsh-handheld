@@ -146,6 +146,7 @@ class DshApp : Application() {
                 // 页面被系统冻住时它不会报结束，靠这条把两路信号对上。
                 watchSession = lastRunningSession
                 pendingWatch = watchSession == null
+                turnNotified = false   // 新一轮：允许再通知一次（去重按轮算）
                 DiagLog.i(TAG, "页面报告：一轮生成开始（pageBusy=true，watch=${watchSession ?: "待对齐"}）")
             }
             "turn-done" -> {
@@ -168,7 +169,13 @@ class DshApp : Application() {
                 when {
                     !on -> Unit
                     foreground -> DiagLog.i(TAG, "App 在前台，不发通知")
-                    else -> Notifier.turnDone(this, title)
+                    // 真机实测：事件流那条路只早到 138ms，两条路会各发一条（用户会看到两次提醒）。
+                    // 去重按「轮」算 —— turn-start 时复位，谁先到谁发。
+                    turnNotified -> DiagLog.i(TAG, "这一轮已经通知过（事件流先到），不重复发")
+                    else -> {
+                        turnNotified = true
+                        Notifier.turnDone(this, title)
+                    }
                 }
             }
             "turn-tick" -> {
@@ -324,6 +331,8 @@ class DshApp : Application() {
     @Volatile private var pendingWatch = false
     /** 最近一次 turn-start 带的标题，给事件流那条通知用。 */
     @Volatile private var lastTurnTitle: String? = null
+    /** 这一轮是否已经发过通知（两条路径都会到，谁先到谁发）。 */
+    @Volatile private var turnNotified = false
 
     /**
      * 按「通知开关 + 当前隧道」同步事件订阅。
@@ -374,6 +383,8 @@ class DshApp : Application() {
         DiagLog.i(TAG, "事件流报告回合结束（session=$sessionId，前台=$foreground）")
         if (!turnNotifyEnabled()) return
         if (foreground) { DiagLog.i(TAG, "App 在前台，不发通知"); return }
+        if (turnNotified) { DiagLog.i(TAG, "这一轮已经通知过（页面先到），不重复发"); return }
+        turnNotified = true
         Notifier.turnDone(this, lastTurnTitle)
     }
 
