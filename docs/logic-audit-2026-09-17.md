@@ -22,6 +22,25 @@
 | B5 | `device-tunnel-verify.mjs` 空日志时判 ✓ | **仍开着** | 未改 |
 | B6 | `mobile-bootstrap.js` 占位符直接拼进双引号字面量 | **仍开着** | 未改 |
 
+## 一·补：本轮已修（2026-09-17，审计之后同一轮）
+
+| 编号 | 落到的实现 |
+|---|---|
+| H1 | `MainActivity.invalidateAttempt()` —— 作废与释放成对，`cancelConnect` / `disconnectCurrent` 都用它 |
+| H2 | `DiagLog.redact()` —— `token=…` 打码打在 `record()` 这个唯一收口（内存 + 文件 + logcat），幂等 |
+| H3 | ci.yml 签名判据与 Gradle 的 `hasReleaseSigning` 逐项对齐 + 回退产物改名 + 证书 DN 断言 |
+| H7 | 完成判据拆两层：`pick()` 优先可见（别 latch 隐藏副本）、`live()` 只看 `isConnected`（藏起来 ≠ 结束，卸载才算） |
+| H8 | 页面一律上报结束（带 `short`），App 决定不打扰 —— `pageBusy` 不再卡住 |
+| M11 | ci.yml 补 native 库 / versionCode / 签名者三重校验（本地用 0.1.12 产物实测过 shell 逻辑） |
+| M12 | ci.yml 依赖不变量加 `set -o pipefail` |
+| M13 | ci.yml 补正向断言；「CI-only 文件」改成对整棵 `assets/` 白名单 + 非空断言 |
+| M22 | 心跳移出 `running` 分支，payload 带每个候选节点的 connected/rects/visibility/display |
+| M24 | 热路径回到 O(1) 的 `isConnected`（不再每个 mutation 批强制同步布局） |
+| L10 | 三处 upload 加 `if-no-files-found: error` |
+
+仍未动：H4（等 PR #1 合并，它已有 `resetKnownHosts`/`tunnelFailureHint`）、H5、H6、M1–M10、
+M14–M21、M23、M25、L1–L9、L11–L17。
+
 ## 二、高 / 中高
 
 | # | 位置 | 机理（一句） | 触发 | 用户可见后果 | 修法 |
