@@ -152,11 +152,18 @@ class HarnessEventsClient(
             DiagLog.w(TAG, "waterfall 事件缺少 clientId/eventId，无法回话（eventId=$eventId）")
             return
         }
-        val body = "{\"type\":\"client-request\",\"rpcId\":\"" + java.util.UUID.randomUUID()
-            .toString() + "\",\"method\":\"\$events/result\",\"payload\":{\"args\":{"
-            + "\"clientId\":\"" + id + "\",\"eventId\":\"" + eventId
-            + "\",\"outcome\":{\"kind\":\"next\"}}}}"
-        val resp = postJson("/api/\$events/result", body)
+        // 用 JSONObject 拼：手写转义在这上面栽过两次 —— 多出一个反斜杠（服务端拒收），
+        // 以及 Kotlin 的续行规则（行首 `+` 会被当成一元加号，编译不过）。
+        val args = JSONObject()
+            .put("clientId", id)
+            .put("eventId", eventId)
+            .put("outcome", JSONObject().put("kind", "next"))
+        val message = JSONObject()
+            .put("type", "client-request")
+            .put("rpcId", java.util.UUID.randomUUID().toString())
+            .put("method", "\$events/result")
+            .put("payload", JSONObject().put("args", args))
+        val resp = postJson("/api/\$events/result", message.toString())
         DiagLog.i(TAG, "waterfall 已回 next（eventId=$eventId）${if (resp != null) "" else "（响应读取失败）"}")
     }
 
