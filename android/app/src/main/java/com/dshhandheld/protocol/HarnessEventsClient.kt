@@ -130,13 +130,68 @@ class HarnessEventsClient(
         }
     }
 
+    /** ready 帧给的客户端身份（回 waterfall 结果时要带上）。 */
+    @Volatile private var clientId: String? = null
+
+    /**
+     * 对 waterfall 事件回一个「我不处理」的结果。
+     *
+     * 协议（`dsh-client-connection` 的 unary 桥）：
+     * ```
+     * POST /api/$events/result   {"type":"client-request","rpcId":…,
+     *                             "method":"$events/result",
+     *                             "payload":{"args":{"clientId":…,"eventId":…,
+     *                                                "outcome":{"kind":"next"}}}}
+     * ```
+     * 响应里带 `ok`；失败只记日志 —— 不回话才是问题，回话失败最坏也只是让 Host 继续等，
+     * 与不做的后果一样，所以不值得把读循环搞复杂。
+     */
+    private fun answerWaterfallNext(eventId: String) {
+        val id = clientId
+        if (id.isNullOrEmpty() || eventId.isEmpty()) {
+            DiagLog.w(TAG, "waterfall 事件缺少 clientId/eventId，无法回话（eventId=$eventId）")
+            return
+        }
+        val body = "{\"type\":\"client-request\",\"rpcId\":\"" + java.util.UUID.randomUUID()
+            .toString() + "\",\"method\":\"\$events/result\",\"payload\":{\"args\":{"
+            + "\"clientId\":\"" + id + "\",\"eventId\":\"" + eventId
+            + "\",\"outcome\":{\"kind\":\"next\"}}}}"
+        val resp = postJson("/api/\$events/result", body)
+        DiagLog.i(TAG, "waterfall 已回 next（eventId=$eventId）${if (resp != null) "" else "（响应读取失败）"}")
+    }
+
+    /** 最小 HTTP/1.1 POST（只给上面的 RPC 用；返回响应体或 null）。 */
+    private fun postJson(path: String, json: String): String? = runCatching {
+        val uri = java.net.URI(baseUrl)
+        val host = uri.host ?: "127.0.0.1"
+        val port = if (uri.port > 0) uri.port else 80
+        val cookie = cookieFor(baseUrl).orEmpty()
+        Socket().use { s ->
+            s.tcpNoDelay = true
+            s.connect(InetSocketAddress(host, port), 5_000)
+            val out = s.getOutputStream()
+            val bytes = json.toByteArray(Charsets.UTF_8)
+            val req = "POST $path HTTP/1.1\r\nHost: $host:$port\r\n" +
+                "Content-Type: application/json\r\nContent-Length: ${bytes.size}\r\n" +
+                (if (cookie.isNotEmpty()) "Cookie: $cookie\r\n" else "") +
+                "Connection: close\r\n\r\n"
+            out.write(req.toByteArray(Charsets.ISO_8859_1))
+            out.write(bytes)
+            out.flush()
+            s.getInputStream().bufferedReader(Charsets.UTF_8).readText()
+        }
+    }.getOrNull()
+
     private fun handleText(bytes: ByteArray) {
         val json = runCatching { JSONObject(String(bytes, Charsets.UTF_8)) }.getOrNull() ?: return
         // 一帧可能是 ready / emit / waterfall / cancel / error，这里只关心状态跃迁。
         if (json.optString("type") != "item") return
         val value = json.optJSONObject("value") ?: return
         when (value.optString("type")) {
-            "ready" -> DiagLog.i(TAG, "事件流就绪：clientId=${value.optString("clientId")}")
+            "ready" -> {
+                clientId = value.optString("clientId")
+                DiagLog.i(TAG, "事件流就绪：clientId=$clientId")
+            }
             "emit" -> {
                 if (value.optString("event") != STATUS_EVENT) return
                 val args = value.optJSONArray("args") ?: return
@@ -147,9 +202,12 @@ class HarnessEventsClient(
                 runCatching { onStatus(sessionId, running) }
                     .onFailure { DiagLog.w(TAG, "onStatus 回调抛异常：${it.message}") }
             }
-            // waterfall 事件（approval/request、user-questions/request）需要客户端回话 ——
-            // 本客户端**只读**，刻意不回：它们由页面那个客户端处理。真机上验证过：只订阅、
-            // 不回话不会让回合停住（emit 类事件本来就不需要回话）。
+            // waterfall 事件（approval/request、user-questions/request）**必须回话**：
+            // Host 会等这个客户端的 result 才继续（`forwardWaterfall` 等 dispatch 结算）。
+            // 本客户端不处理它们（那是页面那个客户端的事），但必须明确回一个
+            // `{kind:"next"}` —— 表示「我不处理，交给下一个」。不回会让审批/提问卡在
+            // 我们这条连接上（这是审计之后新增订阅时唯一真正的行为风险）。
+            "waterfall" -> answerWaterfallNext(value.optString("eventId"))
             else -> Unit
         }
     }
