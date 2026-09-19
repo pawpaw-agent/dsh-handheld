@@ -582,6 +582,19 @@ window.__ModuleLoader__.load({
     padding: 0 14px 18px !important;
   }
 
+  /* ---------- 8b. 右侧栏也要吃安全区（用户：「右侧边栏展开后最顶部无法点击」）----------
+     手机上右侧栏只能以 fullscreen 出现：宿主写的是
+       .P3OORG_panel[data-sidebar-right-panel=fullscreen] { position: fixed; inset: 0; z-index: 40 }
+     —— 也就是它的面板头从 y=0 开始铺。而屏幕最上面那一条（约 0~32 CSS px）是**系统状态条**
+     的地盘：我们自己的会话头按钮在 y=32 还能点到，再往上就点不到了（真机实测过多次）。
+     右侧栏的面板头（标题 + 工具按钮）正好整条落在那里面 → 「最顶部无法点击」。
+     左抽屉早就用 padding-top: env(safe-area-inset-top) 让开了（第 2 节），右侧栏漏了。
+     补上同样的安全区；box-sizing: border-box 保证整体高度不被撑出屏幕。 */
+  [data-sidebar-right-panel="fullscreen"] {
+    padding-top: env(safe-area-inset-top, 0px) !important;
+    box-sizing: border-box !important;
+  }
+
   /* ---------- 9. 右侧边栏：手机上的「退出全屏」是第二个收起按钮 ----------
      宿主（dsh-client-ui-sidebar-right）自己算的：
          const autoFullscreen = viewportWidth < 768;
