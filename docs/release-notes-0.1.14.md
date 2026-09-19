@@ -167,8 +167,11 @@ header:has([class*="_titleRow"]) { --dsh-handheld-head-top: 4px; padding-top: va
 2. **把空间真的用起来**（用户紧接着报：「没有利用好空间」）—— 全屏只是第一步，里面还有两处浪费：
    - **宿主侧栏自己那层根节点**（`SidebarRoot`）挂着内联 `style={width}`（来自 layout 的
      `cols.sidebar`，本机实测 **~265px**）——它不跟着我们那条 100vw 的列走，右边于是空出
-     **~119px**。普通内联声明压不过 stylesheet 的 `!important`，所以
-     `[class*="_sidebarCol"] > * { width: 100% !important }` 能把它拉满；
+     **~119px**。第一版只用 CSS（`[class*="_sidebarCol"] > * { width: 100% !important }`）
+     去压它，**没生效**：根节点被槽运行时包了一层，那层才是直接子元素。改成插件按几何找
+     ——列的第一/第二层子元素里凡是带**像素内联宽度**的就是它，改写 `width:100%`（React 按
+     自己的 prop 做 diff，值没变就不会把 DOM 改回去；再挂一个 MutationObserver 观察
+     `style` 属性兜底），CSS 那条留着当第一道；
    - **尺寸还是桌面档**：会话行 32px、工作区行 34px、标题 14px、行内图标 16px、新会话按钮 36px ——
      在一整屏白底上又小又空，触摸目标也只有 32dp（Material 建议 ≥48dp）。按手指档抬一档：
      行 **44px**、标题 **15px**、时间 13px、行内图标 **20px**、新会话 **44px**、面板行（设置）46px。

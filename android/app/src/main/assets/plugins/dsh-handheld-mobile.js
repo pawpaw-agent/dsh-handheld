@@ -659,6 +659,39 @@ window.__ModuleLoader__.load({
         if (!frame) return undefined;
         frame.setAttribute("data-handheld", "frame");
 
+        // 全屏抽屉：宿主把**侧栏根节点**的宽度写成了内联 style（layout 的 cols.sidebar，
+        // 本机 ~265px），所以它不跟着我们那条 100vw 的列走 —— 右边空出 ~119px（用户
+        // 2026-09-20「没有利用好空间」）。stylesheet 的 !important 本来能压过普通内联声明，
+        // 但根节点可能被槽运行时包了一层（谁是「根」不稳定），所以这里直接按几何找：
+        // 列的第一层/第二层子元素里，凡是带**像素内联宽度**的就是它。
+        // React 不会把它改回去（它按自己的 prop 做 diff，值没变就不碰 DOM），
+        // 但窗口变化/收起展开时宿主会重新渲染，所以观察 style 属性兜底。
+        var widenSidebar = function () {
+          var col = frame.querySelector('[class*="_sidebarCol"]');
+          if (!col) return;
+          var first = col.firstElementChild;
+          var cands = [first, first && first.firstElementChild];
+          for (var i = 0; i < cands.length; i++) {
+            var el = cands[i];
+            if (!el || !el.style) continue;
+            var w = el.style.width;
+            if (w && /px$/.test(w)) {
+              el.style.width = "100%";
+              el.style.maxWidth = "none";
+            }
+          }
+        };
+        widenSidebar();
+        var widenTimer1 = window.setTimeout(widenSidebar, 400);
+        var widenTimer2 = window.setTimeout(widenSidebar, 1500);
+        var widenTimer3 = window.setTimeout(widenSidebar, 4000);
+        var colEl = frame.querySelector('[class*="_sidebarCol"]');
+        var widenObserver = null;
+        if (window.MutationObserver && colEl) {
+          widenObserver = new MutationObserver(widenSidebar);
+          widenObserver.observe(colEl, { subtree: true, attributes: true, attributeFilter: ["style"] });
+        }
+
         var onFrameClick = function (event) {
           // 宽视口 + 触摸主指针（平板横屏 / 展开态折叠屏 / DeX）时这一层本该**整体退场**：
           // CSS 退了（文件末尾那个媒体查询），但这条捕获阶段的点击启发式原先没退 ——
@@ -688,6 +721,10 @@ window.__ModuleLoader__.load({
         frame.addEventListener("click", onFrameClick, true);
         return function () {
           frame.removeEventListener("click", onFrameClick, true);
+          window.clearTimeout(widenTimer1);
+          window.clearTimeout(widenTimer2);
+          window.clearTimeout(widenTimer3);
+          if (widenObserver) widenObserver.disconnect();
           frame.removeAttribute("data-handheld");
         };
       }, []);
