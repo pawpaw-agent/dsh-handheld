@@ -425,13 +425,13 @@ window.__ModuleLoader__.load({
   @media (max-width: 560px) {
     [data-composer-stats] {
       max-width: none !important;
-      padding-left: 8px !important;
-      padding-right: 8px !important;
+      padding-left: 5px !important;
+      padding-right: 5px !important;
       justify-content: space-between !important;
-      gap: 4px !important;
+      gap: 3px !important;
       /* 一行到底：换行会让底部多占一行（用户 2026-09-18 明确不要）。 */
       flex-wrap: nowrap !important;
-      font-size: 10.5px !important;
+      font-size: 10px !important;
     }
     /* 极端长的计数（4 位以上「轮/步」）也只允许尾部省略，不再换行。 */
     [data-composer-stats] > * {
@@ -442,7 +442,7 @@ window.__ModuleLoader__.load({
     }
     /* 分隔符「·」宿主给了左右各 6px；窄屏收到 2px —— 两个胶囊各省 8px，共 16px 余量 */
     [data-composer-stats] [class*="_sep"] {
-      margin: 0 2px !important;
+      margin: 0 1px !important;
     }
   }
 
@@ -488,7 +488,7 @@ window.__ModuleLoader__.load({
   /* 更窄（折叠屏外屏 / 小屏）：再降一档字号与内边距，把「一行」保住。 */
   @media (max-width: 380px) {
     [data-composer-stats] {
-      font-size: 10px !important;
+      font-size: 9.5px !important;
       padding-left: 4px !important;
       padding-right: 4px !important;
     }
@@ -715,6 +715,37 @@ window.__ModuleLoader__.load({
       //     而 MutationObserver 回调是微任务，跟着 JS 任务走，不受节流影响。
       //  3. 太短的「一轮」（< 1.5s）不算数：切会话等操作会让指示器闪现一下，
       //     那不该变成一条通知。
+      // 一次性几何诊断（2026-09-19）：真机截图显示统计行被省略号吃掉，而小回环说余量 44px ——
+      // 「估」已经不解决问题了，直接把 row/每个胶囊的 scrollWidth 与 clientWidth、以及计算出的
+      // 字号报回来。判据与后续调参都靠它。
+      ctx.effect(function () {
+        var report = function (stage) {
+          var row = document.querySelector('[data-composer-stats]');
+          if (row === null) return;
+          var pills = [];
+          for (var i = 0; i < row.children.length && i < 4; i++) {
+            var el = row.children[i];
+            pills.push({
+              text: (el.textContent || '').slice(0, 28),
+              scrollW: el.scrollWidth,
+              clientW: el.clientWidth,
+              font: window.getComputedStyle ? getComputedStyle(el).fontSize : "?"
+            });
+          }
+          postToApp({
+            type: "stats-diag",
+            stage: stage,
+            rowW: row.clientWidth,
+            rowScrollW: row.scrollWidth,
+            rowFont: window.getComputedStyle ? getComputedStyle(row).fontSize : "?",
+            pills: pills
+          });
+        };
+        var t = window.setTimeout(function () { report("1s"); }, 1000);
+        window.addEventListener("load", function () { report("load"); }, { once: true });
+        return function () { window.clearTimeout(t); };
+      }, "dsh-handheld-mobile: stats geometry diag");
+
       ctx.effect(function () {
         var TURN_STATUS = '[class*="_turnStatus"]';
         var MIN_TURN_MS = 1500;

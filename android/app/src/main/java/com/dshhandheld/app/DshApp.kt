@@ -173,6 +173,10 @@ class DshApp : Application() {
                     }
                 }
             }
+            "stats-diag" -> {
+                // 统计行的真实几何（scrollWidth/clientWidth/字号）：调参不再靠估。
+                DiagLog.i(TAG, "统计行几何：${json}")
+            }
             "viewport-diag" -> {
                 // 引导脚本报的 viewport 事实（innerH/screen 高/dpr/meta）：用来确认
                 // 「viewport-fit=cover 到底生效没有」——顶部那 34px 就是这么定案的。

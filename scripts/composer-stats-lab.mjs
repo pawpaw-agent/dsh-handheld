@@ -41,9 +41,9 @@ const CHROME = process.env.CHROME_BIN
   || path.join(os.homedir(), '.cache/ms-playwright/chromium-1243/chrome-linux-arm64/chrome');
 // 真机上这一行显示的是这次会话的真实数字 —— 取 2026-09-18 真机截图里的那组（它当时**换成了两行**）。
 // 用最长的真实形态建模：轮/步会随会话增长，位数是宽度里最不确定的一段。
-const PILL_TIME = '96 轮 289 步';
-const PILL_TPS = '182 tok/s';
-const PILL_USAGE = '75.7M tok';
+const PILL_TIME = '101 轮 314 步';
+const PILL_TPS = '179 tok/s';
+const PILL_USAGE = '77.4M tok';
 const PILL_CACHE = '缓存命中 98%';
 
 // ── 定位 dsh 安装产物（与 check-mobile-hooks.mjs 同一套） ────────────────────
