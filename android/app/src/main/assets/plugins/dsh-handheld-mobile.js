@@ -737,10 +737,42 @@ window.__ModuleLoader__.load({
           var body = document.body;
           var cs = header && window.getComputedStyle ? getComputedStyle(header) : null;
           var bs = body && window.getComputedStyle ? getComputedStyle(body) : null;
+          // 祖先链：从 [data-phase] 往上一直到 body —— 顶部那 35px 到底是哪一层加的。
+          var chain = [];
+          var node = document.querySelector('[data-phase]');
+          var guard = 0;
+          while (node && node !== document.body && guard++ < 12) {
+            var ccs = window.getComputedStyle ? getComputedStyle(node) : null;
+            var b = node.getBoundingClientRect();
+            chain.push({
+              tag: node.tagName.toLowerCase(),
+              cls: (node.getAttribute("class") || "").slice(0, 34),
+              top: Math.round(b.top),
+              h: Math.round(b.height),
+              padTop: ccs ? ccs.paddingTop : "?",
+              marTop: ccs ? ccs.marginTop : "?",
+              pos: ccs ? ccs.position : "?",
+            });
+            node = node.parentElement;
+          }
+          // Chromium 报给页面的挖孔安全区（env），以及 html/body 的样式
+          var probe = document.createElement("div");
+          probe.style.paddingTop = "env(safe-area-inset-top, 0px)";
+          document.documentElement.appendChild(probe);
+          var envTop = getComputedStyle(probe).paddingTop;
+          probe.parentNode.removeChild(probe);
+          var hs = getComputedStyle(document.documentElement);
+          var bs2 = document.body ? getComputedStyle(document.body) : null;
           postToApp({
             type: "layout-diag",
             stage: stage,
             cover: document.documentElement.getAttribute("data-dsh-cover"),
+            envSafeTop: envTop,
+            htmlPadTop: hs.paddingTop,
+            htmlMarTop: hs.marginTop,
+            bodyPadTop2: bs2 ? bs2.paddingTop : null,
+            scrollTop: document.scrollingElement ? document.scrollingElement.scrollTop : null,
+            chain: chain,
             innerH: window.innerHeight,
             vvOffsetTop: window.visualViewport ? Math.round(window.visualViewport.offsetTop) : null,
             header: rect(header),
