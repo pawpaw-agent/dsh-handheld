@@ -465,9 +465,17 @@ window.__ModuleLoader__.load({
       padding-top: 8px !important;
     }
     [data-handheld="frame"] [data-phase] header:has([class*="_titleRow"]) {
-      min-height: 52px !important;
-      padding-top: 6px !important;
-      padding-right: 12px !important;
+      min-height: 0 !important;      /* 76 是**内容撑出来**的（10+30+10+25），压 min-height 没用 */
+      padding-top: 4px !important;   /* 10 → 4 */
+      padding-right: 12px !important;/* 28 → 12 */
+    }
+    /* 宿主的 76px 全是内容：padding 10 + 标题行 30 + 页签 margin-top 10 + 页签 16+9。
+       下面三条各让一步，合计再省 ~18px；页签自身的 padding-bottom 不动（那是手指的目标区）。 */
+    [data-handheld="frame"] [data-phase] header:has([class*="_titleRow"]) [class*="_titleRow"] {
+      min-height: 24px !important;   /* 30 → 24 */
+    }
+    [data-handheld="frame"] [data-phase] header:has([class*="_titleRow"]) [class*="_tabs"] {
+      margin-top: 4px !important;    /* 10 → 4 */
     }
   }
 
