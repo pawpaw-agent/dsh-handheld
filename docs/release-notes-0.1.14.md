@@ -1,0 +1,138 @@
+**手机端「把留白还给内容」的一版，外加一条协议上的坑。** 全部改动都在真机
+（SM-S9280 / Android 16，1440×3120 @ dpr 3.75 → 视口 384×832 CSS px）上**逐项量过**，
+不留「我觉得好了」。
+
+## 📐 顶部与两侧：那几百像素原来是白留的
+
+用户连报两条：「提升两侧和顶部空间利用」「顶部还是大片留白」。真机逐层量下来，
+留白一共有**三个来源**，各修一处：
+
+### ① 两侧 32px + 顶部 76px（宿主自己的内边距）
+
+从**安装产物**里核对出的规则（不是猜）：
+
+```
+.EvIC1a_scroll { padding: 16px calc(var(--dsh-composer-side-clearance) + 16px) }   /* 左右各 32px */
+.wSkVaW_header { min-height: 76px; padding: 10px 28px 0 20px }
+```
+
+384px 的屏幕上，正文两侧被吃掉 64px（全宽的 17%）。改成正文左右 **12px**、上边距 8px
+→ **多出 40px 内容宽度**。
+
+顶部那条更绕：把 header 的 `min-height` 从 76 压到 52 **没用** —— 真机截图里页签一动不动。
+那 76px 是内容算出来的：`padding-top 10 + 标题行 30 + 页签 margin-top 10 + 页签本身 25`。
+所以只能动内容本身：`padding-top 10→4`、标题行 `min-height 30→24`、页签 `margin-top 10→4`
+（页签自己的 `padding-bottom: 9` **不动** —— 那是手指的目标区）→ 约 **−18px**。
+两条合起来，顶部一共省下约 **26px**，两侧多 40px。
+
+### ② 挖孔的 34px：页面 viewport 自己内缩了
+
+`DisplayCutout{insets=Rect(0,128,0,0)}` → 屏幕上缘 **128 设备 px = 34 CSS px**，
+和截图里标题上方那块空白**完全相等**。根因在首页 HTML：
+
+```html
+<meta name="viewport" content="width=device-width, initial-scale=1" />   <!-- 没有 viewport-fit=cover -->
+```
+
+于是 Chromium 按挖孔把 viewport 整体内缩。改法：`mobile-bootstrap.js`（**document-start**
+注入，唯一能赶在宿主那条 meta 之前动手的地方）补上 `viewport-fit=cover`、删掉多余的第二条 meta，
+并给 `<html>` 打 `data-dsh-cover="1"`；适配层据此把会话头 `padding-top` 设成 14px
+（挖孔本体约 11px，14px 既避开摄像头又比「34px viewport 内缩 + 4px」省约 20px）。
+
+真机实测 `innerH`：**798 → 832**（= 3120 ÷ 3.75，整屏 ✓）。
+
+### ③ 补了 cover 之后，宿主外壳反而把 35px 又加回来了
+
+这一条是**我自己引入的回归**，也是用户说的「顶部还是大片留白」的真身：`viewport-fit=cover`
+生效后，宿主 `dsh-client-ui-layout` 的外壳开始**用 JS 内联**写 `padding-top: env(safe-area-inset-top)`，
+本机实测 **35px** —— 而挖孔本体只有约 11px。**净收益为 0**。
+
+定位方式不是猜：插件里加了 `layout-diag`，一次性把**祖先链**（每层的 `top/h/paddingTop/class`）
+和 `env(safe-area-inset-top)` 探针打回来，一次装包就指到了具体元素。真机前后对照：
+
+```
+                        改前                        改后
+pI_x6G_frame   top=0  h=832  padTop=35px     padTop=12px     ← 压掉 23px
+wSkVaW_root    top=35 h=797                  top=12 h=820    ← 会话区 +23px
+header         top=35 h=71  padTop=14px      top=12 h=59  padTop=2px
+titleRow       top=49                        top=14          ← 上移 35px
+```
+
+（内联样式用 `!important` 压得住 ✓；12px 仍在挖孔下缘 11px 之下 ✓。契约补了 `_frame` 钩子。）
+
+### 头部左右不对称
+
+用户问「和左边不对称？」。量化办法是**量截图**（标题行最左/最右深色像素距屏幕边缘 ÷ 3.75）：
+左 14.1px / 右 18.9px，差 4.8px，而且**改之前就在**。两个按钮的盒子分别在 8px 与 12px：
+左端是插件自己的「打开目录」（`left: 8px`），右端是宿主右侧栏按钮
+（`padding-right: 28` 叠加 `.wSkVaW_headerCorner{margin-right:-16px}` = 12px）。
+
+改：左端 `left: 8 → 12px`，标题让位随之 `padding-left: 20 → 24px` → 实测 **18.1 vs 19.2px（差 1.1px）** ✓。
+
+顺带修掉上一版为此踩的坑：我曾把 header 的 `padding-right` 从宿主 28px 压到 12px，
+结果那个 `-16px` 的负 margin 让右端按钮落到了 **−4px**（几乎贴边，用户报「右侧边栏按钮太靠右了」）。
+现在 `padding-right` **不覆盖**，两侧的空间优化只作用在正文与统计行上。
+
+## 📊 底部统计行：一行到底、不再被省略号吃掉
+
+用户明确要「一行」。上一版把 `flex-wrap: wrap` 当兜底 —— 真机上直接变成两行，因为小回环算出的
+22px 余量抵不住真机字体（Roboto / Noto Sans CJK）的宽度差。现在的形态：
+
+- `flex-wrap: nowrap`；字号 11.5 → **10px**、内边距 12 → **5px**、分隔符 2 → **1px**、gap 4 → **3px**；
+- 每个胶囊 `white-space: nowrap` + `min-width: 0` + `text-overflow: ellipsis`
+  ——万一还是装不下，**宁可尾部省略也不多占一行**；
+- ≤380px 再降一档（9.5px / 4px）。
+
+小回环（`scripts/composer-stats-lab.mjs`）的 fixture 换成**真机当前的数字**
+（`101 轮 314 步 · 179 tok/s` / `77.4M tok · 缓存命中 98%`），阈值 40 → **45px**，
+并把「小回环余量 ≈ 真机余量 + 32px」这条偏差记在脚本里 —— 之前拿「估」当「测」，翻过一次车。
+
+真机一次性几何诊断（`stats-diag`）现在两条胶囊都是 `scrollW == clientW`（138/138、142/142）✓，
+即**没有被裁掉任何像素**。
+
+## ⏱ 事件流不再可能拖住审批（waterfall 要回话）
+
+App 为了「后台也能收到任务完成」而订阅了 `/api/remote.mux` 的 `$events` —— 于是它成了 Host
+事件流的**第二个客户端**。转发清单里有两类 **waterfall** 事件：`approval/request`、
+`user-questions/request`，而 `forwardWaterfall` 会**等客户端回 result 才继续**。
+
+我的客户端此前**只读不回**：这几轮没触发审批，所以没观察到卡顿 —— 但这属于「没测到的运气」。
+现在收到 waterfall 就明确回一个 `{kind:"next"}`（=「我不处理，交给下一个」，正是页面客户端
+没命中监听器时的语义 `REMOTE_EVENT_NEXT`）：
+
+```
+POST /api/$events/result
+{"type":"client-request","rpcId":…,"method":"$events/result",
+ "payload":{"args":{"clientId":…,"eventId":…,"outcome":{"kind":"next"}}}}
+```
+
+用最小的 HTTP/1.1 POST 实现（不引依赖），回话失败最坏也只是让 Host 继续等，与不回一样。
+
+### 顺带说清一条报错
+
+`历史加载失败：api gateway: Remote stream WebSocket closed` 是**页面侧**的报错：隧道当时是断的
+（App 侧 `ECONNREFUSED (127.0.0.1:3080)`），页面自己的 mux 连接同样会断，在飞的流一起失败 ——
+与新增的事件流订阅无关（心跳按 socket 记，互不影响），隧道恢复后即好。
+
+## 🩺 诊断：判据从「我估」变成「真机实测」
+
+这一版新增三组**一次性**诊断（只在页面 load 时打，常驻零成本），全部由 App 认领后写进
+`adb logcat -s DshApp`：
+
+- `viewport-diag`：`innerW/innerH/screenH/dpr/meta` —— 确认 viewport 到底有没有被内缩；
+- `stats-diag`：统计行与每个胶囊的 `scrollWidth/clientWidth` + 计算字号 —— 被吃掉多少，这里就有多少；
+- `layout-diag`：祖先链的 `top/h/paddingTop/class` + `env(safe-area-inset-top)` 探针
+  —— 留白属于谁，一次装包定位到元素。
+
+## 🔩 工程侧
+
+- CI 的 `mobile-contract` 增加 `node --check`：注入 bundle 的 CSS 写在**模板字面量**里，
+  注释里混一个反引号就会把模板提前结束、语法直接坏，而「读文本」的契约检查看不出来
+  （这一坑踩了四次）；
+- 契约补钩子：`_scroll`、`_tabs`、`_frame`、`data-dsh-cover`（`verifiedAgainst.dsh = 0.1.5-rc.1`，
+  即隧道那头实际装的那份产物）；
+- 右侧栏按钮的坑写进注释：`headerCorner` 带 `margin-right: -16px`，别再去动 header 的右内边距。
+
+---
+
+**升级提示**：签名与 0.1.13 相同（`a9401663…`），可直接覆盖安装；versionCode 41。
