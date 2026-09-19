@@ -1406,8 +1406,27 @@ window.__ModuleLoader__.load({
       ctx.effect(function () {
         var lastRefresh = 0;
         var refreshCount = 0;
-        var sessionRows = function () {
-          return document.querySelectorAll('[class*="_sidebarCol"] [class*="_sessionRow"]').length;
+        var lastReconnect = 0;
+        var count = function (sel) {
+          return document.querySelectorAll(sel).length;
+        };
+        var sessionRows = function () { return count('[class*="_sidebarCol"] [class*="_sessionRow"]'); };
+        var projectRows = function () { return count('[class*="_sidebarCol"] [class*="_projectRow"]'); };
+        var frameEl = function () { return document.querySelector('[data-handheld="frame"]'); };
+        var drawerOpen = function () {
+          var el = frameEl();
+          return el !== null && !el.hasAttribute("data-sidebar-collapsed");
+        };
+        // 连接状态：宿主的 connection 服务把 state 暴露成 { getSnapshot() }（值是
+        // "connected" / "connecting" / "disconnected" / undefined）。判定要贴真实状态，
+        // 不能只看「列表空不空」—— 侧栏收起时列表本来就可能没挂载。
+        var connectionState = function () {
+          var svc = ctx.get("connection");
+          try {
+            return svc && svc.state && svc.state.getSnapshot ? svc.state.getSnapshot() : undefined;
+          } catch (error) {
+            return undefined;
+          }
         };
         var tryRefresh = function (why) {
           var now = Date.now();
@@ -1424,41 +1443,63 @@ window.__ModuleLoader__.load({
           postToApp({ type: "ui-recovery", what: "sessions.refresh", why: why, n: refreshCount, rows: sessionRows() });
         };
         var tryReconnect = function (why) {
+          var state = connectionState();
+          if (state === "connected" || state === undefined) return;   // 连着呢（或服务不在）就别动
+          var now = Date.now();
+          if (now - lastReconnect < 10000) return;
           var svc = ctx.get("connection");
           if (!svc || typeof svc.reconnect !== "function") return;
+          lastReconnect = now;
           try {
             svc.reconnect();
           } catch (error) {
             return;
           }
-          postToApp({ type: "ui-recovery", what: "connection.reconnect", why: why, rows: sessionRows() });
+          postToApp({ type: "ui-recovery", what: "connection.reconnect", why: why, state: String(state) });
         };
+        // 判据：**工作区行渲染出来了、会话行一条都没有** —— 这正是研究里那条断路
+        //（工作区头走 follow 流、会话行走一次性 session/list，后者失败/挂住就永远空着）。
         var health = function (why) {
           var rows = sessionRows();
-          postToApp({ type: "ui-recovery", what: "health", why: why, rows: rows });
-          if (rows === 0) tryRefresh(why);
+          var projects = projectRows();
+          postToApp({
+            type: "ui-recovery", what: "health", why: why,
+            rows: rows, projects: projects, open: drawerOpen(), state: String(connectionState())
+          });
+          if (projects > 0 && rows === 0) tryRefresh(why);
         };
-        // 首屏后分三次体检：会话列表本来就可能比首屏晚到。
+        // 首屏后分几次体检（会话列表本来就可能比首屏晚到）。
         var t1 = window.setTimeout(function () { health("load+6s"); }, 6000);
         var t2 = window.setTimeout(function () { health("load+15s"); }, 15000);
         var t3 = window.setTimeout(function () { health("load+35s"); }, 35000);
-        // 抽屉打开：用户下一步就要看列表，空就补一次。
-        var wasOpen = false;
-        var frameEl = document.querySelector('[data-handheld="frame"]');
+        var t4 = window.setTimeout(function () { tryReconnect("load+20s"); }, 20000);
+        // 抽屉打开：用户下一步就要看列表 —— 这一条最实用。
+        // 注意 frame 是宿主渲染出来的，apply() 时还没影，所以这里要**懒挂**观察者。
         var drawerObserver = null;
-        if (window.MutationObserver && frameEl) {
+        var wasOpen = false;
+        var attachDrawerObserver = function () {
+          if (drawerObserver !== null) return true;
+          var el = frameEl();
+          if (el === null || !window.MutationObserver) return false;
+          wasOpen = !el.hasAttribute("data-sidebar-collapsed");
           drawerObserver = new MutationObserver(function () {
-            var open = !frameEl.hasAttribute("data-sidebar-collapsed");
+            var open = !el.hasAttribute("data-sidebar-collapsed");
             if (open && !wasOpen) window.setTimeout(function () { health("drawer-open"); }, 400);
             wasOpen = open;
           });
-          drawerObserver.observe(frameEl, { attributes: true, attributeFilter: ["data-sidebar-collapsed"] });
-        }
-        // 回到前台：先看空不空（空说明连接很可能还断着）→ 重连，再体检一次。
+          drawerObserver.observe(el, { attributes: true, attributeFilter: ["data-sidebar-collapsed"] });
+          return true;
+        };
+        attachDrawerObserver();
+        var attachTimer = window.setInterval(function () {
+          if (attachDrawerObserver()) window.clearInterval(attachTimer);
+        }, 1000);
+        var attachGiveUp = window.setTimeout(function () { window.clearInterval(attachTimer); }, 30000);
+        // 回到前台：连接不在 connected 就先重连（等价设置里那颗「立即重连」），再体检一次。
         var onVisible = function () {
           if (document.visibilityState !== "visible") return;
           window.setTimeout(function () {
-            if (sessionRows() === 0) tryReconnect("visible-and-empty");
+            tryReconnect("visible");
             health("visible");
           }, 1500);
         };
@@ -1467,6 +1508,9 @@ window.__ModuleLoader__.load({
           window.clearTimeout(t1);
           window.clearTimeout(t2);
           window.clearTimeout(t3);
+          window.clearTimeout(t4);
+          window.clearTimeout(attachGiveUp);
+          window.clearInterval(attachTimer);
           document.removeEventListener("visibilitychange", onVisible);
           if (drawerObserver) drawerObserver.disconnect();
         };
