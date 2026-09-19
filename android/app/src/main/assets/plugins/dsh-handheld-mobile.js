@@ -256,6 +256,31 @@ window.__ModuleLoader__.load({
     color: var(--dsw-alias-label-primary, #111);
   }
 
+  /* ---------- 2e. 宿主里那些「hover 才亮、但 opacity:0 仍然吃点击」的东西 ----------
+     2026-09-20 的只读研究把全仓盘点了一遍，这类控件是手机上最坑的一族：**看不见、但点得到**
+     —— 既是隐形热区（误触），又是永远找不到的入口。逐个（都来自安装产物的证据）：
+
+       工具卡 / skill 卡 / Cordis 卡的 Inspect：<hash>_inspectButton / _inspect  （hover → opacity 1）
+       主题与字号 stepper 的上下箭头：        <hash>_arrows                        （hover → opacity 1）
+       面板标签条的关闭按钮：                 <hash>_tabClose                       （hover → opacity 1 + pointer-events）
+       宽 markdown 表格的横滑：                <hash>_tableScroll.md-table-wide     （hover → overflow-x auto）
+
+     窄屏一律显形（并放开指针）—— 宿主自己在 attachment 里就有正确示范：
+     @media (pointer:coarse){ .xx_remove { opacity: 1 } }，这里只是把它推广到其余几族。
+     只在本插件生效（只在手机 App 的 WebView 里注入），桌面 GUI 一点不受影响。 */
+  @media (max-width: 560px) {
+    [class*="_inspectButton"],
+    [class*="_inspect"],
+    [class*="_arrows"],
+    [class*="_tabClose"] {
+      opacity: 1 !important;
+      pointer-events: auto !important;
+    }
+    [class*="_tableScroll"].md-table-wide {
+      overflow-x: auto !important;
+    }
+  }
+
   /* ---------- 3. 遮罩 ---------- */
   [data-handheld="backdrop"] {
     position: fixed;
@@ -1365,6 +1390,87 @@ window.__ModuleLoader__.load({
           observer.disconnect();
         };
       }, "dsh-handheld-mobile: needs-input watcher");
+
+      // ── Web UI 的「连接 / 会话列表」复健（2026-09-20 只读研究后加） ──────────────
+      // 研究结论（证据都来自安装产物，写进 docs/mobile-adaptation.md）：
+      //  1. 侧栏那些会话行的基线**只有一次** unary session/list 拉取，触发点是 connection/reset：
+      //     失败不重试、请求挂住就永久卡在单飞 promise 上，而且 UI 既不显示 loading 也不显示错误
+      //     —— 于是「工作区 › xsj」下面可以空白几十秒到几分钟，只能整页重载；
+      //  2. 隧道断过一次后，页面那条 mux socket 没有活性探测；历史流第 2 次 carrier 失败就终态，
+      //     之后没有任何自动重开路径 —— 这就是「必须整页重载」的根因。
+      // 我们不改宿主代码（本项目不动服务端/宿主的 composition），只在页面里做两件幂等的复健：
+      //  (a) 侧栏一条会话行都没有时，调用**公开入口** ctx.sessions.refresh() 补一次基线；
+      //  (b) 回到前台而侧栏还是空的（连接多半还断着）就调用 ctx.connection.reconnect()
+      //      —— 等价于设置里那颗「立即重连」，但用户不必自己去找。
+      // 两者都带节流与次数上限；服务拿不到（老版本 / 桌面浏览器）就静默跳过。
+      ctx.effect(function () {
+        var lastRefresh = 0;
+        var refreshCount = 0;
+        var sessionRows = function () {
+          return document.querySelectorAll('[class*="_sidebarCol"] [class*="_sessionRow"]').length;
+        };
+        var tryRefresh = function (why) {
+          var now = Date.now();
+          if (now - lastRefresh < 5000 || refreshCount >= 8) return;
+          var svc = ctx.get("sessions");
+          if (!svc || typeof svc.refresh !== "function") return;
+          lastRefresh = now;
+          refreshCount++;
+          try {
+            svc.refresh();
+          } catch (error) {
+            return;
+          }
+          postToApp({ type: "ui-recovery", what: "sessions.refresh", why: why, n: refreshCount, rows: sessionRows() });
+        };
+        var tryReconnect = function (why) {
+          var svc = ctx.get("connection");
+          if (!svc || typeof svc.reconnect !== "function") return;
+          try {
+            svc.reconnect();
+          } catch (error) {
+            return;
+          }
+          postToApp({ type: "ui-recovery", what: "connection.reconnect", why: why, rows: sessionRows() });
+        };
+        var health = function (why) {
+          var rows = sessionRows();
+          postToApp({ type: "ui-recovery", what: "health", why: why, rows: rows });
+          if (rows === 0) tryRefresh(why);
+        };
+        // 首屏后分三次体检：会话列表本来就可能比首屏晚到。
+        var t1 = window.setTimeout(function () { health("load+6s"); }, 6000);
+        var t2 = window.setTimeout(function () { health("load+15s"); }, 15000);
+        var t3 = window.setTimeout(function () { health("load+35s"); }, 35000);
+        // 抽屉打开：用户下一步就要看列表，空就补一次。
+        var wasOpen = false;
+        var frameEl = document.querySelector('[data-handheld="frame"]');
+        var drawerObserver = null;
+        if (window.MutationObserver && frameEl) {
+          drawerObserver = new MutationObserver(function () {
+            var open = !frameEl.hasAttribute("data-sidebar-collapsed");
+            if (open && !wasOpen) window.setTimeout(function () { health("drawer-open"); }, 400);
+            wasOpen = open;
+          });
+          drawerObserver.observe(frameEl, { attributes: true, attributeFilter: ["data-sidebar-collapsed"] });
+        }
+        // 回到前台：先看空不空（空说明连接很可能还断着）→ 重连，再体检一次。
+        var onVisible = function () {
+          if (document.visibilityState !== "visible") return;
+          window.setTimeout(function () {
+            if (sessionRows() === 0) tryReconnect("visible-and-empty");
+            health("visible");
+          }, 1500);
+        };
+        document.addEventListener("visibilitychange", onVisible);
+        return function () {
+          window.clearTimeout(t1);
+          window.clearTimeout(t2);
+          window.clearTimeout(t3);
+          document.removeEventListener("visibilitychange", onVisible);
+          if (drawerObserver) drawerObserver.disconnect();
+        };
+      }, "dsh-handheld-mobile: ui recovery");
 
       // ── 会话头里的目录按钮 ──────────────────────────────────
       ctx.effect(function () {

@@ -254,6 +254,54 @@ App 把它记进日志（`DshApp.onPageMessage` 的兜底分支现在会打印�
    小回环先复现、真机再确认。滚动条那条的坑是 `--hide-scrollbars` —— 带上它滚动条宽度归零，
    负对照就永远复现不出来。
 
+## Web UI 逻辑：两个「只能整页重载」的坑（1.0.43，2026-09-20 只读研究）
+
+一次针对宿主的只读研究（三个方向：侧栏数据链路 / 网关重连 / 触摸可用性；证据全部带
+安装产物的路径与行号）找到两个**逻辑层**的坑，它们的表现就是用户报过的
+「列表要等几分钟」和「隧道断一次就必须整页重载」：
+
+### ① 会话列表的基线只拉一次，失败不重试、挂住就永久卡住
+
+- 侧栏的「工作区」头走 `workspace.follow` 流（插件 `apply()` 阶段就开流，不等握手），
+  而**会话行**走一次性 unary `session/list`，触发点只有 `connection/reset`；
+- `SessionManager.refreshList()` 是单飞：`if (this.listInflight !== null) return this.listInflight`
+  —— 那次 POST 若**挂住**（隧道半开、无 caller signal、无 timeout），之后所有调用都复用同一个
+  卡死的 promise，连重连触发的 reset 都救不回来；
+- 失败只把 `listState` 记成 `"error"`，`phase` 停在 `"pending"`，而 `sessions.list` 投影里
+  **既没有 state 也没有 error**，UI 连 loading/错误都不显示 → 「工作区 › xsj」下面一片空白；
+- 公开入口 `ctx.sessions.refresh()` **存在但全仓没有任何 UI 调用它**。
+
+**我们的做法（不改宿主）**：插件在页面里做复健 —— 首屏后 6s/15s/35s、抽屉打开时、
+回到前台时体检「侧栏有没有会话行」，为空就调用 `ctx.sessions.refresh()`（节流 5s、上限 8 次）。
+抽屉打开这一条最实用：用户下一步就要看列表，空就当场补一次。
+
+### ② 隧道断过一次后，页面不会自己恢复
+
+- 客户端**有**指数退避重连（500ms×2 封顶 10s，就绪超时 15s），但没有任何**活性探测**：
+  隧道断而 close 到不了页面时，socket 仍是 `OPEN`、请求永远挂住；
+- 历史流的重试预算只有 1 次：`waitForRemoteStreamRetry` 里「当前 generation 仍存在 → 第 2 次直接终态」
+  → 包成 `RemoteError('gateway/internal', 'api gateway: Remote stream WebSocket closed')`，
+  正是页面那行「历史加载失败」；
+- 终态后**没有任何自动重开路径**：`connection/reset` 只刷列表与子代理，不碰
+  `openState==='error'` 的会话窗口（`followCurrent()` 还被 `current === this.watched` 去重）；
+- 全仓**没有** `visibilitychange` 处理，`online/offline` 对 SSH 隧道也不敏感。
+
+**我们的做法（不改宿主）**：回到前台且侧栏为空 → 调用 `ctx.connection.reconnect()`
+（等价于设置里那颗「立即重连」，已有 UI 入口，只是没人替用户点）。每次动作都往 App 日志
+写一条 `界面复健：{...}`，下次真机上复现时能直接看到它到底跑没跑、跑了几次。
+
+### 还没做、留给用户决策的两件事
+
+1. **宿主心跳宽限**：服务端每 2s ping、连续 2 次没 pong 就 `terminate`（`MAX_MISSED_HEARTBEATS = 2`
+   硬编码），实际宽限 ≈6s。可以在**用户 profile** 的 `cordis.patch.yml` 里覆盖
+   `typert-gateway.config.websocketHeartbeatIntervalMs: 10000`（宽限 → ≈30s，零代码）。这会同时
+   影响桌面 GUI（多占最后一条死连接几十秒），所以没擅自改。
+2. **触摸可用性的整批盘点**（研究的第三份报告）：最狠的三处是 ①侧栏行的 hover-only 操作与
+   HoverCard（会话预览、复制 cwd 在手机上完全不可达）②HTML5 拖拽的工作区排序/移动
+   （手机上没有任何替代路径）③`opacity:0` 的 hover 揭示按钮（**隐形热区 + 隐形入口**）。
+   第 ③ 类已在 1.0.43 里统一显形（窄屏 `opacity:1 + pointer-events:auto`，含宽 markdown 表格
+   的横滑门控）；①②属于功能级补做，需要单独立项。
+
 ## 版本与缓存
 
 `MainActivity.MOBILE_PLUGIN_REV` 是 WebView 侧的缓存键：**内容变了必须换 rev**，否则可能
@@ -261,7 +309,10 @@ App 把它记进日志（`DshApp.onPageMessage` 的兜底分支现在会打印�
 不变量；`mobile-contract` 里还有一步 `node --check` —— CSS 写在模板字面量里，注释里一个
 反引号就能把模板提前结束）。
 
-当前为 `dsh-handheld-mobile-1.0.42`。
+当前为 `dsh-handheld-mobile-1.0.43`。
+
+> 1.0.43 = Web UI 逻辑复健（会话列表空则 `ctx.sessions.refresh()`；回前台仍空则 `ctx.connection.reconnect()`）
+> ＋ 三类「hover 才亮却仍吃点击」的隐形控件统一显形；
 
 > 1.0.42 = 把行尾 `⋯` 的菜单项摊平成按钮（插件注入 + 走宿主自己的菜单，不绕过它的确认框）；最近的几档：1.0.41 = 用 JS 按几何找出宿主侧栏根节点并改写它的内联 width（纯 CSS 那条压不到，
 因为槽运行时又包了一层）；1.0.40 = 全屏抽屉把空间用起来（行高/字号/图标按手指档抬一档）；1.0.39 = 左侧边栏展开即全屏（100vw）＋ 里面所有

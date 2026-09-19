@@ -181,6 +181,10 @@ class DshApp : Application() {
                 // 统计行的真实几何（scrollWidth/clientWidth/字号）：调参不再靠估。
                 DiagLog.i(TAG, "统计行几何：${json}")
             }
+            "ui-recovery" -> {
+                // 页面侧的「连接 / 会话列表」复健动作（研究结论的落地证据）：补拉基线、重连、体检。
+                DiagLog.i(TAG, "界面复健：${json}")
+            }
             "side-diag" -> {
                 // 左右内缩到底谁贡献的：滚动体的 margin/padding/滚动条槽 + 实际滚动条宽度。
                 DiagLog.i(TAG, "对称性诊断：${json}")
