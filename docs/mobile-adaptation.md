@@ -223,9 +223,9 @@ App 把它记进日志（`DshApp.onPageMessage` 的兜底分支现在会打印�
    `MainActivity.onPause()` 只在页面空闲时才暂停定时器（判据是 `DshApp.pageBusy`，
    由 `turn-start`/`turn-done` 维护）—— 代价是生成期间后台多耗一点电。
 
-## 空间：留白到底是谁的（1.0.25 – 1.0.33）
+## 空间：留白到底是谁的（1.0.25 – 1.0.34）
 
-用户 2026-09-19 连报四条「留白太多 / 两侧不对称 / 顶部大片留白」。真机量下来是**三个来源**叠在一起，
+用户 2026-09-19 连报四条「留白太多 / 两侧不对称 / 顶部大片留白」。真机量下来是**四个来源**，
 逐条证据见 `docs/release-notes-0.1.14.md`；这里只留结论与下次要用的判据：
 
 | 来源 | 实测 | 修法 |
@@ -233,16 +233,23 @@ App 把它记进日志（`DshApp.onPageMessage` 的兜底分支现在会打印�
 | 宿主正文内边距 | `.EvIC1a_scroll{padding:16px calc(…+16px)}` → 两侧各 32px | ≤560px 覆盖成 12px（**+40px 内容宽度**） |
 | 会话头高度 | `min-height:76px` **压不动** —— 76 是内容算出来的（10+30+10+25） | 动内容：`padding-top 10→4`、标题行 `min-height 30→24`、页签 `margin-top 10→4` |
 | 挖孔安全区 | viewport 没 `viewport-fit=cover` → Chromium 内缩 34px；补上之后宿主外壳又用 JS 内联塞了 `padding-top:35px`（挖孔本体只有 ~11px） | `mobile-bootstrap.js` 补 cover；再用 `html[data-dsh-cover] [class*="_frame"]:has([data-phase]){padding-top:12px !important}` 压内联 |
+| **右侧滚动条槽** | `.wSkVaW_scrollBody{scrollbar-gutter:stable;margin-right:2px}` + `--dsh-scrollbar-width:8px` → 右侧恒定多 10px（每块内容：输入卡 27.5/37.3、统计行 41.9/51.5） | `[class*="_scrollBody"]{margin-right:0;padding-right:4px}` → 右侧 8+4 = 12 = 左侧（**滚动条保留**，内容 +10px） |
 
-**两条教训**：
+判据速查：**Δ 恒定 = 某处固定让位**（内边距写错只会差一处）；**Δ 只在个别元素上 = 那个元素自己的盒子**。
+
+**三条教训**：
 
 1. **header 的 `padding-right` 不要碰**：宿主 `.wSkVaW_headerCorner` 带 `margin-right:-16px`，
    把它从 28px 压到 12px 会让右端按钮落到 −4px（用户报「右侧边栏按钮太靠右了」）。两侧的空间
    优化只作用于正文与统计行。
 2. **量，不要估**：小回环（`composer-stats-lab.mjs`）对真机字体乐观 —— 真机余量 ≈ 小回环余量 **+32px**；
-   截图量化只能数深色像素（左/右/上第一个深色像素 ÷ dpr）。所以这一版加了三个**一次性**诊断
-   （`viewport-diag` / `stats-diag` / `layout-diag`，后者连祖先链与 `env()` 探针一起报），
-   判据从「我估」变成「页面自己报的数」。
+   截图量化只能数深色像素（左/右/上第一个深色像素 ÷ dpr）。所以这一版加了四个**一次性**诊断
+   （`viewport-diag` / `stats-diag` / `layout-diag`（祖先链 + `env()` 探针）/ `side-diag`（滚动体的
+   margin/padding/gutter + `offsetWidth − clientWidth` 的真实滚动条宽度）），判据从「我估」变成
+   「页面自己报的数」。
+3. **盒模型问题先在小回环里复现再改**（负对照不复现就不认结论）：统计行与这次的滚动条槽都是
+   小回环先复现、真机再确认。滚动条那条的坑是 `--hide-scrollbars` —— 带上它滚动条宽度归零，
+   负对照就永远复现不出来。
 
 ## 版本与缓存
 
@@ -251,7 +258,8 @@ App 把它记进日志（`DshApp.onPageMessage` 的兜底分支现在会打印�
 不变量；`mobile-contract` 里还有一步 `node --check` —— CSS 写在模板字面量里，注释里一个
 反引号就能把模板提前结束）。
 
-当前为 `dsh-handheld-mobile-1.0.33`。最近的几档：1.0.33 = 压掉宿主外壳写死的 35px 安全区内边距；
+当前为 `dsh-handheld-mobile-1.0.34`。最近的几档：1.0.34 = 压掉宿主的滚动条槽（左右各 12px 对称）
++ `side-diag`；1.0.33 = 压掉宿主外壳写死的 35px 安全区内边距；
 1.0.31/1.0.32 = `layout-diag`（祖先链 + `env()` 探针，就是把上面那条揪出来的工具）；
 1.0.30 = 头部左右按钮对称（8 → 12px）；1.0.29 = 右端按钮贴边回归的修复；1.0.28 = 统计行被省略号
 吃掉 + `stats-diag`；1.0.25 = 统计行一行到底 + CI 语法检查；1.0.19 = 任务完成通知的判据改取可见节点。

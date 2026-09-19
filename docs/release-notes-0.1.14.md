@@ -60,6 +60,45 @@ titleRow       top=49                        top=14          ← 上移 35px
 
 （内联样式用 `!important` 压得住 ✓；12px 仍在挖孔下缘 11px 之下 ✓。契约补了 `_frame` 钩子。）
 
+### ④ 右侧恒定多出的 10px：宿主的滚动条槽
+
+用户第二次报「两侧还是不对称」。逐块量下来，**每一块内容的右侧都比左侧多约 10px**：
+
+| 元素 | 左 | 右 | Δ |
+|---|---|---|---|
+| 输入卡（边框） | 27.5 | 37.3 | +9.9 |
+| 待办卡 | 44.3 | 54.1 | +9.9 |
+| 统计行 | 41.9 | 51.5 | +9.6 |
+| 头部两个按钮 | 18.1 | 18.7 | +0.5 ✓ |
+
+差值**恒定**就说明不是内边距写错，而是右侧被固定吃掉一块。从安装产物里核对到宿主原话：
+
+```css
+.wSkVaW_scrollBody { scrollbar-gutter: stable; margin-right: 2px; overflow-y: auto }
+--dsh-scrollbar-width: 8px
+```
+
+8px 的滚动条槽 + 2px 外边距 = **10px** ✓ 与实测分毫不差（左侧 = 我们 12px，右侧 = 12+8+2 = 22，
+两侧再各叠宿主 16px 的 composer clearance → 28 / 38）。
+
+改法：把槽宽算进右内边距 —— 滚动条本体保留（它是位置指示器），内容同时多回 10px：
+
+```css
+/* ≤560px */
+[data-handheld="frame"] [data-phase] [class*="_scrollBody"] { margin-right: 0 !important; padding-right: 4px !important }
+/* 右 = 8(槽) + 4 = 12 = 左 */
+```
+
+两级验证：
+
+- **引擎级**（新增的本地小回环，真 Chromium，**故意不带** `--hide-scrollbars`，384px）：
+  只上宿主规则 → 左 0 / 右 10（Δ 10.00，复现真机那 10px，这是负对照）；
+  再叠适配层现有那条（左右各 12px）→ 左 12 / 右 22（对上真机的 22 vs 12）；
+  加上新修法 → **左 12.00 / 右 12.00，Δ 0** ✓；
+- **真机**（0.1.14 + 插件 rev 1.0.34，`side-diag` 实测）：`scrollBody: padL=12px padR=4px marR=0px
+  gutter=stable scrollbarW=8`、**统计行 left=28 right=28** ✓；截图量：输入卡 **27.5 / 27.5（Δ 0.0，
+  改前 +9.9）**、统计行 41.9 / 41.3。统计行可用宽度 318 → **328px**。
+
 ### 头部左右不对称
 
 用户问「和左边不对称？」。量化办法是**量截图**（标题行最左/最右深色像素距屏幕边缘 ÷ 3.75）：
@@ -116,21 +155,25 @@ POST /api/$events/result
 
 ## 🩺 诊断：判据从「我估」变成「真机实测」
 
-这一版新增三组**一次性**诊断（只在页面 load 时打，常驻零成本），全部由 App 认领后写进
+这一版新增四组**一次性**诊断（只在页面 load 时打，常驻零成本），全部由 App 认领后写进
 `adb logcat -s DshApp`：
 
 - `viewport-diag`：`innerW/innerH/screenH/dpr/meta` —— 确认 viewport 到底有没有被内缩；
 - `stats-diag`：统计行与每个胶囊的 `scrollWidth/clientWidth` + 计算字号 —— 被吃掉多少，这里就有多少；
 - `layout-diag`：祖先链的 `top/h/paddingTop/class` + `env(safe-area-inset-top)` 探针
-  —— 留白属于谁，一次装包定位到元素。
+  —— 留白属于谁，一次装包定位到元素；
+- `side-diag`：左右内缩到底谁贡献的 —— 滚动体的 `padding/margin/gutter`，以及
+  `offsetWidth − clientWidth`（**真实滚动条宽度**，实测 8px）。
 
 ## 🔩 工程侧
 
 - CI 的 `mobile-contract` 增加 `node --check`：注入 bundle 的 CSS 写在**模板字面量**里，
   注释里混一个反引号就会把模板提前结束、语法直接坏，而「读文本」的契约检查看不出来
   （这一坑踩了四次）；
-- 契约补钩子：`_scroll`、`_tabs`、`_frame`、`data-dsh-cover`（`verifiedAgainst.dsh = 0.1.5-rc.1`，
-  即隧道那头实际装的那份产物）；
+- 契约补钩子：`_scroll`、`_tabs`、`_frame`、`_scrollBody`、`data-dsh-cover`
+  （`verifiedAgainst.dsh = 0.1.5-rc.1`，即隧道那头实际装的那份产物）；
+- 盒模型这类问题一律先复现再改：留白/对称各有一次是**小回环先复现、真机再确认**
+  （统计行的小回环、这次新加的滚动条槽小回环），负对照不复现就不认结论；
 - 右侧栏按钮的坑写进注释：`headerCorner` 带 `margin-right: -16px`，别再去动 header 的右内边距。
 
 ---
