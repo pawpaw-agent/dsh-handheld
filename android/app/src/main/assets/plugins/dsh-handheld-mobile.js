@@ -445,6 +445,32 @@ window.__ModuleLoader__.load({
       margin: 0 2px !important;
     }
   }
+
+  /* ---------- 11. 两侧与顶部：把宿主的留白还给内容（2026-09-19） ----------
+     宿主在手机上白留得很明显（两条规则都是从安装产物里抽出来核对的）：
+
+       .EvIC1a_scroll  { padding: 16px calc(var(--dsh-composer-side-clearance) + 16px) }
+                        → 左右各 16+16 = 32px。384px 的屏幕上正文两侧被吃掉 64px（全宽的 17%）。
+       .wSkVaW_header  { min-height: 76px; padding: 10px 28px 0 20px }
+                        → 会话头固定占 76px 高，而它里面只有一行标题 + 一行页签。
+
+     改：正文左右各 12px（多出 40px 内容宽度）、上边距 16 → 8px；
+     会话头 76 → 52px 高、上边距 10 → 6px、右侧 28 → 12px（标题能多显示几个字）。
+     会话头用 header:has([class*="_titleRow"]) 锚定 —— 宿主里还有别的 _header 类
+     （面板头 36px 那种），不加 :has 会一起压坏。 */
+  @media (max-width: 560px) {
+    [data-handheld="frame"] [data-phase] [class*="_scroll"] {
+      padding-left: 12px !important;
+      padding-right: 12px !important;
+      padding-top: 8px !important;
+    }
+    [data-handheld="frame"] [data-phase] header:has([class*="_titleRow"]) {
+      min-height: 52px !important;
+      padding-top: 6px !important;
+      padding-right: 12px !important;
+    }
+  }
+
   /* 更窄（折叠屏外屏 / 小屏）：再降一档字号与内边距，把「一行」保住。 */
   @media (max-width: 380px) {
     [data-composer-stats] {
