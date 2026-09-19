@@ -137,8 +137,7 @@ window.__ModuleLoader__.load({
   /* 收起时彻底让出指针，免得一条看不见的侧栏吃掉边缘手势 */
   [data-handheld="frame"][data-sidebar-collapsed] > [class*="_sidebarCol"] {
     pointer-events: none;
-  }
-  /* ……但抽屉里只要挂着模态，整列就必须照旧吃指针。
+  }  /* ……但抽屉里只要挂着模态，整列就必须照旧吃指针。
      设置对话框是**视口级**浮层（fixed + inset:0，盖满整屏），逻辑上却住在侧栏里
      （SettingsRoot 注册进 sidebar.settings 槽）：抽屉一收，上面那条 pointer-events:none
      会连同它一起冻住 —— 对话框还在屏幕上，却变成一张点不动的画，点击直接穿透到
@@ -222,6 +221,39 @@ window.__ModuleLoader__.load({
     [data-handheld="frame"] > [class*="_sidebarCol"] [class*="_projectRow"] [class*="_chevron"] {
       display: inline-flex !important;
     }
+  }
+
+  /* ---------- 2d. 把行尾那颗 ⋯ 摊平：菜单项直接摆成按钮 ----------
+     用户 2026-09-20 连着两次：「把 ... 里面的按钮都展开」→「…里面的按钮直接展开」。
+     他说的 … 就是行尾那颗 ⋯（他前一条自己写明了「工作区文件夹上的 ... 和 + 按钮」）：
+     重命名/删除工作区、重命名/分叉/归档会话全藏在它的菜单里，手机上要多点一次才看得到。
+     做法见下面 JS 的 injectRowActions：插件在每行的动作区里注入与菜单项**一一对应**的按钮
+     （点击时替用户走一遍宿主自己的菜单 —— 进的还是宿主的改名编辑器与删除确认框）。
+     这两个 data-handheld 是我们自己的，宿主不认识。 */
+  [data-handheld="rowActionsDirect"] {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    flex: none;
+  }
+  [data-handheld="rowAction"] {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 26px;
+    height: 26px;
+    padding: 0;
+    border: 0;
+    border-radius: 6px;
+    background: transparent;
+    color: var(--dsw-alias-label-tertiary, #8a8a8a);
+    cursor: pointer;
+    flex: none;
+    -webkit-tap-highlight-color: transparent;
+  }
+  [data-handheld="rowAction"]:active {
+    background: var(--dsw-alias-interactive-bg-hover, rgba(0, 0, 0, .06));
+    color: var(--dsw-alias-label-primary, #111);
   }
 
   /* ---------- 3. 遮罩 ---------- */
@@ -685,11 +717,123 @@ window.__ModuleLoader__.load({
         var widenTimer1 = window.setTimeout(widenSidebar, 400);
         var widenTimer2 = window.setTimeout(widenSidebar, 1500);
         var widenTimer3 = window.setTimeout(widenSidebar, 4000);
+
+        // 「把 ⋯ 里面的按钮直接展开」：宿主把重命名/删除（工作区）、重命名/分叉/归档（会话）
+        // 都藏在行尾那颗 ⋯ 的菜单里，菜单项在 client/ui-workspace 里带**稳定的 id 与顺序**
+        // （workspaceMenuItems = rename, delete；sessionMenuItems = rename, fork, archive）。
+        // 做法：在每行动作区注入与菜单项一一对应的按钮，点击时**替用户走一遍宿主自己的菜单**
+        // （先点 ⋯ 打开，再点对应序号的 menuitem）—— 这样进的仍然是宿主原生的改名编辑器与
+        // 删除确认框，而不是我们绕过它们直接调 API（那会跳过确认，属于把安全阀拆了）。
+        // 注入成功才把 ⋯ 藏起来；菜单没弹出来就把 ⋯ 放回去 —— 任何一步失败都不留死路。
+        var PENCIL = "M12.7 1.6a1.4 1.4 0 0 1 2 2l-1 1-2-2 1-1ZM10.9 3.4l2 2L5.6 12.7H3.6v-2l7.3-7.3Z";
+        var TRASH = "M6.4 1.4h3.2l.6 1.1h2.6v1.5H2.2V2.5h2.6l.6-1.1ZM3.4 5.2h9.2l-.8 8.4a1.1 1.1 0 0 1-1.1 1H5.3a1.1 1.1 0 0 1-1.1-1L3.4 5.2Z";
+        var BRANCH = "M8 1.2a2.3 2.3 0 1 1 0 4.6 2.3 2.3 0 0 1 0-4.6ZM4 9.6a2.3 2.3 0 1 1 0 4.6 2.3 2.3 0 0 1 0-4.6Zm8 0a2.3 2.3 0 1 1 0 4.6 2.3 2.3 0 0 1 0-4.6ZM7.2 6.1h1.6v2.1l3.1 1.6-.7 1.4L8 9.7 4.8 11.2l-.7-1.4 3.1-1.6V6.1Z";
+        var ARCHIVE = "M1.4 2.3h13.2v3H1.4v-3Zm1.4 4h10.4v7.4H2.8V6.3Zm3 2.1v1.6h4.4V8.4H5.8Z";
+        var ROW_MENU = {
+          project: [
+            { label: "重命名", d: PENCIL },
+            { label: "删除工作区", d: TRASH }
+          ],
+          session: [
+            { label: "重命名", d: PENCIL },
+            { label: "分叉会话", d: BRANCH },
+            { label: "归档会话", d: ARCHIVE }
+          ]
+        };
+
+        var iconSvg = function (d) {
+          var ns = "http://www.w3.org/2000/svg";
+          var svg = document.createElementNS(ns, "svg");
+          svg.setAttribute("viewBox", "0 0 16 16");
+          svg.setAttribute("width", "16");
+          svg.setAttribute("height", "16");
+          svg.setAttribute("aria-hidden", "true");
+          var path = document.createElementNS(ns, "path");
+          path.setAttribute("d", d);
+          path.setAttribute("fill", "currentColor");
+          svg.appendChild(path);
+          return svg;
+        };
+        // ⋯ 那颗：宿主的 Menu 把它包了一层 span，所以取动作区里第一个 iconButton。
+        var rowMenuAnchor = function (row) {
+          return row.querySelector('[class*="_rowActions"] button[class*="_iconButton"]');
+        };
+        var restoreRowMenu = function (row) {
+          var a = rowMenuAnchor(row);
+          if (a && a.parentElement) a.parentElement.style.display = "";
+        };
+        var runRowAction = function (row, index) {
+          var anchor = rowMenuAnchor(row);
+          if (!anchor) return;
+          anchor.click();   // 元素被 display:none 也能点（HTMLElement.click 不看可见性）
+          var tries = 0;
+          var timer = window.setInterval(function () {
+            tries++;
+            var menus = document.querySelectorAll('[role="menu"]');
+            var last = null;
+            for (var i = 0; i < menus.length; i++) {
+              var box = menus[i].getBoundingClientRect();
+              if (box.width > 0 && box.height > 0) last = menus[i];   // 取最近打开的那一个
+            }
+            var items = last ? last.querySelectorAll('[role="menuitem"]') : [];
+            if (items.length > index) {
+              window.clearInterval(timer);
+              items[index].click();
+              return;
+            }
+            if (tries > 20) {           // ~600ms 还没弹出来：把 ⋯ 放回去，别留死路
+              window.clearInterval(timer);
+              restoreRowMenu(row);
+            }
+          }, 30);
+        };
+        var injectRowActions = function () {
+          var col = frame.querySelector('[class*="_sidebarCol"]');
+          if (!col) return;
+          var rows = col.querySelectorAll('[class*="_projectRow"], [class*="_sessionRow"]');
+          for (var i = 0; i < rows.length; i++) {
+            var row = rows[i];
+            var zone = row.querySelector('[class*="_rowActions"]');
+            if (!zone || zone.querySelector('[data-handheld="rowActionsDirect"]')) continue;
+            var anchor = zone.querySelector('button[class*="_iconButton"]');
+            if (!anchor || !anchor.parentElement) continue;
+            var spec = ROW_MENU[String(row.className).indexOf("_projectRow") >= 0 ? "project" : "session"];
+            var wrap = document.createElement("span");
+            wrap.setAttribute("data-handheld", "rowActionsDirect");
+            for (var k = 0; k < spec.length; k++) {
+              var btn = document.createElement("button");
+              btn.setAttribute("type", "button");
+              btn.setAttribute("data-handheld", "rowAction");
+              btn.setAttribute("aria-label", spec[k].label);
+              btn.setAttribute("title", spec[k].label);
+              btn.appendChild(iconSvg(spec[k].d));
+              btn.addEventListener("click", (function (idx) {
+                return function (ev) {
+                  ev.preventDefault();
+                  ev.stopPropagation();
+                  runRowAction(row, idx);
+                };
+              })(k));
+              wrap.appendChild(btn);
+            }
+            anchor.parentElement.parentNode.insertBefore(wrap, anchor.parentElement);
+            anchor.parentElement.style.display = "none";   // 它的功能已经摊平了
+          }
+        };
+        injectRowActions();
+        var injectTimer1 = window.setTimeout(injectRowActions, 400);
+        var injectTimer2 = window.setTimeout(injectRowActions, 1500);
+        var injectTimer3 = window.setTimeout(injectRowActions, 4000);
         var colEl = frame.querySelector('[class*="_sidebarCol"]');
         var widenObserver = null;
         if (window.MutationObserver && colEl) {
-          widenObserver = new MutationObserver(widenSidebar);
-          widenObserver.observe(colEl, { subtree: true, attributes: true, attributeFilter: ["style"] });
+          widenObserver = new MutationObserver(function () {
+            widenSidebar();
+            injectRowActions();
+          });
+          widenObserver.observe(colEl, {
+            subtree: true, childList: true, attributes: true, attributeFilter: ["style", "class"]
+          });
         }
 
         var onFrameClick = function (event) {
@@ -724,6 +868,9 @@ window.__ModuleLoader__.load({
           window.clearTimeout(widenTimer1);
           window.clearTimeout(widenTimer2);
           window.clearTimeout(widenTimer3);
+          window.clearTimeout(injectTimer1);
+          window.clearTimeout(injectTimer2);
+          window.clearTimeout(injectTimer3);
           if (widenObserver) widenObserver.disconnect();
           frame.removeAttribute("data-handheld");
         };
