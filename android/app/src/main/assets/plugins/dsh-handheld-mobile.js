@@ -266,6 +266,8 @@ window.__ModuleLoader__.load({
        宽 markdown 表格的横滑：                <hash>_tableScroll.md-table-wide     （hover → overflow-x auto）
 
      窄屏一律显形（并放开指针）—— 宿主自己在 attachment 里就有正确示范：
+     （1.0.48 补：只写 opacity 不够 —— 真机体检里那 3 个隐形热区是 **visibility: hidden**，
+      所以要连 visibility 一起放开；这一条是被日志当场抓出来的。）
      @media (pointer:coarse){ .xx_remove { opacity: 1 } }，这里只是把它推广到其余几族。
      只在本插件生效（只在手机 App 的 WebView 里注入），桌面 GUI 一点不受影响。 */
   @media (max-width: 560px) {
@@ -276,6 +278,7 @@ window.__ModuleLoader__.load({
     [class*="_addTab"],
     [class*="_iconButton"] {
       opacity: 1 !important;
+      visibility: visible !important;
       pointer-events: auto !important;
     }
     [class*="_tableScroll"].md-table-wide {
