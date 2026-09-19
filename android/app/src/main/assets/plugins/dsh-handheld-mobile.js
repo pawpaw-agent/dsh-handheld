@@ -1558,11 +1558,14 @@ window.__ModuleLoader__.load({
         };
       }, "dsh-handheld-mobile: ui recovery");
 
-      // ── 手指档体检（一次性）：把「太小 / 太小又隐形」的可点击元素数出来 ──────────
-      // 判据用 Material 的 44×44：宽或高不足就算不达标（纯文本链接除外 —— 这里没扫 a[href]
-      // 之外的文本链接）。另外单独数「隐形但仍吃点击」的（opacity:0 / visibility:hidden，
-      // 且 pointer-events 不是 none）—— 那一类是误触的来源。日志里给最小的 12 个（类名截断），
-      // 可以直接对着它改；改完再装一次，两个数应该都掉下来。
+      // ── 手指档体检（一次性）：把「又小又点不到 / 隐形但仍吃点击」的元素数出来 ────────
+      // 两个坑要分开量：
+      //  1. 视觉尺寸 <44×44 ≠ 点不到 —— 我们（和宿主自己）会用 ::after 把**命中区**撑大，
+      //     而 getBoundingClientRect 看不到伪元素。所以这里在元素四周 6px 打点，用
+      //     elementFromPoint 判断「是否仍然命中它」，只有**四个方向里小于两个方向能命中**
+      //     才算真正的「点不到」（hard）。
+      //  2. 隐形但仍吃点击（opacity:0 / visibility:hidden 且 pointer-events 不是 none）——
+      //     误触的来源，单独列出类名。
       ctx.effect(function () {
         var done = false;
         var t = window.setTimeout(function () {
@@ -1571,8 +1574,27 @@ window.__ModuleLoader__.load({
           var nodes = document.querySelectorAll(
             'button, [role="button"], [role="menuitem"], [role="tab"], [role="option"], [role="treeitem"], [role="switch"]'
           );
-          var small = [];
-          var invisible = 0;
+          var small = 0;
+          var hard = [];
+          var invisible = [];
+          var probe = function (el, box) {
+            if (typeof document.elementFromPoint !== "function") return false;
+            var cx = box.left + box.width / 2;
+            var cy = box.top + box.height / 2;
+            var pts = [[box.left - 6, cy], [box.right + 6, cy], [cx, box.top - 6], [cx, box.bottom + 6]];
+            var hits = 0;
+            for (var i = 0; i < pts.length; i++) {
+              var x = pts[i][0];
+              var y = pts[i][1];
+              if (x < 0 || y < 0 || x > window.innerWidth || y > window.innerHeight) continue;
+              var at = document.elementFromPoint(x, y);
+              if (at !== null && (at === el || el.contains(at) || at.contains(el))) hits++;
+            }
+            return hits < 2;
+          };
+          var shape = function (el, box) {
+            return { c: String(el.className || el.tagName).slice(0, 26), w: Math.round(box.width), h: Math.round(box.height) };
+          };
           for (var i = 0; i < nodes.length; i++) {
             var el = nodes[i];
             var cs = window.getComputedStyle ? getComputedStyle(el) : null;
@@ -1580,25 +1602,24 @@ window.__ModuleLoader__.load({
             var box = el.getBoundingClientRect();
             if (box.width === 0 && box.height === 0) continue;
             var hitless = cs.pointerEvents === "none";
-            if (!hitless && (cs.opacity === "0" || cs.visibility === "hidden")) invisible++;
+            if (!hitless && (cs.opacity === "0" || cs.visibility === "hidden")) {
+              if (invisible.length < 8) invisible.push(shape(el, box));
+            }
             if (hitless) continue;
             if (box.width < 44 || box.height < 44) {
-              if (small.length < 500) {
-                small.push({
-                  c: String(el.className || "").slice(0, 26),
-                  w: Math.round(box.width),
-                  h: Math.round(box.height)
-                });
-              }
+              small++;
+              if (probe(el, box) && hard.length < 500) hard.push(shape(el, box));
             }
           }
-          small.sort(function (a, b) { return a.w * a.h - b.w * b.h; });
+          hard.sort(function (a, b) { return a.w * a.h - b.w * b.h; });
           postToApp({
             type: "tap-diag",
             clickable: nodes.length,
-            small: small.length,
-            invisible: invisible,
-            worst: small.slice(0, 12)
+            small: small,
+            hard: hard.length,
+            invisible: invisible.length,
+            worstHard: hard.slice(0, 12),
+            worstInvisible: invisible
           });
         }, 2500);
         return function () { window.clearTimeout(t); };
