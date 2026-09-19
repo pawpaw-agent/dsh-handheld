@@ -467,7 +467,10 @@ window.__ModuleLoader__.load({
     [data-handheld="frame"] [data-phase] header:has([class*="_titleRow"]) {
       min-height: 0 !important;      /* 76 是**内容撑出来**的（10+30+10+25），压 min-height 没用 */
       padding-top: 4px !important;   /* 10 → 4 */
-      padding-right: 12px !important;/* 28 → 12 */
+      /* padding-right **不动**（保持宿主的 28px）：宿主的 .wSkVaW_headerCorner 自带
+         margin-right:-16px，所以右端那个按钮的实际位置是 padding-right − 16。2026-09-19
+         把它压到 12px → 按钮落到 −4px，几乎贴到屏幕边缘（用户当场发现：「右侧边栏按钮太靠右了」）。
+         两侧的空间优化只该作用在**正文**（见上面 [class*="_scroll"] 与统计行），不该动头部右端。 */
     }
     /* 页面已经用满整屏（引导脚本补了 viewport-fit=cover，见 mobile-bootstrap.js）时，
        顶部那 34px 的挖孔安全区被收回；但挖孔本身在下缘约 11px 处，所以会话头留 14px —— 
