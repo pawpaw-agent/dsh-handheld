@@ -123,10 +123,8 @@ window.__ModuleLoader__.load({
        （真机实测 329px vs 视口 384px），里面的桌面两栏布局被压成一字一行。 */
     left: calc(-1 * (min(86vw, 340px) + 12px));
     transition: left .22s cubic-bezier(.2, .7, .3, 1);
-    /* 刘海与手势条：手势条那一段抽屉自己吃；**顶部不吃** —— 抽屉打开时不能盖住会话头，
-       内容要下移到头部底边之下（见下面第 4 节末尾：头部提到抽屉之上）。
-       变量由插件按真实几何写进来（头部高度是内容算出来的，写死会脱钩）。 */
-    padding-top: calc(var(--dsh-handheld-head-bottom, 0px) + 4px);
+    /* 刘海与手势条：抽屉自己吃安全区，里面的内容不必各自处理 */
+    padding-top: env(safe-area-inset-top, 0px);
     padding-bottom: env(safe-area-inset-bottom, 0px);
     border-right: 0 !important;
   }
@@ -148,6 +146,23 @@ window.__ModuleLoader__.load({
   [data-handheld="frame"][data-sidebar-collapsed]:has([role="dialog"][aria-modal="true"]) > [class*="_sidebarCol"] {
     pointer-events: auto;
   }
+  /* ---------- 2b. 行上那两颗「⋯」与「+」：宿主只在 :hover 时显示，手机上等于永远没有 ----------
+     宿主（client/ui-workspace 的 rows/Rows.module.css）写的是：
+
+       .rowActions { display: none }
+       .projectRow:hover .rowActions, .sessionRow:hover .rowActions, …menuOpen … { display: inline-flex }
+
+     手机上**根本没有 hover**，于是行上的两颗按钮永远不出现（用户 2026-09-20：
+     「工作区文件夹上的 … 和 + 按钮是隐藏的，需要改成不隐藏」）。这两颗做的是实打实的事：
+     ⋯ = 重命名/删除工作区，+ = 在这个工作区里开新会话 —— 没有它们，手机端就没法管理
+     工作区。窄屏一律显示，把 hover 那层「藏」去掉。
+     只加在**工作区（文件夹）行**上：会话行也加会让每行多占 ~44px、标题被挤掉一截，
+     用户没提，先不动（要加就是同一个选择器把 _sessionRow 也列进去）。 */
+  @media (max-width: 560px) {
+    [data-handheld="frame"] > [class*="_sidebarCol"] [class*="_projectRow"] [class*="_rowActions"] {
+      display: inline-flex !important;
+    }
+  }
 
   /* ---------- 3. 遮罩 ---------- */
   [data-handheld="backdrop"] {
@@ -162,15 +177,6 @@ window.__ModuleLoader__.load({
   [data-handheld="frame"]:not([data-sidebar-collapsed]) [data-handheld="backdrop"] {
     opacity: 1;
     pointer-events: auto;
-  }
-  /* 头部在**抽屉与遮罩之上**（45 > 抽屉 40 > 遮罩的 DOM 顺序）：用户 2026-09-19
-     「左侧边栏不要隐藏按钮了」。真机实测（抽屉打开时数头部两颗按钮区域的墨点）：
-     左按钮 **0**、右按钮 14300 —— 抽屉把左侧那颗目录按钮整颗盖住，右边那颗却还看得见，
-     于是左边像是「按钮没了」。头部有实底背景，所以抽屉的内容要让开它：抽屉的
-     padding-top 用的是插件量出来的 --dsh-handheld-head-bottom（头部高度是内容算的，
-     写死会脱钩 —— 上次目录按钮 top 写死 12px 就是这么差了 10px）。 */
-  [data-handheld="frame"] [data-phase] header:has([class*="_titleRow"]) {
-    z-index: 45 !important;
   }
 
   /* ---------- 4. 会话头：标题让位、控件不让 ----------
@@ -594,30 +600,6 @@ window.__ModuleLoader__.load({
         if (!frame) return undefined;
         frame.setAttribute("data-handheld", "frame");
 
-        // 抽屉打开时**不能盖住会话头**（用户 2026-09-19：「左侧边栏不要隐藏按钮了」）：
-        // 头部已经被 CSS 提到抽屉之上，抽屉的内容则要下移到头部底边之下。头部高度是**内容
-        // 算出来的**（外壳 padding-top + 标题行 + 页签 + 间距），写死一定会脱钩 —— 上次
-        // 目录按钮的 top 写死 12px 就是这么差了 10px。所以这里量真实几何，写进 CSS 变量。
-        var headBottomTimer = null;
-        var headBottomTimer2 = null;
-        var headRo = null;
-        var syncHeadBottom = function () {
-          var el = frame.querySelector('[data-phase] header:has([class*="_titleRow"])')
-            || frame.querySelector('header');
-          if (!el) return;
-          var bottom = Math.round(el.getBoundingClientRect().bottom);
-          if (bottom > 0) frame.style.setProperty("--dsh-handheld-head-bottom", bottom + "px");
-        };
-        syncHeadBottom();
-        headBottomTimer = window.setTimeout(syncHeadBottom, 400);
-        headBottomTimer2 = window.setTimeout(syncHeadBottom, 1500);
-        window.addEventListener("resize", syncHeadBottom);
-        var headEl = frame.querySelector('[data-phase] header:has([class*="_titleRow"])');
-        if (window.ResizeObserver && headEl) {
-          headRo = new ResizeObserver(syncHeadBottom);
-          headRo.observe(headEl);
-        }
-
         var onFrameClick = function (event) {
           // 宽视口 + 触摸主指针（平板横屏 / 展开态折叠屏 / DeX）时这一层本该**整体退场**：
           // CSS 退了（文件末尾那个媒体查询），但这条捕获阶段的点击启发式原先没退 ——
@@ -647,11 +629,6 @@ window.__ModuleLoader__.load({
         frame.addEventListener("click", onFrameClick, true);
         return function () {
           frame.removeEventListener("click", onFrameClick, true);
-          window.removeEventListener("resize", syncHeadBottom);
-          window.clearTimeout(headBottomTimer);
-          window.clearTimeout(headBottomTimer2);
-          if (headRo) headRo.disconnect();
-          frame.style.removeProperty("--dsh-handheld-head-bottom");
           frame.removeAttribute("data-handheld");
         };
       }, []);
@@ -862,11 +839,6 @@ window.__ModuleLoader__.load({
             cornerIcon: mid(document.querySelector('[data-phase] header [class*="_headerCorner"] svg')),
             bodyTop: body ? Math.round(body.getBoundingClientRect().top) : null,
             bodyPadTop: bs ? bs.paddingTop : null,
-            // 抽屉内容让开的「头部底边」（插件量出来写进 frame 的变量）：抽屉打开时头部不被盖住
-            headBottom: (function () {
-              var f = document.querySelector('[data-handheld="frame"]');
-              return f ? (f.style.getPropertyValue("--dsh-handheld-head-bottom") || null) : null;
-            })(),
             rootTop: rect(document.querySelector('[data-phase]')),
           });
         };
