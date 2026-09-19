@@ -264,11 +264,16 @@ const main = async () => {
   console.log('');
   console.log('  宽度   A 不注入                  B 注入');
   const fails = [];
-  // 真机字体（Roboto/Noto Sans CJK）比 fixture 里的略宽，余量太小等于真机上必然截断。
-  // 0.1.17 第一版余量只有 2px，装机后照旧 `111···` / `缓存命···`；
-  // 1.0.24 这一版小回环在 384px 报「余量 22px」，真机上却**换成了两行** —— 所以阈值提到 40px：
-  // 22px 的余量不足以吸收真机字体的宽度差。
-  const MIN_SLACK = 40;
+  // ⚠️ 这个模型对「可用宽度」是**偏乐观**的：2026-09-19 用真机几何诊断（插件里的 stats-diag）
+  // 量到 384px 下 `rowW = 318px`，而这里算出 342px —— 差 24px（宿主的 dock inset + 滚动条槽
+  // 在 fixture 里没完全复刻）。再加上真机字体比 fixture 宽，所以：
+  //
+  //   小回环余量 ≈ 真机余量 + 32px
+  //
+  // 0.1.17 第一版余量 2px → 真机截断；1.0.27 余量 44px（旧 fixture）→ 真机被省略号吃掉；
+  // 现在 384px 余量 61px → 真机实测两个胶囊 scrollW == clientW（余量 29px）✓。
+  // 阈值取 45px：等于要求真机至少留 ~13px。
+  const MIN_SLACK = 45;
   for (const w of WIDTHS) {
     const a = await measure(w, fixturePath, '');
     const b = await measure(w, fixturePath, injected);
