@@ -469,6 +469,18 @@ window.__ModuleLoader__.load({
       padding-right: 12px !important;
       padding-top: 8px !important;
     }
+    /* 会话滚动体（.wSkVaW_scrollBody）里的**滚动条槽**：宿主给桌面留的
+       scrollbar-gutter: stable（--dsh-scrollbar-width: 8px）再叠 margin-right: 2px，
+       在手机上就是右侧凭空多出 10px —— 用户第二次报的「两侧还是不对称」就是它。
+       真机实测（1.0.33，截图量深色像素）：正文左 28px / 右 38px
+       （= 我们 12px + 宿主 clearance 16px，两侧本该相同；右侧多出的正好是 8 + 2）。
+       改法：把槽宽算进右内边距 —— margin 2 → 0、padding-right 12 → 4，
+       于是右侧 = 8(槽) + 4 = 12 = 左侧 ✓，滚动条本体保留（它是位置指示器），
+       内容同时多回 10px 宽度。这条必须排在 [class*="_scroll"] 之后（特异性相同，后者生效）。 */
+    [data-handheld="frame"] [data-phase] [class*="_scrollBody"] {
+      margin-right: 0 !important;
+      padding-right: 4px !important;
+    }
     [data-handheld="frame"] [data-phase] header:has([class*="_titleRow"]) {
       min-height: 0 !important;      /* 76 是**内容撑出来**的（10+30+10+25），压 min-height 没用 */
       padding-top: 4px !important;   /* 10 → 4 */
@@ -828,6 +840,43 @@ window.__ModuleLoader__.load({
         window.addEventListener("load", function () { report("load"); }, { once: true });
         return function () { window.clearTimeout(t); };
       }, "dsh-handheld-mobile: stats geometry diag");
+
+      // 一次性对称性诊断（2026-09-19）：用户两次报「两侧不对称」。宿主的会话滚动体带
+      // scrollbar-gutter: stable + margin-right: 2px —— 桌面上的滚动条槽，手机上是右侧多出的
+      // 10px。这里把「谁贡献了多少」直接报回来：滚动体的 padding/margin/gutter、以及
+      // offsetWidth 与 clientWidth 的差（= 滚动条实际占的宽度），外加统计行相对视口的左右内缩。
+      ctx.effect(function () {
+        var box = function (el) {
+          if (el === null) return null;
+          var b = el.getBoundingClientRect();
+          var cs = window.getComputedStyle ? getComputedStyle(el) : null;
+          return {
+            cls: (el.getAttribute("class") || "").slice(0, 34),
+            left: Math.round(b.left),
+            right: Math.round(window.innerWidth - b.right),
+            padL: cs ? cs.paddingLeft : "?",
+            padR: cs ? cs.paddingRight : "?",
+            marR: cs ? cs.marginRight : "?",
+            gutter: cs ? cs.scrollbarGutter : "?",
+            offW: el.offsetWidth,
+            cliW: el.clientWidth,
+            scrollbarW: el.offsetWidth - el.clientWidth
+          };
+        };
+        var report = function (stage) {
+          postToApp({
+            type: "side-diag",
+            stage: stage,
+            innerW: window.innerWidth,
+            scrollBody: box(document.querySelector('[class*="_scrollBody"]')),
+            chatScroll: box(document.querySelector('[data-phase] [class*="_scroll"]')),
+            stats: box(document.querySelector('[data-composer-stats]'))
+          });
+        };
+        var t = window.setTimeout(function () { report("1s"); }, 1000);
+        window.addEventListener("load", function () { report("load"); }, { once: true });
+        return function () { window.clearTimeout(t); };
+      }, "dsh-handheld-mobile: side symmetry diag");
 
       ctx.effect(function () {
         var TURN_STATUS = '[class*="_turnStatus"]';

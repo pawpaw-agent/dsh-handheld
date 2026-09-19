@@ -181,6 +181,10 @@ class DshApp : Application() {
                 // 统计行的真实几何（scrollWidth/clientWidth/字号）：调参不再靠估。
                 DiagLog.i(TAG, "统计行几何：${json}")
             }
+            "side-diag" -> {
+                // 左右内缩到底谁贡献的：滚动体的 margin/padding/滚动条槽 + 实际滚动条宽度。
+                DiagLog.i(TAG, "对称性诊断：${json}")
+            }
             "viewport-diag" -> {
                 // 引导脚本报的 viewport 事实（innerH/screen 高/dpr/meta）：用来确认
                 // 「viewport-fit=cover 到底生效没有」——顶部那 34px 就是这么定案的。
