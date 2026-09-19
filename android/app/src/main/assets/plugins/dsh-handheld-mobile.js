@@ -1695,7 +1695,25 @@ window.__ModuleLoader__.load({
               });
             }
           }
-          postToApp({ type: "right-probe", panel: String(el.className || "").slice(0, 30), pts: pts });
+          var pbox = el.getBoundingClientRect();
+          var pcs = window.getComputedStyle ? getComputedStyle(el) : null;
+          var header = document.querySelector('[data-phase] header');
+          var hcs = header && window.getComputedStyle ? getComputedStyle(header) : null;
+          var hbox = header ? header.getBoundingClientRect() : null;
+          postToApp({
+            type: "right-probe",
+            panel: String(el.className || "").slice(0, 30),
+            panelAttr: el.getAttribute("data-sidebar-right-panel"),
+            panelPos: pcs ? pcs.position : "?",
+            panelZ: pcs ? pcs.zIndex : "?",
+            panelPe: pcs ? pcs.pointerEvents : "?",
+            panelRect: { top: Math.round(pbox.top), left: Math.round(pbox.left), w: Math.round(pbox.width), h: Math.round(pbox.height) },
+            panelParent: String((el.parentElement && el.parentElement.className) || "").slice(0, 30),
+            headerZ: hcs ? hcs.zIndex : "?",
+            headerPos: hcs ? hcs.position : "?",
+            headerRect: hbox ? { top: Math.round(hbox.top), h: Math.round(hbox.height) } : null,
+            pts: pts
+          });
         };
         var look = function () {
           var el = document.querySelector("[data-sidebar-right-panel]");

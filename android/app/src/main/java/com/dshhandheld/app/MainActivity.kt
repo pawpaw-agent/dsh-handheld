@@ -433,7 +433,7 @@ class MainActivity : Activity() {
         // id 必须与那个 bundle 内的 `id: "dsh-handheld-mobile"` 一致，改不得（CI 有断言）。
         // rev 只是 WebView 侧的缓存键：内容变更必须换 rev，否则可能命中旧缓存。
         const val MOBILE_PLUGIN_ID = "dsh-handheld-mobile"
-        const val MOBILE_PLUGIN_REV = "dsh-handheld-mobile-1.0.50"
+        const val MOBILE_PLUGIN_REV = "dsh-handheld-mobile-1.0.51"
         const val MOBILE_PLUGIN_URL = "/plugins/??$MOBILE_PLUGIN_ID/client.js&rev=$MOBILE_PLUGIN_REV"
 
         /**
