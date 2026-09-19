@@ -723,6 +723,41 @@ window.__ModuleLoader__.load({
       //     而 MutationObserver 回调是微任务，跟着 JS 任务走，不受节流影响。
       //  3. 太短的「一轮」（< 1.5s）不算数：切会话等操作会让指示器闪现一下，
       //     那不该变成一条通知。
+      // 布局诊断（2026-09-19）：用户报「顶部还是大片留白」，而截图目测已经不可靠了 ——
+      // 直接把 header/标题行/页签/正文起点的 rect 与计算样式打回来，一次性看清那几十像素是谁的。
+      ctx.effect(function () {
+        var rect = function (el) {
+          if (!el) return null;
+          var b = el.getBoundingClientRect();
+          return { top: Math.round(b.top), h: Math.round(b.height) };
+        };
+        var report = function (stage) {
+          var header = document.querySelector('[data-phase] header:has([class*="_titleRow"])')
+            || document.querySelector('[data-phase] header') || document.querySelector('header');
+          var body = document.body;
+          var cs = header && window.getComputedStyle ? getComputedStyle(header) : null;
+          var bs = body && window.getComputedStyle ? getComputedStyle(body) : null;
+          postToApp({
+            type: "layout-diag",
+            stage: stage,
+            cover: document.documentElement.getAttribute("data-dsh-cover"),
+            innerH: window.innerHeight,
+            vvOffsetTop: window.visualViewport ? Math.round(window.visualViewport.offsetTop) : null,
+            header: rect(header),
+            headerPadTop: cs ? cs.paddingTop : null,
+            headerMarginTop: cs ? cs.marginTop : null,
+            titleRow: rect(document.querySelector('[data-phase] [class*="_titleRow"]')),
+            tabs: rect(document.querySelector('[data-phase] [class*="_tabs"]')),
+            bodyTop: body ? Math.round(body.getBoundingClientRect().top) : null,
+            bodyPadTop: bs ? bs.paddingTop : null,
+            rootTop: rect(document.querySelector('[data-phase]')),
+          });
+        };
+        var t1 = window.setTimeout(function () { report("1s"); }, 1000);
+        var t2 = window.setTimeout(function () { report("3s"); }, 3000);
+        return function () { window.clearTimeout(t1); window.clearTimeout(t2); };
+      }, "dsh-handheld-mobile: layout diag");
+
       // 一次性几何诊断（2026-09-19）：真机截图显示统计行被省略号吃掉，而小回环说余量 44px ——
       // 「估」已经不解决问题了，直接把 row/每个胶囊的 scrollWidth 与 clientWidth、以及计算出的
       // 字号报回来。判据与后续调参都靠它。

@@ -173,6 +173,10 @@ class DshApp : Application() {
                     }
                 }
             }
+            "layout-diag" -> {
+                // 顶部留白到底是谁的：header/标题行/页签/正文起点的 rect 与计算样式。
+                DiagLog.i(TAG, "布局诊断：${json}")
+            }
             "stats-diag" -> {
                 // 统计行的真实几何（scrollWidth/clientWidth/字号）：调参不再靠估。
                 DiagLog.i(TAG, "统计行几何：${json}")
