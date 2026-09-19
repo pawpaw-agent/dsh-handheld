@@ -223,7 +223,7 @@ App 把它记进日志（`DshApp.onPageMessage` 的兜底分支现在会打印�
    `MainActivity.onPause()` 只在页面空闲时才暂停定时器（判据是 `DshApp.pageBusy`，
    由 `turn-start`/`turn-done` 维护）—— 代价是生成期间后台多耗一点电。
 
-## 空间：留白到底是谁的（1.0.25 – 1.0.34）
+## 空间：留白到底是谁的（1.0.25 – 1.0.35）
 
 用户 2026-09-19 连报四条「留白太多 / 两侧不对称 / 顶部大片留白」。真机量下来是**四个来源**，
 逐条证据见 `docs/release-notes-0.1.14.md`；这里只留结论与下次要用的判据：
@@ -235,7 +235,9 @@ App 把它记进日志（`DshApp.onPageMessage` 的兜底分支现在会打印�
 | 挖孔安全区 | viewport 没 `viewport-fit=cover` → Chromium 内缩 34px；补上之后宿主外壳又用 JS 内联塞了 `padding-top:35px`（挖孔本体只有 ~11px） | `mobile-bootstrap.js` 补 cover；再用 `html[data-dsh-cover] [class*="_frame"]:has([data-phase]){padding-top:12px !important}` 压内联 |
 | **右侧滚动条槽** | `.wSkVaW_scrollBody{scrollbar-gutter:stable;margin-right:2px}` + `--dsh-scrollbar-width:8px` → 右侧恒定多 10px（每块内容：输入卡 27.5/37.3、统计行 41.9/51.5） | `[class*="_scrollBody"]{margin-right:0;padding-right:4px}` → 右侧 8+4 = 12 = 左侧（**滚动条保留**，内容 +10px） |
 
-判据速查：**Δ 恒定 = 某处固定让位**（内边距写错只会差一处）；**Δ 只在个别元素上 = 那个元素自己的盒子**。
+判据速查：**Δ 恒定 = 某处固定让位**（内边距写错只会差一处）；**Δ 只在个别元素上 = 那个元素自己的盒子**；
+**上下要对齐 = 两处必须共用同一个值**（目录按钮是绝对定位，`top` 写死就会在压缩 header 时掉队 ——
+真机上差 10.1px，用户一眼看到「两边上下不对称」）。
 
 **三条教训**：
 
@@ -258,8 +260,8 @@ App 把它记进日志（`DshApp.onPageMessage` 的兜底分支现在会打印�
 不变量；`mobile-contract` 里还有一步 `node --check` —— CSS 写在模板字面量里，注释里一个
 反引号就能把模板提前结束）。
 
-当前为 `dsh-handheld-mobile-1.0.34`。最近的几档：1.0.34 = 压掉宿主的滚动条槽（左右各 12px 对称）
-+ `side-diag`；1.0.33 = 压掉宿主外壳写死的 35px 安全区内边距；
+当前为 `dsh-handheld-mobile-1.0.35`。最近的几档：1.0.35 = 头部左右按钮的竖直对齐（目录按钮的
+`top` 改成跟 header 的 `padding-top` 共用同一个变量）；1.0.34 = 压掉宿主的滚动条槽（左右各 12px 对称）+ `side-diag`；1.0.33 = 压掉宿主外壳写死的 35px 安全区内边距；
 1.0.31/1.0.32 = `layout-diag`（祖先链 + `env()` 探针，就是把上面那条揪出来的工具）；
 1.0.30 = 头部左右按钮对称（8 → 12px）；1.0.29 = 右端按钮贴边回归的修复；1.0.28 = 统计行被省略号
 吃掉 + `stats-diag`；1.0.25 = 统计行一行到底 + CI 语法检查；1.0.19 = 任务完成通知的判据改取可见节点。

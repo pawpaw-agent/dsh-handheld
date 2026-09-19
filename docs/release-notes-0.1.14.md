@@ -112,6 +112,30 @@ titleRow       top=49                        top=14          ← 上移 35px
 结果那个 `-16px` 的负 margin 让右端按钮落到了 **−4px**（几乎贴边，用户报「右侧边栏按钮太靠右了」）。
 现在 `padding-right` **不覆盖**，两侧的空间优化只作用在正文与统计行上。
 
+### 头部左右按钮还要在同一条**水平线**上
+
+用户接着问「两边上下不对称？」。一量就看出是我自己前面那次「顶部省 18px」留下的：
+
+```
+改前   左（目录按钮）图标中心 y = 38.0      右（宿主角落按钮）图标中心 y = 27.9     差 10.1px
+改后   左 27.9                              右 27.9                              差 0.0 ✓
+```
+
+原因是目录按钮 `position: absolute`，`top` 写死 **12px**（相对 header 顶边），而它该对齐的
+是**标题行**上沿 —— 也就是 header 的 `padding-top`。我把 `padding-top` 从 10 压到 4（有 cover
+时 2），死值 12px 却留在原处，于是按钮整整矮了 10px。
+
+改法：把「标题行上沿」做成**一个 CSS 变量**，在 header 上设置、按钮作为其后代继承 ——
+两处永远同一个值（`≤560px` 为 4px、有 cover 时 2px、兜底 12px = 宿主默认布局下的原值）：
+
+```css
+header:has([class*="_titleRow"]) { --dsh-handheld-head-top: 4px; padding-top: var(--dsh-handheld-head-top) }
+[data-handheld="toggle"]         { top: var(--dsh-handheld-head-top, 12px) }
+```
+
+`layout-diag` 顺带把两个按钮的盒子与图标中心都报出来（`toggle` / `toggleIcon` / `cornerIcon`，
+实测两个图标 `mid` 都是 **28**），下次问「对没对齐」直接看数，不必再量截图。
+
 ## 📊 底部统计行：一行到底、不再被省略号吃掉
 
 用户明确要「一行」。上一版把 `flex-wrap: wrap` 当兜底 —— 真机上直接变成两行，因为小回环算出的
