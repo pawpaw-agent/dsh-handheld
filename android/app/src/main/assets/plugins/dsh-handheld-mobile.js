@@ -272,7 +272,9 @@ window.__ModuleLoader__.load({
     [class*="_inspectButton"],
     [class*="_inspect"],
     [class*="_arrows"],
-    [class*="_tabClose"] {
+    [class*="_tabClose"],
+    [class*="_addTab"],
+    [class*="_iconButton"] {
       opacity: 1 !important;
       pointer-events: auto !important;
     }
@@ -299,22 +301,40 @@ window.__ModuleLoader__.load({
     [class*="_row"][role="button"] {
       min-height: 44px !important;
     }
-    /* 小图标按钮：扩命中区，不动视觉 */
+    /* 小图标按钮与小触发块：扩命中区，不动视觉。
+       真机体检（1.0.46）给出的"又小又没扩过"的头部名单就是 button_action_ / _trigger /
+       _iconButton / _addTab / 会话头页签 —— 所以这里直接按**按钮元素**点名，
+       不用容器类（容器上挂 ::after 只会白占一层）。 */
+    button[class*="_action"],
+    button[class*="_trigger"],
+    button[class*="_iconButton"],
+    button[class*="_iconBtn"],
+    button[class*="_remove"],
+    button[class*="_tabClose"],
+    button[class*="_disclosure"],
     [class*="_iconButton"],
-    [class*="_iconBtn"],
-    [class*="_remove"],
-    [class*="_tabClose"],
-    [data-actions-reveal] [class*="_action"] {
+    [class*="_iconBtn"] {
       position: relative;
     }
-    [class*="_iconButton"]::after,
-    [class*="_iconBtn"]::after,
-    [class*="_remove"]::after,
-    [class*="_tabClose"]::after,
-    [data-actions-reveal] [class*="_action"]::after {
+    button[class*="_action"]::after,
+    button[class*="_trigger"]::after,
+    button[class*="_iconButton"]::after,
+    button[class*="_iconBtn"]::after,
+    button[class*="_remove"]::after,
+    button[class*="_tabClose"]::after,
+    button[class*="_disclosure"]::after {
       content: "";
       position: absolute;
-      inset: -6px;
+      inset: -8px;
+    }
+    /* 会话头页签是**左右相邻**的，水平方向不能吃邻居的空间 —— 只往上下扩。 */
+    [class*="_tab"]::after {
+      content: "";
+      position: absolute;
+      inset: -8px 0;
+    }
+    [class*="_tab"] {
+      position: relative;
     }
     /* 抽屉里我们注入的那排行内操作：直接给足手指尺寸 */
     [data-handheld="rowAction"] {

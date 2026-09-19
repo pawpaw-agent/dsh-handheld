@@ -5,7 +5,6 @@
     "date": "2026-09-19"
   },
   "dshHooks": [
-    "data-actions-reveal",
     "data-approval-key",
     "data-composer-stats",
     "data-phase",
@@ -18,12 +17,14 @@
   "otherHostHooks": [],
   "classHooks": [
     "_action",
+    "_addTab",
     "_arrows",
     "_button_",
     "_chevron",
     "_content",
     "_count",
     "_crumbs",
+    "_disclosure",
     "_frame",
     "_headerActions",
     "_headerCorner",
@@ -49,6 +50,7 @@
     "_sessionRow",
     "_sidebarCol",
     "_split",
+    "_tab",
     "_tabClose",
     "_tableScroll",
     "_tabs",
