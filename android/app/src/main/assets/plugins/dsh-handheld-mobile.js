@@ -469,6 +469,12 @@ window.__ModuleLoader__.load({
       padding-top: 4px !important;   /* 10 → 4 */
       padding-right: 12px !important;/* 28 → 12 */
     }
+    /* 页面已经用满整屏（引导脚本补了 viewport-fit=cover，见 mobile-bootstrap.js）时，
+       顶部那 34px 的挖孔安全区被收回；但挖孔本身在下缘约 11px 处，所以会话头留 14px —— 
+       既避开摄像头，又比原先「34px viewport 内缩 + 4px」省下约 20px。 */
+    html[data-dsh-cover] [data-handheld="frame"] [data-phase] header:has([class*="_titleRow"]) {
+      padding-top: 14px !important;
+    }
     /* 宿主的 76px 全是内容：padding 10 + 标题行 30 + 页签 margin-top 10 + 页签 16+9。
        下面三条各让一步，合计再省 ~18px；页签自身的 padding-bottom 不动（那是手指的目标区）。 */
     [data-handheld="frame"] [data-phase] header:has([class*="_titleRow"]) [class*="_titleRow"] {

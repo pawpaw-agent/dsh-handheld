@@ -173,6 +173,11 @@ class DshApp : Application() {
                     }
                 }
             }
+            "viewport-diag" -> {
+                // 引导脚本报的 viewport 事实（innerH/screen 高/dpr/meta）：用来确认
+                // 「viewport-fit=cover 到底生效没有」——顶部那 34px 就是这么定案的。
+                DiagLog.i(TAG, "viewport 诊断：${json}")
+            }
             "turn-tick" -> {
                 // 每 5 分钟一条的存活探针：JS 到底有没有在跑（renderer 被冻就没有这一条）。
                 // 2026-09-17 那几次「后台收不到通知」就是靠它定性的，别删。

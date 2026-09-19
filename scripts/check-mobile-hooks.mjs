@@ -84,7 +84,11 @@ const OTHER_HOST_PREFIXES = [
  * （`data-mobile-nav-dragging` 还是它与桌宠类插件之间的协作协议）。那一层已删除，
  * 这些名字现在一个都不该再出现。
  */
-const PLUGIN_OWN = ['data-handheld'];
+// 适配层**自己写**的属性：不来自 dsh，所以不进宿主契约。
+//   data-handheld     —— ShellOverlay 的标记（第 1 节）
+//   data-dsh-cover    —— 引导脚本补上 viewport-fit=cover 后打的标记（见 mobile-bootstrap.js），
+//                        适配层据此决定会话头的上边距要不要为挖孔留 14px
+const PLUGIN_OWN = ['data-handheld', 'data-dsh-cover'];
 
 /**
  * 从插件 bundle 里读出它依赖的宿主 DOM 钩子（`data-*` 属性选择器）。
