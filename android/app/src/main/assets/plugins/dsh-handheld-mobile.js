@@ -178,7 +178,11 @@ window.__ModuleLoader__.load({
      这里只写 12px：安全区已经由 frame 的 padding-top 让出来了，再算一次会double。 */
   [data-handheld="frame"] [data-phase] header [data-handheld="toggle"] {
     position: absolute !important;
-    left: 8px !important;
+    /* 12px 而不是 8px（2026-09-19）：宿主的右端角落按钮盒子在
+       padding-right 28 − headerCorner.margin-right 16 = 12px，而我们在 8px ——
+       真机实测左 ink 14.1 CSS px / 右 ink 18.9 px，差 4.8px，一眼就看出「和左边不对称」。
+       两边盒子都取 12px 之后，左右 ink 都是 ~18px。 */
+    left: 12px !important;
     top: 12px !important;
     z-index: 2 !important;
     display: inline-flex;
@@ -199,7 +203,8 @@ window.__ModuleLoader__.load({
      header（提问卡的头、轨迹视图的头），原来那条会给它们也加 20px 左内边距 ——
      卡片标题相对左边距凭空多一截、与右侧动作按钮错位。 */
   [data-handheld="frame"] [data-phase] header:has([class*="_titleRow"]) > :first-child {
-    padding-left: 20px !important;
+    /* 24px：目录按钮挪到 left:12px 之后右缘在 40px，标题从 20+24=44px 起，留 4px 间距 */
+    padding-left: 24px !important;
   }
   [data-handheld="frame"] [data-phase] header [class*="_titleRow"] {
     min-width: 0 !important;
