@@ -183,7 +183,13 @@ window.__ModuleLoader__.load({
        真机实测左 ink 14.1 CSS px / 右 ink 18.9 px，差 4.8px，一眼就看出「和左边不对称」。
        两边盒子都取 12px 之后，左右 ink 都是 ~18px。 */
     left: 12px !important;
-    top: 12px !important;
+    /* 竖直位置必须跟着**标题行**走（用户 2026-09-19 第二次报：「两边上下不对称？」）：
+       按钮是绝对定位的，top 是相对 header 顶边的死值；而标题行的上沿 = header 的
+       padding-top。压缩顶部留白时把 padding-top 从 10 压到 4（有 cover 时 2），
+       死值 12px 就留在了原处 —— 真机实测左图标中心 y=38.0、右图标 27.9，差 10.1 CSS px。
+       现在两边用**同一个变量**：变量在 header 上设置，按钮是它的后代，自然继承。
+       兜底 12px = 宿主默认布局（padding-top 10 + 标题行 30）下原来那个值。 */
+    top: var(--dsh-handheld-head-top, 12px) !important;
     z-index: 2 !important;
     display: inline-flex;
     align-items: center;
@@ -484,6 +490,8 @@ window.__ModuleLoader__.load({
     [data-handheld="frame"] [data-phase] header:has([class*="_titleRow"]) {
       min-height: 0 !important;      /* 76 是**内容撑出来**的（10+30+10+25），压 min-height 没用 */
       padding-top: 4px !important;   /* 10 → 4 */
+      /* 目录按钮（绝对定位）的 top 跟着这个值走 —— 见第 4 节 [data-handheld="toggle"]。 */
+      --dsh-handheld-head-top: 4px;
       /* padding-right **不动**（保持宿主的 28px）：宿主的 .wSkVaW_headerCorner 自带
          margin-right:-16px，所以右端那个按钮的实际位置是 padding-right − 16。2026-09-19
          把它压到 12px → 按钮落到 −4px，几乎贴到屏幕边缘（用户当场发现：「右侧边栏按钮太靠右了」）。
@@ -502,6 +510,7 @@ window.__ModuleLoader__.load({
     /* 顶部间距交给外壳那一层，这里不再叠加（原来 cover 时给 14px，现在 2px）。 */
     html[data-dsh-cover] [data-handheld="frame"] [data-phase] header:has([class*="_titleRow"]) {
       padding-top: 2px !important;
+      --dsh-handheld-head-top: 2px;   /* 目录按钮跟着标题行一起上移 */
     }
     /* 宿主的 76px 全是内容：padding 10 + 标题行 30 + 页签 margin-top 10 + 页签 16+9。
        下面三条各让一步，合计再省 ~18px；页签自身的 padding-bottom 不动（那是手指的目标区）。 */
@@ -751,6 +760,13 @@ window.__ModuleLoader__.load({
           var b = el.getBoundingClientRect();
           return { top: Math.round(b.top), h: Math.round(b.height) };
         };
+        // 竖直中心：左右两个头部按钮要在同一条线上（用户 2026-09-19：「两边上下不对称？」），
+        // 比「各自的 top」更直观 —— 盒高不同时看中心才对得上。
+        var mid = function (el) {
+          if (!el) return null;
+          var b = el.getBoundingClientRect();
+          return { top: Math.round(b.top), h: Math.round(b.height), mid: Math.round(b.top + b.height / 2) };
+        };
         var report = function (stage) {
           var header = document.querySelector('[data-phase] header:has([class*="_titleRow"])')
             || document.querySelector('[data-phase] header') || document.querySelector('header');
@@ -800,6 +816,10 @@ window.__ModuleLoader__.load({
             headerMarginTop: cs ? cs.marginTop : null,
             titleRow: rect(document.querySelector('[data-phase] [class*="_titleRow"]')),
             tabs: rect(document.querySelector('[data-phase] [class*="_tabs"]')),
+            // 头部左右两个按钮（我们注入的目录按钮 vs 宿主右端角落按钮）：中心要对齐
+            toggle: mid(document.querySelector('[data-handheld="toggle"]')),
+            toggleIcon: mid(document.querySelector('[data-handheld="toggle"] svg')),
+            cornerIcon: mid(document.querySelector('[data-phase] header [class*="_headerCorner"] svg')),
             bodyTop: body ? Math.round(body.getBoundingClientRect().top) : null,
             bodyPadTop: bs ? bs.paddingTop : null,
             rootTop: rect(document.querySelector('[data-phase]')),
