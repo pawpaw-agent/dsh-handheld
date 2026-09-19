@@ -5,6 +5,7 @@
     "date": "2026-09-19"
   },
   "dshHooks": [
+    "data-actions-reveal",
     "data-approval-key",
     "data-composer-stats",
     "data-phase",
@@ -16,7 +17,9 @@
   ],
   "otherHostHooks": [],
   "classHooks": [
+    "_action",
     "_arrows",
+    "_button_",
     "_chevron",
     "_content",
     "_count",
@@ -24,6 +27,7 @@
     "_frame",
     "_headerActions",
     "_headerCorner",
+    "_iconBtn",
     "_iconButton",
     "_inspect",
     "_inspectButton",
@@ -35,7 +39,9 @@
     "_overlayLayer",
     "_panelRow",
     "_projectRow",
+    "_remove",
     "_root",
+    "_row",
     "_rowActions",
     "_scroll",
     "_scrollBody",

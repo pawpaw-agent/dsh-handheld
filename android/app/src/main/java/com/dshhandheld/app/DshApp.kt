@@ -181,6 +181,10 @@ class DshApp : Application() {
                 // 统计行的真实几何（scrollWidth/clientWidth/字号）：调参不再靠估。
                 DiagLog.i(TAG, "统计行几何：${json}")
             }
+            "tap-diag" -> {
+                // 手指档体检：可点击元素里有多少不达 44×44、多少「隐形但仍吃点击」。
+                DiagLog.i(TAG, "点击体检：${json}")
+            }
             "ui-recovery" -> {
                 // 页面侧的「连接 / 会话列表」复健动作（研究结论的落地证据）：补拉基线、重连、体检。
                 DiagLog.i(TAG, "界面复健：${json}")

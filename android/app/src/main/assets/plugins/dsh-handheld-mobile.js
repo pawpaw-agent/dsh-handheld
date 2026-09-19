@@ -281,6 +281,48 @@ window.__ModuleLoader__.load({
     }
   }
 
+  /* ---------- 2f. 手指档命中区：把「太小」和「太小又隐形」补上 ----------
+     2026-09-20 的只读盘点（46 个 client 包的 CSSModule 全扫了一遍）+ 真机 tap-diag 体检：
+       1. primitives 的 Button 默认高 **36px**、size=sm **28px**、DisclosureRow 行 **24px** ——
+          它们几乎出现在每个包里，一处改动覆盖全站；
+       2. 一大批 28×28 的图标按钮（侧栏、会话头操作、工具/技能卡、Goal 条、右栏…），
+          三个极端小的：工作区行内操作 **16×16**、轮次刻度 **20×10**、侧栏拖拽把手 **8px 宽**；
+       3. 比「小」更致命的是 hover 门控（看不见 = 点不到），那一类已在 2b/2e 处理。
+     这里做两件事：默认按钮/整行可点的行抬到 **44px**；小图标按钮**只扩命中区**
+     （::after 撑 6px → 40px），不动视觉尺寸 —— 免得把密集工具条挤变形。
+     注意选的是 _button_ （带下划线）而不是 _button：后者会把 _iconButton_<hash>
+     一起吃掉（大小写敏感，恰好躲开）。本模板里**不能写反引号** —— 又踩了一次。 */
+  @media (max-width: 560px) {
+    [class*="_button_"] {
+      min-height: 44px !important;
+    }
+    [class*="_row"][role="button"] {
+      min-height: 44px !important;
+    }
+    /* 小图标按钮：扩命中区，不动视觉 */
+    [class*="_iconButton"],
+    [class*="_iconBtn"],
+    [class*="_remove"],
+    [class*="_tabClose"],
+    [data-actions-reveal] [class*="_action"] {
+      position: relative;
+    }
+    [class*="_iconButton"]::after,
+    [class*="_iconBtn"]::after,
+    [class*="_remove"]::after,
+    [class*="_tabClose"]::after,
+    [data-actions-reveal] [class*="_action"]::after {
+      content: "";
+      position: absolute;
+      inset: -6px;
+    }
+    /* 抽屉里我们注入的那排行内操作：直接给足手指尺寸 */
+    [data-handheld="rowAction"] {
+      width: 32px;
+      height: 32px;
+    }
+  }
+
   /* ---------- 3. 遮罩 ---------- */
   [data-handheld="backdrop"] {
     position: fixed;
@@ -1515,6 +1557,52 @@ window.__ModuleLoader__.load({
           if (drawerObserver) drawerObserver.disconnect();
         };
       }, "dsh-handheld-mobile: ui recovery");
+
+      // ── 手指档体检（一次性）：把「太小 / 太小又隐形」的可点击元素数出来 ──────────
+      // 判据用 Material 的 44×44：宽或高不足就算不达标（纯文本链接除外 —— 这里没扫 a[href]
+      // 之外的文本链接）。另外单独数「隐形但仍吃点击」的（opacity:0 / visibility:hidden，
+      // 且 pointer-events 不是 none）—— 那一类是误触的来源。日志里给最小的 12 个（类名截断），
+      // 可以直接对着它改；改完再装一次，两个数应该都掉下来。
+      ctx.effect(function () {
+        var done = false;
+        var t = window.setTimeout(function () {
+          if (done) return;
+          done = true;
+          var nodes = document.querySelectorAll(
+            'button, [role="button"], [role="menuitem"], [role="tab"], [role="option"], [role="treeitem"], [role="switch"]'
+          );
+          var small = [];
+          var invisible = 0;
+          for (var i = 0; i < nodes.length; i++) {
+            var el = nodes[i];
+            var cs = window.getComputedStyle ? getComputedStyle(el) : null;
+            if (cs === null) continue;
+            var box = el.getBoundingClientRect();
+            if (box.width === 0 && box.height === 0) continue;
+            var hitless = cs.pointerEvents === "none";
+            if (!hitless && (cs.opacity === "0" || cs.visibility === "hidden")) invisible++;
+            if (hitless) continue;
+            if (box.width < 44 || box.height < 44) {
+              if (small.length < 500) {
+                small.push({
+                  c: String(el.className || "").slice(0, 26),
+                  w: Math.round(box.width),
+                  h: Math.round(box.height)
+                });
+              }
+            }
+          }
+          small.sort(function (a, b) { return a.w * a.h - b.w * b.h; });
+          postToApp({
+            type: "tap-diag",
+            clickable: nodes.length,
+            small: small.length,
+            invisible: invisible,
+            worst: small.slice(0, 12)
+          });
+        }, 2500);
+        return function () { window.clearTimeout(t); };
+      }, "dsh-handheld-mobile: tap target audit");
 
       // ── 会话头里的目录按钮 ──────────────────────────────────
       ctx.effect(function () {
