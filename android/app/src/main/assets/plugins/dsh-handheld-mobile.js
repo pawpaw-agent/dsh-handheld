@@ -1648,6 +1648,67 @@ window.__ModuleLoader__.load({
         return function () { window.clearTimeout(t); };
       }, "dsh-handheld-mobile: tap target audit");
 
+      // ── 右侧栏顶部探针（用户 2026-09-20：「右侧边栏展开后最顶部无法点击」）──────────
+      // 手机上右侧栏只能以 fullscreen 出现：宿主的
+      //   .P3OORG_panel[data-sidebar-right-panel=fullscreen] { position: fixed; inset: 0; z-index: 40 }
+      // 到底是谁在顶部那条带子上吃掉了点击（我们自己的浮层？宿主的面板头？还是状态栏），
+      // 靠猜没用 —— 面板一出现就在顶部打一排点，用 elementFromPoint 把「最上面那个元素」
+      // 连同它的尺寸与 pointer-events 一起报回来，一次就能定位。
+      ctx.effect(function () {
+        var probed = null;
+        var timer = null;
+        var probe = function (el) {
+          var pts = [];
+          var xs = [16, 192, 368];
+          var ys = [6, 16, 26, 36, 50];
+          for (var i = 0; i < ys.length; i++) {
+            for (var k = 0; k < xs.length; k++) {
+              var x = xs[k];
+              var y = ys[i];
+              var at = document.elementFromPoint(x, y);
+              if (at === null) {
+                pts.push({ x: x, y: y, at: "null" });
+                continue;
+              }
+              var box = at.getBoundingClientRect();
+              var cs = window.getComputedStyle ? getComputedStyle(at) : null;
+              pts.push({
+                x: x, y: y,
+                at: at.tagName.toLowerCase() + "." + String(at.className || "").slice(0, 22),
+                w: Math.round(box.width), h: Math.round(box.height),
+                top: Math.round(box.top),
+                pe: cs ? cs.pointerEvents : "?",
+                z: cs ? cs.zIndex : "?"
+              });
+            }
+          }
+          postToApp({ type: "right-probe", panel: String(el.className || "").slice(0, 30), pts: pts });
+        };
+        var look = function () {
+          var el = document.querySelector("[data-sidebar-right-panel]");
+          if (el === null) { probed = null; return; }
+          if (probed === el) return;
+          probed = el;
+          window.clearTimeout(timer);
+          timer = window.setTimeout(function () { probe(el); }, 700);
+        };
+        look();
+        var obs = null;
+        if (window.MutationObserver) {
+          obs = new MutationObserver(look);
+          obs.observe(document.body, {
+            subtree: true, childList: true, attributes: true,
+            attributeFilter: ["data-sidebar-right-panel"]
+          });
+        }
+        var poll = window.setInterval(look, 2000);
+        return function () {
+          window.clearTimeout(timer);
+          window.clearInterval(poll);
+          if (obs) obs.disconnect();
+        };
+      }, "dsh-handheld-mobile: right panel probe");
+
       // ── 会话头里的目录按钮 ──────────────────────────────────
       ctx.effect(function () {
         return slots.inject("conversation.session.header.actions", function () {
