@@ -146,20 +146,22 @@ window.__ModuleLoader__.load({
   [data-handheld="frame"][data-sidebar-collapsed]:has([role="dialog"][aria-modal="true"]) > [class*="_sidebarCol"] {
     pointer-events: auto;
   }
-  /* ---------- 2b. 行上那两颗「⋯」与「+」：宿主只在 :hover 时显示，手机上等于永远没有 ----------
+  /* ---------- 2b. 行上那颗「⋯」（工作区行还有「+」）：宿主只在 :hover 时显示，手机上等于永远没有 ----------
      宿主（client/ui-workspace 的 rows/Rows.module.css）写的是：
 
        .rowActions { display: none }
        .projectRow:hover .rowActions, .sessionRow:hover .rowActions, …menuOpen … { display: inline-flex }
 
-     手机上**根本没有 hover**，于是行上的两颗按钮永远不出现（用户 2026-09-20：
-     「工作区文件夹上的 … 和 + 按钮是隐藏的，需要改成不隐藏」）。这两颗做的是实打实的事：
-     ⋯ = 重命名/删除工作区，+ = 在这个工作区里开新会话 —— 没有它们，手机端就没法管理
-     工作区。窄屏一律显示，把 hover 那层「藏」去掉。
-     只加在**工作区（文件夹）行**上：会话行也加会让每行多占 ~44px、标题被挤掉一截，
-     用户没提，先不动（要加就是同一个选择器把 _sessionRow 也列进去）。 */
+     手机上**根本没有 hover**，于是行上的按钮永远不出现。它们做的是实打实的事：
+     工作区行的 ⋯ = 重命名/删除工作区、+ = 在这个工作区里开新会话；会话行的 ⋯ = 重命名/删除/
+     归档/分叉这条会话 —— 没有它们，手机端就没法管理。窄屏一律显示，把 hover 那层「藏」去掉。
+
+     时间戳（_time，flex:none）**不动**：它和按钮是并排的 flex 项，不会叠在一起；标题是
+     flex:1 + ellipsis，宽度不够时先省略标题（真机 340px 抽屉里仍留得下约 220px 标题）。
+     用户 2026-09-20 原话：「工作区文件夹上的 … 和 + 按钮是隐藏的」→「会话的 … 按钮也不要隐藏」。 */
   @media (max-width: 560px) {
-    [data-handheld="frame"] > [class*="_sidebarCol"] [class*="_projectRow"] [class*="_rowActions"] {
+    [data-handheld="frame"] > [class*="_sidebarCol"] [class*="_projectRow"] [class*="_rowActions"],
+    [data-handheld="frame"] > [class*="_sidebarCol"] [class*="_sessionRow"] [class*="_rowActions"] {
       display: inline-flex !important;
     }
   }

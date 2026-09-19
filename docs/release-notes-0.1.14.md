@@ -149,8 +149,11 @@ header:has([class*="_titleRow"]) { --dsh-handheld-head-top: 4px; padding-top: va
 手机上**根本没有 hover** → 行上那两颗按钮永远不出现。而它们做的是实打实的事：
 **⋯ = 重命名 / 删除工作区，+ = 在这个工作区里开新会话** —— 没有它们，手机端没法管理工作区。
 
-改法（≤560px）：`[class*="_projectRow"] [class*="_rowActions"] { display: inline-flex !important }`，
-只加在**工作区行**上（会话行同理有这个问题，但每行会多占 ~44px、把标题挤掉一截，用户没提，先不动）。
+改法（≤560px）：`[class*="_projectRow"] [class*="_rowActions"]` 与 `[class*="_sessionRow"] [class*="_rowActions"]`
+都恒为 `inline-flex`（用户接着补一句：「会话的 … 按钮也不要隐藏」）。时间戳那颗 `_time` 不动 ——
+它与按钮是并排的 flex 项，不会叠在一起；标题是 `flex:1 + ellipsis`，宽度不够先省略标题。
+真机 340px 抽屉里的实测（宿主真实 CSS + 真实类名的浏览器小回环）：宿主下 `display:none`
+（手机上永远看不见）→ 覆盖后 `display:flex`，标题可用 **261 → 245px**（会话行）✓。
 
 ## 📊 底部统计行：一行到底、不再被省略号吃掉
 
