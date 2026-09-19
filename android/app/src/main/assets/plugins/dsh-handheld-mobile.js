@@ -148,6 +148,50 @@ window.__ModuleLoader__.load({
   [data-handheld="frame"][data-sidebar-collapsed]:has([role="dialog"][aria-modal="true"]) > [class*="_sidebarCol"] {
     pointer-events: auto;
   }
+  /* ---------- 2c. 全屏抽屉：先把宿主的桌面宽度约束撑开，再把尺寸换成手指档 ----------
+     用户 2026-09-20「（展开成全屏后）没有利用好空间」。两个原因：
+
+     (1) 宿主侧栏**自己那层根节点**（client/ui-sidebar 的 SidebarRoot）挂着内联
+         style={width}（来自 layout 的 cols.sidebar，本机实测 ~265px）——它不跟着我们
+         那条 100vw 的列走，于是右边空出 ~119px。普通内联声明压不过 stylesheet 里的
+         !important，所以下面这一条能把它拉满（直接子元素就是它，layout 是
+         sidebarCol > 侧栏根节点，中间没有包裹层）。
+     (2) 行高与字号是**桌面档**：会话行 32px、工作区行 34px、标题 14px、行内图标 16px、
+         新会话按钮 36px。全屏之后这些尺寸在一整屏白底上显得又小又空，触摸目标也只有
+         32dp（Material 建议 ≥48dp）。这里按手指档整体抬一档：行 44px、标题 15px、
+         时间 13px、行内图标 20px、新会话 44px、面板行（设置）46px。
+         注意选择器要**限定在行内**：宿主三个模块都有 _iconButton（侧栏品牌那颗是
+         28px、工作区行里是 16px、浏览器工具条里又是另一个），不限定会把品牌那颗挤小。 */
+  [data-handheld="frame"] > [class*="_sidebarCol"] > * {
+    width: 100% !important;
+    max-width: none !important;
+  }
+  @media (max-width: 560px) {
+    [data-handheld="frame"] > [class*="_sidebarCol"] [class*="_projectRow"],
+    [data-handheld="frame"] > [class*="_sidebarCol"] [class*="_sessionRow"] {
+      height: 44px !important;
+    }
+    [data-handheld="frame"] > [class*="_sidebarCol"] [class*="_projectRow"] [class*="_title"],
+    [data-handheld="frame"] > [class*="_sidebarCol"] [class*="_sessionRow"] [class*="_title"] {
+      font-size: 15px !important;
+      line-height: 22px !important;
+    }
+    [data-handheld="frame"] > [class*="_sidebarCol"] [class*="_sessionRow"] [class*="_time"] {
+      font-size: 13px !important;
+      line-height: 22px !important;
+    }
+    [data-handheld="frame"] > [class*="_sidebarCol"] [class*="_projectRow"] [class*="_iconButton"],
+    [data-handheld="frame"] > [class*="_sidebarCol"] [class*="_sessionRow"] [class*="_iconButton"] {
+      width: 20px !important;
+      height: 20px !important;
+    }
+    [data-handheld="frame"] > [class*="_sidebarCol"] button[class*="_newSession"] {
+      height: 44px !important;
+    }
+    [data-handheld="frame"] > [class*="_sidebarCol"] [class*="_panelRow"] {
+      min-height: 46px !important;
+    }
+  }
   /* ---------- 2b. 行上那颗「⋯」（工作区行还有「+」）：宿主只在 :hover 时显示，手机上等于永远没有 ----------
      宿主（client/ui-workspace 的 rows/Rows.module.css）写的是：
 
