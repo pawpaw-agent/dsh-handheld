@@ -477,11 +477,19 @@ window.__ModuleLoader__.load({
          把它压到 12px → 按钮落到 −4px，几乎贴到屏幕边缘（用户当场发现：「右侧边栏按钮太靠右了」）。
          两侧的空间优化只该作用在**正文**（见上面 [class*="_scroll"] 与统计行），不该动头部右端。 */
     }
-    /* 页面已经用满整屏（引导脚本补了 viewport-fit=cover，见 mobile-bootstrap.js）时，
-       顶部那 34px 的挖孔安全区被收回；但挖孔本身在下缘约 11px 处，所以会话头留 14px —— 
-       既避开摄像头，又比原先「34px viewport 内缩 + 4px」省下约 20px。 */
+    /* 页面已经用满整屏（引导脚本补了 viewport-fit=cover，见 mobile-bootstrap.js）时：
+       宿主外壳（dsh-client-ui-layout 的 pI_x6G_frame）会**用 JS 内联**把
+       env(safe-area-inset-top)（本机 35px）整条塞成 padding-top —— 挖孔本体只有约 11px，
+       那 35px 就是用户说的「顶部大片留白」。CSS 的 !important 能压过内联样式；
+       选择器 _frame:has([data-phase]) 只命中包着会话的那一层（真机祖先链里只有这一个）。
+       没 cover 时 env 是 0、宿主也不加，不需要动。
+       （本模板里**不能出现反引号** —— 已经踩过四次，会把模板提前结束。）*/
+    html[data-dsh-cover] [class*="_frame"]:has([data-phase]) {
+      padding-top: 12px !important;
+    }
+    /* 顶部间距交给外壳那一层，这里不再叠加（原来 cover 时给 14px，现在 2px）。 */
     html[data-dsh-cover] [data-handheld="frame"] [data-phase] header:has([class*="_titleRow"]) {
-      padding-top: 14px !important;
+      padding-top: 2px !important;
     }
     /* 宿主的 76px 全是内容：padding 10 + 标题行 30 + 页签 margin-top 10 + 页签 16+9。
        下面三条各让一步，合计再省 ~18px；页签自身的 padding-bottom 不动（那是手指的目标区）。 */
