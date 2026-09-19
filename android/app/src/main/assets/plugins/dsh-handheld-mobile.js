@@ -399,8 +399,16 @@ window.__ModuleLoader__.load({
      两个胶囊「9 轮 298 步 · 111 tok/s」「62.6M tok · 缓存命中 98%」在 13px 下要 ≈349px，
      于是**两个都被省略号吃掉一截**，两侧却还空着 32px。
 
-     改法：左右各 12px、两个胶囊分列两端（space-between 把余量吃掉，而不是堆在中间）、
-     字号 11.5px、分隔符左右 2px；装不下时**换行**，不再用省略号。
+     改法：左右各 8px、两个胶囊分列两端（space-between 把余量吃掉，而不是堆在中间）、
+     字号 10.5px、分隔符左右 2px；**一行到底，不换行**。
+
+     2026-09-18 订正（用户明确要求「不希望变成两行显示」）：上一版在 384px 下算出的余量是
+     22px，于是把换行当兜底 —— 真机上却换成了两行（96 轮 289 步 · 182 tok/s 与
+     75.7M tok · 缓存命中 98% 各一行）。原因是那 22px 抵不住真机字体（Roboto / Noto Sans
+     CJK）的宽度差，而计数器位数一涨就更紧。现在：flex-wrap: nowrap + 字号 10.5px +
+     左右各 8px（小回环阈值相应提到 40px 余量）；万一还是装不下（4 位以上的轮/步），
+     由胶囊的 text-overflow: ellipsis 收尾 —— 宁可尾部省略，也不要多占一行。
+     ⚠️ 这段注释在 CSS 模板字面量里：**不要写反引号**（写一次就把模板提前结束，语法直接坏）。
 
      ⚠️ 这两个数是真机校准出来的，别凭感觉改回去：
       1. 第一版只按视口（384px）建模、以为有 360px 可用，装上真机照旧 111··· —— 漏了上面
@@ -417,17 +425,32 @@ window.__ModuleLoader__.load({
   @media (max-width: 560px) {
     [data-composer-stats] {
       max-width: none !important;
-      padding-left: 12px !important;
-      padding-right: 12px !important;
+      padding-left: 8px !important;
+      padding-right: 8px !important;
       justify-content: space-between !important;
       gap: 4px !important;
-      row-gap: 2px !important;
-      flex-wrap: wrap !important;
-      font-size: 11.5px !important;
+      /* 一行到底：换行会让底部多占一行（用户 2026-09-18 明确不要）。 */
+      flex-wrap: nowrap !important;
+      font-size: 10.5px !important;
+    }
+    /* 极端长的计数（4 位以上「轮/步」）也只允许尾部省略，不再换行。 */
+    [data-composer-stats] > * {
+      white-space: nowrap !important;
+      min-width: 0 !important;
+      overflow: hidden !important;
+      text-overflow: ellipsis !important;
     }
     /* 分隔符「·」宿主给了左右各 6px；窄屏收到 2px —— 两个胶囊各省 8px，共 16px 余量 */
     [data-composer-stats] [class*="_sep"] {
       margin: 0 2px !important;
+    }
+  }
+  /* 更窄（折叠屏外屏 / 小屏）：再降一档字号与内边距，把「一行」保住。 */
+  @media (max-width: 380px) {
+    [data-composer-stats] {
+      font-size: 10px !important;
+      padding-left: 4px !important;
+      padding-right: 4px !important;
     }
   }
 }

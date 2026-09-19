@@ -34,6 +34,15 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
+      # 先做一次语法检查：注入的 bundle 是**模板字面量**拼出来的（CSS 那段在 `` ` `` 里），
+      # 注释里混进一个反引号就会把模板提前结束、语法直接坏 —— 而这个错在「读文本」的
+      # 契约检查里看不出来（2026-09-18 本人踩过三次）。node --check 一秒就能拦住。
+      - name: Syntax-check the injected bundles
+        run: |
+          node --check android/app/src/main/assets/plugins/dsh-handheld-mobile.js
+          node --check android/app/src/main/assets/plugins/mobile-bootstrap.js
+          echo "✓ 两个注入 bundle 语法通过"
+
       - name: Verify plugin ⇄ contract agreement
         run: node scripts/check-mobile-hooks.mjs --contract
 

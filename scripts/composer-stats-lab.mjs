@@ -39,10 +39,11 @@ const WIDTHS = arg('widths', '360,384,412').split(',').map((s) => Number(s.trim(
 const OUT_DIR = arg('out-dir', path.join(os.tmpdir(), 'composer-stats-lab'));
 const CHROME = process.env.CHROME_BIN
   || path.join(os.homedir(), '.cache/ms-playwright/chromium-1243/chrome-linux-arm64/chrome');
-// 真机上这一行显示的是这次会话的真实数字（0.1.11 截图里的那组）
-const PILL_TIME = '9 轮 298 步';
-const PILL_TPS = '111 tok/s';
-const PILL_USAGE = '62.6M tok';
+// 真机上这一行显示的是这次会话的真实数字 —— 取 2026-09-18 真机截图里的那组（它当时**换成了两行**）。
+// 用最长的真实形态建模：轮/步会随会话增长，位数是宽度里最不确定的一段。
+const PILL_TIME = '96 轮 289 步';
+const PILL_TPS = '182 tok/s';
+const PILL_USAGE = '75.7M tok';
 const PILL_CACHE = '缓存命中 98%';
 
 // ── 定位 dsh 安装产物（与 check-mobile-hooks.mjs 同一套） ────────────────────
@@ -264,8 +265,10 @@ const main = async () => {
   console.log('  宽度   A 不注入                  B 注入');
   const fails = [];
   // 真机字体（Roboto/Noto Sans CJK）比 fixture 里的略宽，余量太小等于真机上必然截断。
-  // 0.1.17 第一版余量只有 2px，装机后照旧 `111···` / `缓存命···` —— 这条阈值就是为它加的。
-  const MIN_SLACK = 12;
+  // 0.1.17 第一版余量只有 2px，装机后照旧 `111···` / `缓存命···`；
+  // 1.0.24 这一版小回环在 384px 报「余量 22px」，真机上却**换成了两行** —— 所以阈值提到 40px：
+  // 22px 的余量不足以吸收真机字体的宽度差。
+  const MIN_SLACK = 40;
   for (const w of WIDTHS) {
     const a = await measure(w, fixturePath, '');
     const b = await measure(w, fixturePath, injected);
@@ -276,8 +279,11 @@ const main = async () => {
     console.log(`  ${String(w).padStart(4)}   ${fmt(a).padEnd(26)} ${fmt(b)}`);
     // 负对照：不加适配层就必须复现截断，否则这个 fixture 证明不了任何事
     if (!a.anyTruncated) fails.push(`${w}px：不注入时也没有截断 —— fixture 失真，B 的结论无效`);
-    // 头号判据：注入后**任何宽度下都不许截断**（换行兜底优先于省略号）
+    // 头号判据：注入后**任何宽度下都不许截断**
     if (b.anyTruncated) fails.push(`${w}px：注入后仍截断（${b.pills.map((p) => p.text).join(' / ')}）`);
+    // 第二判据（2026-09-18 用户明确要求）：**不许换行**。换行虽然不截断，但底部会多占一行 ——
+    // 真机上就是「96 轮 289 步 · 182 tok/s」和「75.7M tok · 缓存命中 98%」各占一行。
+    if (b.wrapped) fails.push(`${w}px：注入后换成了两行 —— 要求一行显示（真机截图里的那个形态）`);
     if (!b.wrapped) {
       if (b.freeLeft !== 0 || b.freeRight !== 0) {
         fails.push(`${w}px：不换行时两侧仍有留白（左 ${b.freeLeft}px / 右 ${b.freeRight}px）`);
@@ -293,7 +299,7 @@ const main = async () => {
     for (const f of fails) console.log(`  ✗ ${f}`);
     die(`${fails.length} 项不通过`);
   }
-  console.log('  ✓ A 复现截断、B 不截断且占满可用宽度 —— 适配规则生效');
+  console.log('  ✓ A 复现截断、B 不截断、不换行、占满可用宽度 —— 适配规则生效');
 };
 
 main().catch((e) => die(e.message));
