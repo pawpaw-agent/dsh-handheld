@@ -66,8 +66,6 @@ window.__ModuleLoader__.load({
 
     /** 只有「窄视口 + 触摸主指针」才生效：桌面窗口完全不受影响。 */
     var MOBILE_QUERY = "(max-width: 1023px) and (pointer: coarse)";
-    /** 抽屉宽：窄手机 86vw，最宽 340px（再宽在平板上也不像个抽屉了）。 */
-    var DRAWER_W = "min(86vw, 340px)";
 
     /**
      * 「点了这一笔不等于选完了」的目标集合 —— 抽屉的「点一下收起来」启发式在这些上面让路。
@@ -104,16 +102,20 @@ window.__ModuleLoader__.load({
     padding-top: env(safe-area-inset-top, 0px) !important;
   }
 
-  /* ---------- 2. 侧栏 = 左抽屉 ----------
+  /* ---------- 2. 侧栏 = 左抽屉（展开即全屏） ----------
      开合状态直接读宿主写的 data-sidebar-collapsed（窄屏下它等价于 !narrowExpanded），
-     所以点宿主的任何入口、或窗口尺寸变化，抽屉都跟着走。 */
+     所以点宿主的任何入口、或窗口尺寸变化，抽屉都跟着走。
+
+     宽度：用户 2026-09-20「左侧边栏展开变成全屏」—— 手机上不再留那 44px 的缝
+     （原来 340px / max 86vw），展开就铺满整屏。行标题因此也宽了 ~44px
+     （之前会话标题被 ⋯ 与时间戳挤到要省略）。 */
   [data-handheld="frame"] > [class*="_sidebarCol"] {
     position: fixed !important;
     top: 0;
     bottom: 0;
     left: 0;
-    width: ${DRAWER_W} !important;
-    max-width: 86vw;
+    width: 100vw !important;
+    max-width: none !important;
     z-index: 40;
     /* 关：整列推到屏幕外。
        刻意用 left 而不是 transform —— transform（以及 will-change: transform）会让
@@ -121,7 +123,7 @@ window.__ModuleLoader__.load({
        （SettingsRoot 注册进 sidebar.settings 槽，是个 position:fixed 浮层）。
        踩过的后果：对话框被缩进抽屉的坐标系 —— 只有抽屉那么宽、贴着屏幕左边
        （真机实测 329px vs 视口 384px），里面的桌面两栏布局被压成一字一行。 */
-    left: calc(-1 * (min(86vw, 340px) + 12px));
+    left: calc(-1 * (100vw + 12px));
     transition: left .22s cubic-bezier(.2, .7, .3, 1);
     /* 刘海与手势条：抽屉自己吃安全区，里面的内容不必各自处理 */
     padding-top: env(safe-area-inset-top, 0px);
@@ -157,11 +159,23 @@ window.__ModuleLoader__.load({
      归档/分叉这条会话 —— 没有它们，手机端就没法管理。窄屏一律显示，把 hover 那层「藏」去掉。
 
      时间戳（_time，flex:none）**不动**：它和按钮是并排的 flex 项，不会叠在一起；标题是
-     flex:1 + ellipsis，宽度不够时先省略标题（真机 340px 抽屉里仍留得下约 220px 标题）。
-     用户 2026-09-20 原话：「工作区文件夹上的 … 和 + 按钮是隐藏的」→「会话的 … 按钮也不要隐藏」。 */
+     flex:1 + ellipsis，宽度不够时先省略标题（抽屉现在展开即全屏，标题比以前宽 ~44px）。
+
+     顺带把这一族**所有** hover-only 的东西都翻出来（用户 2026-09-20「把（左侧边栏）里面的
+     按钮都展开」）—— 宿主里同一个模式还有：
+
+       .projectRow .chevron { display: none }        ← 工作区的展开/折叠箭头
+       .projectRow:hover .chevron { display: inline-flex }
+       .projectRow:hover .folder { display: none }   ← hover 时用箭头换掉文件夹图标
+
+     箭头是「这一组能不能折叠」的唯一提示，手机上必须一直看得见；文件夹图标**保留**
+     （host 是为了省地方才做替换，全屏抽屉里有位置，两个都给）。 */
   @media (max-width: 560px) {
     [data-handheld="frame"] > [class*="_sidebarCol"] [class*="_projectRow"] [class*="_rowActions"],
     [data-handheld="frame"] > [class*="_sidebarCol"] [class*="_sessionRow"] [class*="_rowActions"] {
+      display: inline-flex !important;
+    }
+    [data-handheld="frame"] > [class*="_sidebarCol"] [class*="_projectRow"] [class*="_chevron"] {
       display: inline-flex !important;
     }
   }
@@ -310,12 +324,15 @@ window.__ModuleLoader__.load({
   }
 
   /* ---------- 7. 做不到的入口不留 ----------
-     (a) 工作区标题行那颗 +（dsh 自己的按钮，aria-label = workspace.add）：它开的目录
-     选择器由**宿主**决定，本部署里 directory-picker-auto 判成 native，对话框开在电脑
-     桌面上，手机上按下去什么都不会发生。要让它可用就得在宿主侧把交互钉成 -browse ——
-     本项目不动服务端 composition，所以这个入口直接去掉。
-     两个 aria-label 是 dsh 自己词典里的 zh / en 值；换第三种语言时它会重新出现
-     （只是多一个按了没反应的入口，不会坏）。
+     (a) 工作区标题行那颗 +（dsh 自己的按钮，aria-label = workspace.add）——
+     **2026-09-20 起放回来**：用户要求「把（左侧边栏）里面的按钮都展开」，而这颗正是
+     唯一的例外（此前是拿 aria-label 藏掉的）。放回来的依据：它开的目录选择器由宿主的
+     directory-picker-auto 决定，而那条规则要求「本地回环绑定 + 非 SSH 启动 + 有可服务的
+     显示会话（linux 上要 DISPLAY/WAYLAND_DISPLAY + zenity/kdialog）」；这台宿主的桌面
+     能力已经确认没有（present 文件时宿主自己回「此主机没有可用的桌面」），所以它必然
+     落到 browse（网页版目录浏览器）—— 手机上点得动。真机点过确认（见 release notes）。
+     注释留档：这段判断如果哪天宿主换了带显示会话的机器，这颗 + 会改成开电脑桌面上的
+     原生对话框（手机上按了没反应）—— 那时再决定要不要重新藏。
 
      (b) 会话头右上角的「在 XXX 中打开工作目录」（dsh-client-ui-open-in-app 的分屏按钮）：
      它是**在电脑上**用某个已安装的程序打开当前会话的工作目录 —— 宿主探测到的是
@@ -326,10 +343,6 @@ window.__ModuleLoader__.load({
      （轨迹表、交付物卡片）都不在会话头里，所以 header [class*="_split"] 能精确命中它。
      注意：上面这段注释里**不能出现反引号** —— CSS 整段在 JS 模板字符串内，
      反引号会提前终止字符串（踩过两次，node --check 会以 SyntaxError 报出来）。 */
-  [aria-label="添加工作区"],
-  [aria-label="Add workspace"] {
-    display: none !important;
-  }
   [data-handheld="frame"] [data-phase] header [class*="_split"] {
     display: none !important;
   }

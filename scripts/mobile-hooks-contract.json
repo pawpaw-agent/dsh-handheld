@@ -16,6 +16,7 @@
   ],
   "otherHostHooks": [],
   "classHooks": [
+    "_chevron",
     "_content",
     "_count",
     "_crumbs",
