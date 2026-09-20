@@ -181,6 +181,10 @@ class DshApp : Application() {
                 // 统计行的真实几何（scrollWidth/clientWidth/字号）：调参不再靠估。
                 DiagLog.i(TAG, "统计行几何：${json}")
             }
+            "tap-trace" -> {
+                // 右侧栏/顶部区域的点击追踪：命中谁、在不在面板里、面板左上角在哪。
+                DiagLog.i(TAG, "点击追踪：${json}")
+            }
             "right-probe" -> {
                 // 右侧栏展开时顶部条带的命中探针（谁在那个区域吃掉了点击）。
                 DiagLog.i(TAG, "右侧栏探针：${json}")

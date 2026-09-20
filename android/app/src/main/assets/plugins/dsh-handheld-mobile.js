@@ -1669,8 +1669,8 @@ window.__ModuleLoader__.load({
       // 连同它的尺寸与 pointer-events 一起报回来，一次就能定位。
       ctx.effect(function () {
         var probed = null;
-        var timer = null;
-        var probe = function (el) {
+        var probedTimers = [];
+        var probe = function (el, stage) {
           var pts = [];
           var xs = [16, 192, 368];
           var ys = [6, 16, 26, 36, 50];
@@ -1702,6 +1702,7 @@ window.__ModuleLoader__.load({
           var hbox = header ? header.getBoundingClientRect() : null;
           postToApp({
             type: "right-probe",
+            stage: stage,
             panel: String(el.className || "").slice(0, 30),
             panelAttr: el.getAttribute("data-sidebar-right-panel"),
             panelPos: pcs ? pcs.position : "?",
@@ -1721,7 +1722,12 @@ window.__ModuleLoader__.load({
           if (probed === el) return;
           probed = el;
           window.clearTimeout(timer);
-          timer = window.setTimeout(function () { probe(el); }, 700);
+          // 面板是**滑入**的（宿主 .P3OORG_panel 基础规则 transform: translate(100%)，
+          // 打开时 [data-sidebar-right-open] 才 transform: none），所以 700ms 那次会拍到
+          // 半路上的位置（实测 left=384）。三次采样：滑入中 / 落定 / 再等等。
+          probedTimers.push(window.setTimeout(function () { probe(el, "0.7s"); }, 700));
+          probedTimers.push(window.setTimeout(function () { probe(el, "2.5s"); }, 2500));
+          probedTimers.push(window.setTimeout(function () { probe(el, "5s"); }, 5000));
         };
         look();
         var obs = null;
@@ -1734,11 +1740,42 @@ window.__ModuleLoader__.load({
         }
         var poll = window.setInterval(look, 2000);
         return function () {
-          window.clearTimeout(timer);
+          for (var i = 0; i < probedTimers.length; i++) window.clearTimeout(probedTimers[i]);
           window.clearInterval(poll);
           if (obs) obs.disconnect();
         };
       }, "dsh-handheld-mobile: right panel probe");
+
+      // ── 右侧栏「点了没反应」的点击追踪（用户：「补了安全区还是不响应」）──────────────
+      // 必须分清两件事：
+      //   ① 点击**压根没进页面**（系统/WebView 层被吃掉，例如状态条那条带子）→ 这里不会打印；
+      //   ② 进页面了，但**命中的不是那颗按钮**（被别的元素盖住）→ 这里会打出真正吃掉的元素。
+      // 捕获阶段挂在 document 上，只记「落点在右侧栏内 或 y<80」的那些。
+      ctx.effect(function () {
+        var onDown = function (ev) {
+          var el = document.querySelector("[data-sidebar-right-panel]");
+          var box = el ? el.getBoundingClientRect() : null;
+          var inPanel = box !== null && ev.clientX >= box.left && ev.clientX <= box.right
+            && ev.clientY >= box.top && ev.clientY <= box.bottom;
+          if (!inPanel && ev.clientY > 80) return;
+          var target = ev.target;
+          var tr = target && target.getBoundingClientRect ? target.getBoundingClientRect() : null;
+          var cs = target && window.getComputedStyle ? getComputedStyle(target) : null;
+          postToApp({
+            type: "tap-trace",
+            x: Math.round(ev.clientX), y: Math.round(ev.clientY),
+            inPanel: inPanel,
+            panelTop: box ? Math.round(box.top) : null,
+            panelLeft: box ? Math.round(box.left) : null,
+            at: target ? target.tagName.toLowerCase() + "." + String(target.className || "").slice(0, 26) : "null",
+            atTop: tr ? Math.round(tr.top) : null,
+            atH: tr ? Math.round(tr.height) : null,
+            pe: cs ? cs.pointerEvents : "?"
+          });
+        };
+        document.addEventListener("pointerdown", onDown, true);
+        return function () { document.removeEventListener("pointerdown", onDown, true); };
+      }, "dsh-handheld-mobile: tap trace");
 
       // ── 会话头里的目录按钮 ──────────────────────────────────
       ctx.effect(function () {
