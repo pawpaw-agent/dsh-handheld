@@ -2431,6 +2431,16 @@ class MainActivity : Activity() {
      * 沉浸式全屏：内容画到状态栏/导航栏后面（含刘海）。
      * 同时使用 WindowInsetsController（API 30+ 正道）和传统 systemUiVisibility 标志，
      * 以兼容三星 One UI / 不同 WebView 版本对沉浸式的处理差异。
+     *
+     * targetSdk 35（2026-09-22）起 Android 15 会**强制** edge-to-edge，也就是第一行
+     * `setDecorFitsSystemWindows(false)` 的效果成为默认。这条调用保留是对的：对 Android 14
+     * 及更早（minSdk 26）它仍是必需的，对 15+ 则退化为幂等。
+     *
+     * 下面三处 deprecated 调用的现状（都是**已知且无害**，别当 bug 追）：
+     * - `statusBarColor` / `navigationBarColor`：35 起 no-op，但设的值本来就是 TRANSPARENT，
+     *   与 edge-to-edge 的默认结果相同。
+     * - `systemUiVisibility`：35 下仍可用（未移除），但注释里说的「部分 One UI / 老 WebView
+     *   依赖它」这一路径**需要在真机上复验** —— 见 known-issues 的 targetSdk 35 清单。
      */
     private fun applyImmersive() {
         androidx.core.view.WindowCompat.setDecorFitsSystemWindows(window, false)

@@ -48,17 +48,32 @@ android {
     defaultConfig {
         applicationId = "com.dshhandheld.app"
         minSdk = 26
-        // targetSdk 刻意停在 34，**不跟着 compileSdk 走**。
+        // targetSdk 显式写死（**不跟着 compileSdk 走**）。
         //
-        // compileSdk 只决定「能调用哪些 API」，targetSdk 决定「系统按哪一版的行为对待
-        // 这个 App」——后者是运行时行为变更，而 34→35 恰好是最重的一档：Android 15 起
-        // 强制 edge-to-edge（系统栏区域不再自动让位），35→36 还有一批前台服务与权限
-        // 收紧。本项目的主界面是一整个 WebView 加一层终端，正是最吃 insets 的形状。
+        // AGP 9 起 `android.sdk.defaultTargetSdkToCompileSdkIfUnset` 默认为 true，不写这个
+        // 字段就会自动跟随 compileSdk —— targetSdk 是**运行时行为**开关，必须显式声明。
         //
-        // 依赖升级不该顺带改变运行时行为，所以这一档单列，需要真机回归后再动。
-        // 另注：AGP 9 起 `android.sdk.defaultTargetSdkToCompileSdkIfUnset` 默认为 true，
-        // 即**不写 targetSdk 就会自动跟随 compileSdk** —— 这里必须显式写死。
-        targetSdk = 34
+        // ── 34 → 35（2026-09-22）────────────────────────────────────────────
+        // Android 15 起对 targetSdk ≥ 35 的 App **强制 edge-to-edge**（系统栏区域不再自动
+        // 让位）。此前这里停在 34 是为了把这条运行时变更单列出来真机回归。
+        //
+        // 升上来之后实际影响**比预期小得多**，因为本 App 一直是主动 opt-in 的：
+        // MainActivity.applyImmersive() 从第一版就调了 `setDecorFitsSystemWindows(false)`
+        // —— 那正是「关闭系统自动让位」本身。所以 35 强制的行为，我们早就在做，框架接手后
+        // 只是变成幂等，布局结果不变。
+        //
+        // 确定会变（且**无害**）的一处：`statusBarColor` / `navigationBarColor` 自 35 起
+        // deprecated 且 no-op（见 themes.xml 与 applyImmersive 的注释）—— 但我们设的值本来
+        // 就是 TRANSPARENT，而 edge-to-edge 下的默认值也是透明，结果相同。
+        //
+        // 真正需要在真机上盯的是**终端模式**：TuiActivity 既不调 applyImmersive 也不消费任何
+        // inset，此前靠主题的 `windowFullscreen` 全屏。35 起 edge-to-edge 强制生效后，终端
+        // 字符网格会铺到系统栏底下 —— 那是「真的看不见那几行」，不是留白问题。
+        // 待办见 docs/known-issues.md「targetSdk 35 真机验证清单」。
+        //
+        // 另注：36 会把 `windowOptOutEdgeToEdgeEnforcement` 一并废弃并禁用（没有回头路），
+        // 所以 35→36 之前必须先确认终端那一半是好的。
+        targetSdk = 35
         versionCode = 41
         versionName = "0.1.14"
     }
