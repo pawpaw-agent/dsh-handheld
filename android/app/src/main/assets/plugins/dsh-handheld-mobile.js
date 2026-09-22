@@ -1721,7 +1721,13 @@ window.__ModuleLoader__.load({
           if (el === null) { probed = null; return; }
           if (probed === el) return;
           probed = el;
-          window.clearTimeout(timer);
+          // ⚠️ 2026-09-22：这里原来写的是 `window.clearTimeout(timer)`，而 `timer` 在本作用域
+          // **从未声明**（全文件只有 runRowAction 里那个同名局部变量）—— 于是 look() 一走到
+          // 这一行就抛 ReferenceError，而 look() 跑在 MutationObserver / setInterval 回调里，
+          // 异常被静默吞掉：探针**一次都没发出来过**，日志里当然什么都看不到。
+          // 本意是「换面板元素时把上一轮待发的采样撤掉」，改成清 probedTimers 才对。
+          for (var i = 0; i < probedTimers.length; i++) window.clearTimeout(probedTimers[i]);
+          probedTimers = [];
           // 面板是**滑入**的（宿主 .P3OORG_panel 基础规则 transform: translate(100%)，
           // 打开时 [data-sidebar-right-open] 才 transform: none），所以 700ms 那次会拍到
           // 半路上的位置（实测 left=384）。三次采样：滑入中 / 落定 / 再等等。
@@ -1761,6 +1767,24 @@ window.__ModuleLoader__.load({
           var target = ev.target;
           var tr = target && target.getBoundingClientRect ? target.getBoundingClientRect() : null;
           var cs = target && window.getComputedStyle ? getComputedStyle(target) : null;
+          // 2026-09-22 补：只知道「命中了谁」还不够 —— 右侧栏自己的工具栏按钮点不动时，
+          // 要知道那个点**从上到下压了哪几层**（各自的 z-index / pointer-events / 位置）。
+          // 这一条是判断「谁盖住谁」的直接证据，比逐层猜快得多。
+          var stack = [];
+          if (document.elementsFromPoint) {
+            var els = document.elementsFromPoint(ev.clientX, ev.clientY);
+            for (var i = 0; i < els.length && i < 8; i++) {
+              var e2 = els[i];
+              var b2 = e2.getBoundingClientRect();
+              var c2 = window.getComputedStyle ? getComputedStyle(e2) : null;
+              stack.push({
+                at: e2.tagName.toLowerCase() + "." + String(e2.className || "").slice(0, 24),
+                top: Math.round(b2.top), left: Math.round(b2.left),
+                w: Math.round(b2.width), h: Math.round(b2.height),
+                z: c2 ? c2.zIndex : "?", pe: c2 ? c2.pointerEvents : "?", pos: c2 ? c2.position : "?"
+              });
+            }
+          }
           postToApp({
             type: "tap-trace",
             x: Math.round(ev.clientX), y: Math.round(ev.clientY),
@@ -1770,7 +1794,8 @@ window.__ModuleLoader__.load({
             at: target ? target.tagName.toLowerCase() + "." + String(target.className || "").slice(0, 26) : "null",
             atTop: tr ? Math.round(tr.top) : null,
             atH: tr ? Math.round(tr.height) : null,
-            pe: cs ? cs.pointerEvents : "?"
+            pe: cs ? cs.pointerEvents : "?",
+            stack: stack
           });
         };
         document.addEventListener("pointerdown", onDown, true);
