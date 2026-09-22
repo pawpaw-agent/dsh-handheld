@@ -1907,6 +1907,40 @@ window.__ModuleLoader__.load({
         }
       }, "dsh-handheld-mobile: right panel clickable");
 
+      // ── 键盘弹出时把输入框滚回可见区（rev 1.0.61）──────────────────────────────────
+      // 表头 sticky 之后（rev 1.0.60），浏览器不再替我们滚够距离：真机实测键盘弹出时
+      // 内容只上滚 498px（修之前是 1026px = 键盘高度），于是 composer 停在键盘底下 ——
+      // 无障碍树里它的四个节点全是 [x,1374][x,1374]（高度 0，被钳在可视边界上），
+      // 用户看到的就是「底部又被弹出的键盘遮挡了」。
+      // 这里只做一件事：焦点落进输入框、或视觉视口变矮（键盘弹出）之后，把当前聚焦元素
+      // 显式滚进视野（block:"end" 贴底）。表头是 sticky，滚多少都仍然钉在顶部。
+      ctx.effect(function () {
+        var timers = [];
+        var fix = function () {
+          for (var i = 0; i < timers.length; i++) window.clearTimeout(timers[i]);
+          timers = [];
+          // 键盘动画要几帧才落定，分两次采：立刻一次、200ms 后一次。
+          timers.push(window.setTimeout(doScroll, 40));
+          timers.push(window.setTimeout(doScroll, 220));
+        };
+        var doScroll = function () {
+          var el = document.activeElement;
+          if (!el || el === document.body || !el.scrollIntoView) return;
+          try {
+            el.scrollIntoView({ block: "end", inline: "nearest" });
+          } catch (e) {
+            el.scrollIntoView(false);   // 老引擎只认布尔参数
+          }
+        };
+        document.addEventListener("focusin", fix, true);
+        if (window.visualViewport) window.visualViewport.addEventListener("resize", fix);
+        return function () {
+          document.removeEventListener("focusin", fix, true);
+          if (window.visualViewport) window.visualViewport.removeEventListener("resize", fix);
+          for (var i = 0; i < timers.length; i++) window.clearTimeout(timers[i]);
+        };
+      }, "dsh-handheld-mobile: keep focused input above keyboard");
+
       // ── 右侧栏「点了没反应」的点击追踪（用户：「补了安全区还是不响应」）──────────────
       // 必须分清两件事：
       //   ① 点击**压根没进页面**（系统/WebView 层被吃掉，例如状态条那条带子）→ 这里不会打印；
