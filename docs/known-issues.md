@@ -941,6 +941,56 @@ Android 的渠道重要性**创建之后 App 改不动**（只有用户能在设
   `button.P3OORG_iconButton`（`panelLeft=500`），**点一下就关掉了**，转回竖屏面板保持关闭。
   即现阶段的应急出口是：**横屏 → 点收起 → 转回竖屏**（面板状态是宿主持久化的，重载/重连都不清）。
 
+#### ✅ 已修（2026-09-22，插件 rev 1.0.53 → 1.0.58）
+
+用户报「右侧边栏打开后无法关闭，里面的按钮都用不了」后重新取证，把上面那条**根因订正了**：
+
+> 压住面板按钮的**不是宿主那条对话标签条**，而是**面板自己 DOM 里的一层**。
+
+证据是新增的 `panelOwns` 位图（命中栈每一层「是否在 `[data-sidebar-right-panel]` 内」）：
+
+```
+点 CSS(340,54) 命中 button.P3OORG_iconButton   panelOwns=11110000
+  0. button.P3OORG_iconButton      ← 修好后最上层就是它
+```
+
+修之前同一笔是 `div._tabStrip_17p4l_156` 在最上层、按钮在第 1 层 —— 而 `panelOwns` 显示
+**前 4 层全在面板自己的 DOM 里**（`_tabStrip_` / `_surface_` / `_pane_` / `P3OORG_panelBody`），
+所以此前按类名去关「面板外那条标签条」的做法（`open` 判对了、`peOff` 却恒为 0）根本打不中。
+
+**现在的做法（不认类名）**：面板铺满视口时，在它顶部工具栏那条带子上取 3×4 个点，
+用 `elementsFromPoint` 从最上层往下走，**第一个「面板内的可交互元素」（`button`/`a`/`[role]`/
+`[tabindex]`）或面板根才算目标**，它上面的都算遮挡，逐个加 `pointer-events:none`（记在数组里，
+面板收起后原样还回）。两条保险：页面根不碰；**目标控件的祖先不碰**。
+
+⚠️ 中间踩过一个坑（rev 1.0.57 → 1.0.58）：一刀切会把 `_surface_` / `_pane_` / `P3OORG_panelBody`
+这些**整块内容容器**一起关掉，实测点文件夹只命中 `div.P3OORG_panel`、文件列表整块失效。
+补了一条带子过滤：**只关「整块落在面板顶部 `[top, top+84]` 之内」的薄层**（那条遮挡实测 30→68）。
+
+真机结果（SM-G7810 / Android 13，同一台）：
+
+| 动作 | 修之前命中的 | 修之后命中的 |
+|---|---|---|
+| 点 `收起右侧边栏` | `div._tabStrip_17p4l_156` | **`button.P3OORG_iconButton`** → 面板真的关掉 |
+| 点 `文件` 标签的 ✕ | `div._tabStrip_17p4l_156` | **`button._tabClose_17p4l_314`** → 标签关掉（最后一个关掉时面板收起）|
+| 点 `＋` 新标签页 | `div._tabStrip_17p4l_156` | **`button._addTab_17p4l_346`** |
+| 点文件行（回归项） | `button.k-1LKG_row` ✓ | **`button.k-1LKG_row`** ✓ 没被误伤 |
+
+遮挡层数从 5 降到 2（同一份自证日志：`{"open":true,"n":2,"at":[]}` —— 标完之后这些点已经
+不再命中它们）。**横屏那条应急出口仍然有效**，但不再是唯一出路。
+
+#### 附带修掉的两处诊断缺陷（同一天，都在插件里）
+
+1. **`right-probe` 从来没发出来过**：`look()` 里写的是 `window.clearTimeout(timer)`，而 `timer`
+   在该作用域**从未声明**（全文件只有 `runRowAction` 里那个同名局部变量）。`look()` 跑在
+   MutationObserver / `setInterval` 回调里，ReferenceError 被静默吞掉 —— 于是「为这个问题专门
+   写的探针」一次都没跑过，日志里当然什么都看不到。修好后三次采样正常（页面加载时
+   `rect.left=360` = 面板元素本来就在、只是滑出屏外）。
+2. **点击追踪补报命中栈**：`tap-trace` 现在带 `stack`（`elementsFromPoint` 的前 8 层，
+   每层 class / 位置 / 尺寸 / z-index / pointer-events / position）、`peOff`（被让开的元素数）、
+   `panelGeo`（面板 left/width/innerWidth/判定值）、`panelOwns`（每层是否在面板内）。
+   「按钮点不动」这类问题从此一次点击就能定位，不用再猜。
+
 #### 复现命令
 
 ```sh
