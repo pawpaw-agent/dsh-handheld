@@ -1752,7 +1752,7 @@ window.__ModuleLoader__.load({
         };
       }, "dsh-handheld-mobile: right panel probe");
 
-      // ── 右侧栏展开时，把它工具栏上方的遮挡逐个让开（rev 1.0.57）────────────────────
+      // ── 右侧栏展开时，把它工具栏上方的遮挡逐个让开（rev 1.0.58）────────────────────
       // 用户 2026-09-22 真机上报：「右侧边栏打开后无法关闭，里面的按钮都用不了」。
       // elementsFromPoint 命中栈（Android 13 + 16 一致，见 tap-trace 的 stack 字段）：
       //   0. div._tabStrip_17p4l_156   (0,30 360x38)   ← 压在面板之上的 dockkit 标签条容器
@@ -1803,7 +1803,7 @@ window.__ModuleLoader__.load({
             }
             // 面板工具栏那条带子（实测 CSS y40–68）：取 3×4 个点问「谁在最上面」。
           //
-          // ⚠️ 判据不能用「面板之外的才算遮挡」—— 真机读数（rev 1.0.57）显示每个取样点上
+          // ⚠️ 判据不能用「面板之外的才算遮挡」—— 真机读数（rev 1.0.58）显示每个取样点上
           // 第一个元素**本来就在面板里**，于是「遇到面板内元素就停」会一路 break、一个都标不到
           // （peOff=0）。压在面板按钮上面的那层，本身就是面板 DOM 里的一份东西。
           // 所以改成按「这一点本该由谁接住」来判：从最上层往下走，遇到的第一个**面板内的
@@ -1837,6 +1837,12 @@ window.__ModuleLoader__.load({
                   if (e.contains && e.contains(els[m])) { wrapsTarget = true; break; }
                 }
                 if (wrapsTarget) continue;
+                // 只关「贴在顶部这条带子里的薄层」。面板自己的内容容器
+                // （_pane_ / _surface_ / P3OORG_panelBody 都是 30→800 那种整块）也满足
+                // 「在目标之上」，一刀切会把文件列表一起关死 —— rev 1.0.57 真机回归
+                // 实测：点文件夹只命中 div.P3OORG_panel，列表整块失效。
+                var eb = e.getBoundingClientRect ? e.getBoundingClientRect() : null;
+                if (eb === null || eb.top < top - 2 || eb.bottom > top + 84) continue;
                 var tag = e.tagName.toLowerCase() + "." + String(e.className || "").slice(0, 24);
                 if (found.indexOf(tag) < 0) found.push(tag);
                 if (marked.indexOf(e) < 0) {
