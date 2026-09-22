@@ -1752,7 +1752,7 @@ window.__ModuleLoader__.load({
         };
       }, "dsh-handheld-mobile: right panel probe");
 
-      // ── 右侧栏展开时，把它工具栏上方的遮挡逐个让开（rev 1.0.54）────────────────────
+      // ── 右侧栏展开时，把它工具栏上方的遮挡逐个让开（rev 1.0.55）────────────────────
       // 用户 2026-09-22 真机上报：「右侧边栏打开后无法关闭，里面的按钮都用不了」。
       // elementsFromPoint 命中栈（Android 13 + 16 一致，见 tap-trace 的 stack 字段）：
       //   0. div._tabStrip_17p4l_156   (0,30 360x38)   ← 压在面板之上的 dockkit 标签条容器
@@ -1766,19 +1766,17 @@ window.__ModuleLoader__.load({
       // 修法刻意**不按类名去关**（同名同尺寸，靠类名 + 「在不在面板里」判断既脆弱、
       // 也已经试过一轮没生效）：直接在面板工具栏那条带子上取几个点，用 elementsFromPoint
       // 从最上层往下走，凡是出现在**面板自己之前**的元素就是压在面板上的，逐个关掉命中
-      // （带标记，面板收起后原样还回）。这样不依赖宿主的类名、层级或 z-index 怎么变。
+      // （记账在数组里，面板收起后原样还回）。这样不依赖宿主的类名、层级或 z-index 怎么变。
       ctx.effect(function () {
-        var MARK = "data-dsh-pe-off";
+        // 只用自己的数组记账，**不往 DOM 上写标记属性** —— 写 data-* 会被移动端适配
+        // 契约检查当成新的 dsh 钩子（那是我自己的标记，不该混进契约）。
         var marked = [];
         var restoreAll = function () {
           for (var i = 0; i < marked.length; i++) {
-            var e = marked[i];
-            if (e.getAttribute(MARK) !== null) {
-              e.removeAttribute(MARK);
-              e.style.removeProperty("pointer-events");
-            }
+            marked[i].style.removeProperty("pointer-events");
           }
           marked = [];
+          window.__dshHandheldPeOff = 0;
         };
         var last = "";
         var sync = function () {
@@ -1815,14 +1813,14 @@ window.__ModuleLoader__.load({
                 if (e === document.documentElement || e === document.body) break;
                 var tag = e.tagName.toLowerCase() + "." + String(e.className || "").slice(0, 24);
                 if (found.indexOf(tag) < 0) found.push(tag);
-                if (e.getAttribute(MARK) === null) {
-                  e.setAttribute(MARK, "1");
+                if (marked.indexOf(e) < 0) {
                   e.style.setProperty("pointer-events", "none", "important");
                   marked.push(e);
                 }
               }
             }
           }
+          window.__dshHandheldPeOff = marked.length;
           var key = found.join("|");
           if (key !== last) {
             last = key;
@@ -1899,6 +1897,18 @@ window.__ModuleLoader__.load({
             atTop: tr ? Math.round(tr.top) : null,
             atH: tr ? Math.round(tr.height) : null,
             pe: cs ? cs.pointerEvents : "?",
+            // 面板让开逻辑的**自证**：打点时它标了几个元素、面板几何与判定算出来是什么。
+            // 挂在本来就通的 tap-trace 上，省得另开一条通道还要猜它有没有跑。
+            peOff: window.__dshHandheldPeOff || 0,
+            panelGeo: (function () {
+              var p = document.querySelector("[data-sidebar-right-panel]");
+              if (p === null) return null;
+              var pb = p.getBoundingClientRect();
+              return {
+                left: Math.round(pb.left), w: Math.round(pb.width), iw: window.innerWidth,
+                open: pb.width >= window.innerWidth - 1 && pb.left <= 1
+              };
+            })(),
             stack: stack
           });
         };
