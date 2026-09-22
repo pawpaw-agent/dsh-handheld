@@ -1752,6 +1752,110 @@ window.__ModuleLoader__.load({
         };
       }, "dsh-handheld-mobile: right panel probe");
 
+      // ── 右侧栏展开时，把它工具栏上方的遮挡逐个让开（rev 1.0.54）────────────────────
+      // 用户 2026-09-22 真机上报：「右侧边栏打开后无法关闭，里面的按钮都用不了」。
+      // elementsFromPoint 命中栈（Android 13 + 16 一致，见 tap-trace 的 stack 字段）：
+      //   0. div._tabStrip_17p4l_156   (0,30 360x38)   ← 压在面板之上的 dockkit 标签条容器
+      //   1. button.P3OORG_iconButton  (326,40 28x28)  ← 面板自己的「收起右侧边栏」
+      //   5. div._tabStrip_17p4l_156   (0,30 360x38)   ← 面板自己那条（在面板链里）
+      // 两条标签条**类名完全相同**（对话区一条、面板自己一条）。压在面板上那条是全宽、
+      // 背景透明、可命中的容器，于是 CSS y30–68 整条带子上的点击全被它吃掉 —— 面板的
+      // `文件` 标签、它的 ✕、`＋`、`收起右侧边栏` 全在这条带子里，所以既关不掉、
+      // 又「按钮都没反应」；y68 以下（刷新 button.k-1LKG_tool、文件行 button.k-1LKG_row）正常。
+      //
+      // 修法刻意**不按类名去关**（同名同尺寸，靠类名 + 「在不在面板里」判断既脆弱、
+      // 也已经试过一轮没生效）：直接在面板工具栏那条带子上取几个点，用 elementsFromPoint
+      // 从最上层往下走，凡是出现在**面板自己之前**的元素就是压在面板上的，逐个关掉命中
+      // （带标记，面板收起后原样还回）。这样不依赖宿主的类名、层级或 z-index 怎么变。
+      ctx.effect(function () {
+        var MARK = "data-dsh-pe-off";
+        var marked = [];
+        var restoreAll = function () {
+          for (var i = 0; i < marked.length; i++) {
+            var e = marked[i];
+            if (e.getAttribute(MARK) !== null) {
+              e.removeAttribute(MARK);
+              e.style.removeProperty("pointer-events");
+            }
+          }
+          marked = [];
+        };
+        var last = "";
+        var sync = function () {
+          var panel = document.querySelector("[data-sidebar-right-panel]");
+          var open = false;
+          var top = 0;
+          if (panel !== null) {
+            var b = panel.getBoundingClientRect();
+            // 「展开」= 面板铺满视口（宿主是滑入的，落定后才成立；收起时 left=宽度）
+            open = b.width >= window.innerWidth - 1 && b.left <= 1;
+            top = b.top;
+          }
+          if (!open) {
+            if (marked.length > 0 || last !== "") {
+              restoreAll();
+              last = "";
+              postToApp({ type: "panel-blockers", open: false, n: 0 });
+            }
+            return;
+          }
+          // 面板工具栏那条带子（实测 CSS y40–68）：取 3×4 个点问「谁在最上面」
+          var ys = [top + 44, top + 55, top + 66];
+          var xs = [0.08, 0.35, 0.6, 0.92];
+          var found = [];
+          for (var i = 0; i < ys.length; i++) {
+            for (var k = 0; k < xs.length; k++) {
+              var x = Math.round(window.innerWidth * xs[k]);
+              var y = Math.round(ys[i]);
+              var els = document.elementsFromPoint ? document.elementsFromPoint(x, y) : [];
+              for (var j = 0; j < els.length; j++) {
+                var e = els[j];
+                // 走到面板自己（或它的祖先/页面根）就停：这之前的都是压在面板上的
+                if (e === panel || panel.contains(e)) break;
+                if (e === document.documentElement || e === document.body) break;
+                var tag = e.tagName.toLowerCase() + "." + String(e.className || "").slice(0, 24);
+                if (found.indexOf(tag) < 0) found.push(tag);
+                if (e.getAttribute(MARK) === null) {
+                  e.setAttribute(MARK, "1");
+                  e.style.setProperty("pointer-events", "none", "important");
+                  marked.push(e);
+                }
+              }
+            }
+          }
+          var key = found.join("|");
+          if (key !== last) {
+            last = key;
+            postToApp({ type: "panel-blockers", open: true, n: marked.length, at: found });
+          }
+        };
+        // 合并突发变更：宿主在流式输出时 DOM 抖得很厉害，不能每个 mutation 都算一遍几何。
+        var pending = false;
+        var schedule = function () {
+          if (pending) return;
+          pending = true;
+          window.setTimeout(function () { pending = false; sync(); }, 200);
+        };
+        var obs = null;
+        if (window.MutationObserver && document.body) {
+          obs = new MutationObserver(schedule);
+          obs.observe(document.body, {
+            subtree: true, childList: true, attributes: true,
+            attributeFilter: ["class", "style", "data-sidebar-right-panel", "data-sidebar-right-open"]
+          });
+        }
+        // 兜底轮询：面板是滑入的，靠属性变化不一定能拍到「落定」那一帧。
+        var poll = window.setInterval(sync, 1000);
+        window.addEventListener("resize", schedule);
+        sync();
+        return function () {
+          window.clearInterval(poll);
+          window.removeEventListener("resize", schedule);
+          if (obs) obs.disconnect();
+          restoreAll();
+        };
+      }, "dsh-handheld-mobile: right panel clickable");
+
       // ── 右侧栏「点了没反应」的点击追踪（用户：「补了安全区还是不响应」）──────────────
       // 必须分清两件事：
       //   ① 点击**压根没进页面**（系统/WebView 层被吃掉，例如状态条那条带子）→ 这里不会打印；

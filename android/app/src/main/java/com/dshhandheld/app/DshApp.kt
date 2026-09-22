@@ -189,6 +189,10 @@ class DshApp : Application() {
                 // 右侧栏展开时顶部条带的命中探针（谁在那个区域吃掉了点击）。
                 DiagLog.i(TAG, "右侧栏探针：${json}")
             }
+            "panel-blockers" -> {
+                // 右侧栏展开时，压在它工具栏之上的元素（被我们临时关掉命中的那些）。
+                DiagLog.i(TAG, "面板遮挡：${json}")
+            }
             "tap-diag" -> {
                 // 手指档体检：可点击元素里有多少不达 44×44、多少「隐形但仍吃点击」。
                 DiagLog.i(TAG, "点击体检：${json}")
