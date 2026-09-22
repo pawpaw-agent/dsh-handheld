@@ -1197,3 +1197,36 @@ for (var i = 0; i < rows.length; i++) {
 > 只能改状态文件撤：`~/.dsh/storages/workspace.json` 的 `global.archivedSessionIds` 删掉该 id
 > （**注意**同一 id 在 `tables.workspaces.*.sessionIds` 里还有一份，那是工作区顺序，**不能删**），
 > 且服务端把状态缓存在内存里 —— 改动要**下次重启 harness** 才生效。
+
+### 2026-09-22 键盘弹出时顶部标题被顶出屏幕（插件 rev 1.0.60，已修）
+
+用户报「会话页面键盘弹出时上面标题看不见」。真机取证（设备2 / SM-G7810 / Android 13）：
+
+| 测量项 | 键盘收起 | 键盘弹出（`mInputShown=true`）|
+|---|---|---|
+| 会话头（`打开目录` / 会话名 / `创造模式`）| y 42–126 | **整条从可见树里消失** |
+| `对话` / `轨迹` | y 138–213 | 同上 |
+| 正文节点 `深度求索中…` | y 1872 | y 846 |
+| 输入框 `EditText` | y 2043 | y 1017 |
+| 按钮行 | y 2187 | y 1161 |
+
+即键盘一弹**整页上滚 1026px —— 正好是键盘高度**，顶部那条被等比顶出屏幕。
+根因：宿主把会话头放在**滚动流**里（`header.wSkVaW_header` 是 `position: relative`，不是 sticky），
+浏览器把聚焦的输入框滚进视野时标题跟着上去了。
+
+修法（插件 CSS，跟着已有的窄屏表头规则走，不新增选择器）：
+
+```css
+[data-handheld="frame"] [data-phase] header:has([class*="_titleRow"]) {
+  position: sticky !important;
+  top: 0 !important;
+  z-index: 6 !important;
+  background: var(--dsw-alias-bg-base, #151517) !important;
+}
+```
+
+背景必须**不透明**，否则正文会从标题底下透出来（实测底色 `#151517`，与宿主该 token 的暗色值一致）；
+`z-index: 6` 压住正文，但低于左抽屉与右侧栏面板的 `z-index: 40` —— 那两个仍然正常盖住表头。
+
+真机验证（同一台，修好后）：键盘弹着时 `打开目录` / 会话名 / `创造模式` 仍在 **y 42**、
+`对话/轨迹` 仍在 **y 138**，与键盘收起时**逐像素一致**；正文照旧从下面滚过，截图确认无透出。
