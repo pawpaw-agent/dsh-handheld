@@ -77,14 +77,14 @@ metadata 版本 ≤ 编译器可读上限）。
 
 待办（各自单列一步，不宜混在依赖升级里）：
 
-- **`targetSdk` 35 已落地（2026-09-22），升 36 之前要先修终端**：主界面那一半真机回归通过
-  （沉浸式、顶部压缩、左右抽屉/侧栏安全区都量过）；**终端新增一条缺陷** —— 软键盘弹出时
-  附加键栏整条被键盘盖住（targetSdk 34 上它浮在键盘上方），另有一条既有缺陷（PTY 行列数
-  不跟软键盘：44 行 vs 可见 28.4 行）。两条都得先给 `TuiActivity` 补 IME inset 处理。
-  清单、A/B 数据与其余发现见 [`docs/known-issues.md`](docs/known-issues.md) §九。
-  **根因已用交叉验证定位**：同一个 APK 装在 Android 13（SM-G7810 / API 33）上两条都不出现，
-  终端视图随键盘精确收缩 981px、PTY 39 → 21 行跟随 —— 即 Android 15+ 起系统不再替应用
-  resize，必须由终端自己 `setDecorFitsSystemWindows(false)` + 消费 `Type.ime()` inset。
+- **`targetSdk` 35 已落地并回归完毕（2026-09-22）**：主界面那一半真机通过（沉浸式、顶部压缩、
+  左右抽屉/侧栏安全区都量过）。终端那一半先查出三条缺陷 —— 软键盘弹出时附加键栏整条被盖住、
+  PTY 行列数不跟软键盘（44 行 vs 可见 28.4 行）、终端首行落进挖孔带 —— **同日已修**：
+  `TuiActivity` 自己 `setDecorFitsSystemWindows(false)` + 消费 `systemBars | displayCutout | ime`
+  的 inset 来算内容区。修复后 Android 16 上三条一起消失（`stty` 从「44 42 两态不变」变成
+  「41 42 / 23 42 跟随键盘」、键栏贴到键盘上沿 `y1688–1875`、`termTop` 0 → 128），
+  Android 13 上逐像素无回归。清单、A/B 数据、根因交叉验证与修复前后对照见
+  [`docs/known-issues.md`](docs/known-issues.md) §九。
 - **`compileSdk` 36 → 37**：解锁 `core-ktx` 1.19.0，连带 build-tools 37 与 `platforms;android-37.0`。
 - **启用 R8**：`release` 目前 `isMinifyEnabled = false`，首次启用需真机验证（可能裁掉运行期才引用的类）。
 

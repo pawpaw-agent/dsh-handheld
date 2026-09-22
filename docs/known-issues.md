@@ -1048,3 +1048,66 @@ x:60  y:54 inPanel:true panelTop:0 panelLeft:0
 面板自己的标签行在 CSS `y 40–68`，宿主标签条在 CSS `y 30–68` —— **整段重叠**，两次点击都进了标签条，
 两颗按钮（a11y 都标 `clickable=true`）点完面板纹丝不动。两种屏宽、两个 Android 大版本都一样，
 所以发现 5 **与密度、与 API 级别都无关**，是宿主标签条压在面板控制之上。
+
+### 2026-09-22 修复：终端自己消费 inset（发现 1/2/4 一起消失）
+
+根因就是上一节那句：**Android 15 起 targetSdk ≥ 35 强制 edge-to-edge，系统不再替应用让位**。
+所以修法不是「让系统回来」，而是终端自己把内容区算出来 —— `TuiActivity.applyInsetsHandling()`：
+
+- `WindowCompat.setDecorFitsSystemWindows(window, false)`，**必须在 `setContentView` 之前**调用；
+  只对 API ≥ 30 生效（那以下 `adjustResize` 本来有效，而且没有 `WindowInsets.Type`）。
+- 在根 View 上消费 inset：**顶边** = `systemBars | displayCutout` 的 top，**底边** = `max(systemBars.bottom, ime.bottom)`，
+  用 padding 收缩整列，然后返回 `CONSUMED` —— 子 View 不再各让一次。
+- `TerminalView` 在 `onSizeChanged` 里重算行列并给远端发 SIGWINCH，所以 PTY 跟着键盘走
+  （与 Android 13 上系统替我们 resize 时**同一条路**）。
+- 顶边取并集而不是只取状态栏，是因为两台机器窗口位置不同：Android 13 上窗口本来就在挖孔带之下
+  （窗口内 cutout inset = 0，不会重复让位），Android 16 上窗口盖住挖孔（这时它才是 128）。
+- 顺带加了 `insets:` / `layout:` 两条诊断日志 —— 真机取证不用再靠 a11y 反推。
+
+#### 修复前 → 修复后（SM-S9280 / Android 16 / API 36，同一 targetSdk 35）
+
+| 测量项 | 修复前 | 修复后 |
+|---|---|---|
+| 附加键栏（键盘**弹出**） | `y2933–3120`（键盘上沿 1874，整条被盖） | **`y1688–1875`**（贴着键盘上沿 1875）✅ 发现 1 |
+| `stty size` 键盘收起 / 弹出 | `44 42` / `44 42`（不动） | **`41 42` / `23 42`**（跟随）✅ 发现 2 |
+| 终端视图顶 `termTop` | 0（落在 128px 挖孔带里） | **128** ✅ 发现 4 |
+| 终端首行 | y=25 | **y=151** |
+| 附加键栏（键盘**收起**） | `y2933–3120`（在手势条带里、手势柄压字） | **`y2877–3064`**（让开 56px 导航条带）✅ A3 |
+
+机内诊断原文（`adb logcat | grep -aE "insets: padTop|layout: root="`）：
+
+```
+insets: padTop=128 padBottom=0    (bars=128/0  cutout=128 ime=0)
+insets: padTop=128 padBottom=56   (bars=128/56 cutout=128 ime=0)
+insets: padTop=128 padBottom=1245 (bars=128/56 cutout=128 ime=1245)
+layout: root=1440x3120 pad=128/1245 termTop=128 termH=1560 extraKeysH=187   → 1560/66 = 23.6 → 23 行
+layout: root=1440x3120 pad=128/56   termTop=128 termH=2749 extraKeysH=187   → 2749/66 = 41.6 → 41 行
+```
+
+#### 无回归（SM-G7810 / Android 13 / API 33，同一个包）
+
+| 测量项 | 修复前 | 修复后 |
+|---|---|---|
+| `padTop` / `cutout` | — | **`0` / `0`**（窗口本来就在挖孔带之下，没重复让位）|
+| `termTop` | 88 | **88** |
+| `termH` 键盘收起 / 弹出 | 2117 / 1136 | **2117 / 1136** |
+| `stty size` 收起 / 弹出 | `39 40` / `21 40` | **`39 40` / `21 40`** |
+| 附加键栏 a11y bounds（键盘弹出） | ESC `[0,1224][135,1299]`、CTRL `[135,1299][270,1374]` | **逐字节相同** |
+| 横屏（新代码路径） | — | 窗口自身让开左侧挖孔（root 2312 宽、屏幕起点 x=88），键栏 `y291–441` 贴键盘上沿 441，`stty` = **`5 85`**（291/53 = 5.5 → 5 行；2312/27 = 85.6 → 85 列）|
+
+**Android 13 上逐像素不变，Android 15+ 上三条缺陷一起消失。** 取证包 = CI run `35714155240`（head `3cd3a17`，
+versionCode 仍是 41 —— 版本号按本项目惯例留给单独的 `chore(release)` 提交）。
+
+#### 修复验证的复现命令
+
+```sh
+D=192.168.0.186:40351            # Android 13：无回归
+adb -s $D shell input tap 540 2135                       # 主按钮进终端（进入即带键盘）
+adb -s $D logcat -d | grep -aE "insets: padTop|layout: root="   # 直接读内容区与键盘 inset
+adb -s $D shell input text 'stty%ssize'; adb -s $D shell input keyevent 66
+adb -s $D shell input tap 1012 1299                      # ⌨ 收键盘，再量一次
+```
+
+> ⚠️ 取证时若**终端开着**，`ps` 里会有**两个** `libdbclient.so`：一个 `-q -N … -L 127.0.0.1:3080`
+> （隧道），一个 `-y -t`（终端会话）。`scripts/device-tunnel-verify.mjs` 的「dbclient 进程只有 1 个」
+> 会把后者也算进去而报红 —— **那不是泄漏**，退出终端即恢复 1 个。
