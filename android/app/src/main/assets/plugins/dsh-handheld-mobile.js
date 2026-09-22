@@ -1752,7 +1752,7 @@ window.__ModuleLoader__.load({
         };
       }, "dsh-handheld-mobile: right panel probe");
 
-      // ── 右侧栏展开时，把它工具栏上方的遮挡逐个让开（rev 1.0.55）────────────────────
+      // ── 右侧栏展开时，把它工具栏上方的遮挡逐个让开（rev 1.0.56）────────────────────
       // 用户 2026-09-22 真机上报：「右侧边栏打开后无法关闭，里面的按钮都用不了」。
       // elementsFromPoint 命中栈（Android 13 + 16 一致，见 tap-trace 的 stack 字段）：
       //   0. div._tabStrip_17p4l_156   (0,30 360x38)   ← 压在面板之上的 dockkit 标签条容器
@@ -1768,90 +1768,98 @@ window.__ModuleLoader__.load({
       // 从最上层往下走，凡是出现在**面板自己之前**的元素就是压在面板上的，逐个关掉命中
       // （记账在数组里，面板收起后原样还回）。这样不依赖宿主的类名、层级或 z-index 怎么变。
       ctx.effect(function () {
-        // 只用自己的数组记账，**不往 DOM 上写标记属性** —— 写 data-* 会被移动端适配
-        // 契约检查当成新的 dsh 钩子（那是我自己的标记，不该混进契约）。
-        var marked = [];
-        var restoreAll = function () {
-          for (var i = 0; i < marked.length; i++) {
-            marked[i].style.removeProperty("pointer-events");
-          }
-          marked = [];
-          window.__dshHandheldPeOff = 0;
-        };
-        var last = "";
-        var sync = function () {
-          var panel = document.querySelector("[data-sidebar-right-panel]");
-          var open = false;
-          var top = 0;
-          if (panel !== null) {
-            var b = panel.getBoundingClientRect();
-            // 「展开」= 面板铺满视口（宿主是滑入的，落定后才成立；收起时 left=宽度）
-            open = b.width >= window.innerWidth - 1 && b.left <= 1;
-            top = b.top;
-          }
-          if (!open) {
-            if (marked.length > 0 || last !== "") {
-              restoreAll();
-              last = "";
-              postToApp({ type: "panel-blockers", open: false, n: 0 });
+        // 自证：这一条**无条件**上报，用来区分「effect 体压根没跑到」与
+        // 「跑到了但一个元素都没标到 / 中途抛异常」—— 前两轮就卡在这个盲区里。
+        postToApp({ type: "panel-blockers", stage: "init" });
+        try {
+          // 只用自己的数组记账，**不往 DOM 上写标记属性** —— 写 data-* 会被移动端适配
+          // 契约检查当成新的 dsh 钩子（那是我自己的标记，不该混进契约）。
+          var marked = [];
+          var restoreAll = function () {
+            for (var i = 0; i < marked.length; i++) {
+              marked[i].style.removeProperty("pointer-events");
             }
-            return;
-          }
-          // 面板工具栏那条带子（实测 CSS y40–68）：取 3×4 个点问「谁在最上面」
-          var ys = [top + 44, top + 55, top + 66];
-          var xs = [0.08, 0.35, 0.6, 0.92];
-          var found = [];
-          for (var i = 0; i < ys.length; i++) {
-            for (var k = 0; k < xs.length; k++) {
-              var x = Math.round(window.innerWidth * xs[k]);
-              var y = Math.round(ys[i]);
-              var els = document.elementsFromPoint ? document.elementsFromPoint(x, y) : [];
-              for (var j = 0; j < els.length; j++) {
-                var e = els[j];
-                // 走到面板自己（或它的祖先/页面根）就停：这之前的都是压在面板上的
-                if (e === panel || panel.contains(e)) break;
-                if (e === document.documentElement || e === document.body) break;
-                var tag = e.tagName.toLowerCase() + "." + String(e.className || "").slice(0, 24);
-                if (found.indexOf(tag) < 0) found.push(tag);
-                if (marked.indexOf(e) < 0) {
-                  e.style.setProperty("pointer-events", "none", "important");
-                  marked.push(e);
+            marked = [];
+            window.__dshHandheldPeOff = 0;
+          };
+          var last = "";
+          var sync = function () {
+            var panel = document.querySelector("[data-sidebar-right-panel]");
+            var open = false;
+            var top = 0;
+            if (panel !== null) {
+              var b = panel.getBoundingClientRect();
+              // 「展开」= 面板铺满视口（宿主是滑入的，落定后才成立；收起时 left=宽度）
+              open = b.width >= window.innerWidth - 1 && b.left <= 1;
+              top = b.top;
+            }
+            if (!open) {
+              if (marked.length > 0 || last !== "") {
+                restoreAll();
+                last = "";
+                postToApp({ type: "panel-blockers", open: false, n: 0 });
+              }
+              return;
+            }
+            // 面板工具栏那条带子（实测 CSS y40–68）：取 3×4 个点问「谁在最上面」
+            var ys = [top + 44, top + 55, top + 66];
+            var xs = [0.08, 0.35, 0.6, 0.92];
+            var found = [];
+            for (var i = 0; i < ys.length; i++) {
+              for (var k = 0; k < xs.length; k++) {
+                var x = Math.round(window.innerWidth * xs[k]);
+                var y = Math.round(ys[i]);
+                var els = document.elementsFromPoint ? document.elementsFromPoint(x, y) : [];
+                for (var j = 0; j < els.length; j++) {
+                  var e = els[j];
+                  // 走到面板自己（或它的祖先/页面根）就停：这之前的都是压在面板上的
+                  if (e === panel || panel.contains(e)) break;
+                  if (e === document.documentElement || e === document.body) break;
+                  var tag = e.tagName.toLowerCase() + "." + String(e.className || "").slice(0, 24);
+                  if (found.indexOf(tag) < 0) found.push(tag);
+                  if (marked.indexOf(e) < 0) {
+                    e.style.setProperty("pointer-events", "none", "important");
+                    marked.push(e);
+                  }
                 }
               }
             }
+            window.__dshHandheldPeOff = marked.length;
+            var key = found.join("|");
+            if (key !== last) {
+              last = key;
+              postToApp({ type: "panel-blockers", open: true, n: marked.length, at: found });
+            }
+          };
+          // 合并突发变更：宿主在流式输出时 DOM 抖得很厉害，不能每个 mutation 都算一遍几何。
+          var pending = false;
+          var schedule = function () {
+            if (pending) return;
+            pending = true;
+            window.setTimeout(function () { pending = false; sync(); }, 200);
+          };
+          var obs = null;
+          if (window.MutationObserver && document.body) {
+            obs = new MutationObserver(schedule);
+            obs.observe(document.body, {
+              subtree: true, childList: true, attributes: true,
+              attributeFilter: ["class", "style", "data-sidebar-right-panel", "data-sidebar-right-open"]
+            });
           }
-          window.__dshHandheldPeOff = marked.length;
-          var key = found.join("|");
-          if (key !== last) {
-            last = key;
-            postToApp({ type: "panel-blockers", open: true, n: marked.length, at: found });
-          }
-        };
-        // 合并突发变更：宿主在流式输出时 DOM 抖得很厉害，不能每个 mutation 都算一遍几何。
-        var pending = false;
-        var schedule = function () {
-          if (pending) return;
-          pending = true;
-          window.setTimeout(function () { pending = false; sync(); }, 200);
-        };
-        var obs = null;
-        if (window.MutationObserver && document.body) {
-          obs = new MutationObserver(schedule);
-          obs.observe(document.body, {
-            subtree: true, childList: true, attributes: true,
-            attributeFilter: ["class", "style", "data-sidebar-right-panel", "data-sidebar-right-open"]
-          });
+          // 兜底轮询：面板是滑入的，靠属性变化不一定能拍到「落定」那一帧。
+          var poll = window.setInterval(sync, 1000);
+          window.addEventListener("resize", schedule);
+          sync();
+          return function () {
+            window.clearInterval(poll);
+            window.removeEventListener("resize", schedule);
+            if (obs) obs.disconnect();
+            restoreAll();
+          };
+
+        } catch (err) {
+          postToApp({ type: "panel-blockers", stage: "throw", err: String((err && err.message) || err) });
         }
-        // 兜底轮询：面板是滑入的，靠属性变化不一定能拍到「落定」那一帧。
-        var poll = window.setInterval(sync, 1000);
-        window.addEventListener("resize", schedule);
-        sync();
-        return function () {
-          window.clearInterval(poll);
-          window.removeEventListener("resize", schedule);
-          if (obs) obs.disconnect();
-          restoreAll();
-        };
       }, "dsh-handheld-mobile: right panel clickable");
 
       // ── 右侧栏「点了没反应」的点击追踪（用户：「补了安全区还是不响应」）──────────────
