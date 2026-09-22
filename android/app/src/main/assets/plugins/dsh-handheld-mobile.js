@@ -744,6 +744,19 @@ window.__ModuleLoader__.load({
       z-index: 6 !important;
       background: var(--dsw-alias-bg-base, #151517) !important;
     }
+    /* 键盘弹出时外壳高度跟着**视觉视口**走（rev 1.0.62）。
+       病根：键盘弹起后页面仍按整屏高度布局，composer 落在可视区之外，只能靠**滚文档**去够 ——
+       而滚文档会把表头一起带走（表头的 sticky 只在内层滚动容器里生效），于是「标题看不见」和
+       「底部被键盘遮挡」轮流出现（1.0.60 / 1.0.61 两版实测都撞上）。
+       改成：html/body 高度 = 视觉视口高度（JS 维护 --dsh-handheld-vh，见下面的 effect），
+       并禁掉文档级滚动 —— 消息列表自己会滚，表头 sticky 在容器内钉住，composer 稳在底部。 */
+    html[data-dsh-cover], html[data-dsh-cover] body {
+      height: var(--dsh-handheld-vh, 100vh) !important;
+      overflow: hidden !important;
+    }
+    html[data-dsh-cover] [class*="_frame"]:has([data-phase]) {
+      height: var(--dsh-handheld-vh, 100vh) !important;
+    }
   }
 
   /* 更窄（折叠屏外屏 / 小屏）：再降一档字号与内边距，把「一行」保住。 */
@@ -1940,6 +1953,36 @@ window.__ModuleLoader__.load({
           for (var i = 0; i < timers.length; i++) window.clearTimeout(timers[i]);
         };
       }, "dsh-handheld-mobile: keep focused input above keyboard");
+
+      // ── 把视觉视口高度写进 --dsh-handheld-vh（rev 1.0.62）──────────────────────────
+      // CSS 那条「外壳高度跟着视觉视口」需要这个变量。键盘弹出时 visualViewport.height 会
+      // 变矮（Android 13/16 都如此），页面据此重排，composer 自然落在可见区内 ——
+      // 不再需要滚文档（滚文档会把 sticky 表头一起带走）。
+      ctx.effect(function () {
+        var root = document.documentElement;
+        var apply = function () {
+          var vv = window.visualViewport;
+          var h = vv && vv.height ? vv.height : window.innerHeight;
+          if (!h) return;
+          root.style.setProperty("--dsh-handheld-vh", Math.round(h) + "px");
+        };
+        apply();
+        if (window.visualViewport) {
+          window.visualViewport.addEventListener("resize", apply);
+          window.visualViewport.addEventListener("scroll", apply);
+        }
+        window.addEventListener("resize", apply);
+        window.addEventListener("orientationchange", apply);
+        return function () {
+          if (window.visualViewport) {
+            window.visualViewport.removeEventListener("resize", apply);
+            window.visualViewport.removeEventListener("scroll", apply);
+          }
+          window.removeEventListener("resize", apply);
+          window.removeEventListener("orientationchange", apply);
+          root.style.removeProperty("--dsh-handheld-vh");
+        };
+      }, "dsh-handheld-mobile: visual viewport height var");
 
       // ── 右侧栏「点了没反应」的点击追踪（用户：「补了安全区还是不响应」）──────────────
       // 必须分清两件事：
