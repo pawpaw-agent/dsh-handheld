@@ -1230,3 +1230,28 @@ for (var i = 0; i < rows.length; i++) {
 
 真机验证（同一台，修好后）：键盘弹着时 `打开目录` / 会话名 / `创造模式` 仍在 **y 42**、
 `对话/轨迹` 仍在 **y 138**，与键盘收起时**逐像素一致**；正文照旧从下面滚过，截图确认无透出。
+
+#### 追记：修这条时按下了葫芦起了瓢（插件 rev 1.0.60 → 1.0.61 → 1.0.62）
+
+三版都在真机上量过，值得记下来 —— 它们暴露的是同一个病根：
+
+| 版本 | 做法 | 真机结果（键盘弹着，键盘上沿 y=1374）|
+|---|---|---|
+| 1.0.59 | 无 | 整页上滚 **1026px = 键盘高度** → 标题被顶出屏幕 ✗ |
+| 1.0.60 | 只给会话头加 `position: sticky` | 上滚只有 498px → 标题在了 ✓，但 composer 停在键盘底下 ✗（四个节点全是 `[x,1374][x,1374]`，高度 0 = 被钳在可视边界外）|
+| 1.0.61 | 再补 `scrollIntoView({block:"end"})` | 文档被滚够 1026px → composer 可见 ✓，**表头又被带走** ✗ —— sticky 只在内层滚动容器里生效，滚文档它跟着走 |
+| 1.0.62 | 外壳高度绑视觉视口 + 禁文档级滚动 | 表头仍在 **y42 / y138**、composer 在 **y1017–1125** —— 两项同时成立 ✓✓ |
+
+**病根**：键盘弹起后页面仍按整屏高度布局，composer 落在可视区之外，只能靠「滚文档」去够 ——
+而滚文档必然带走 sticky 表头。所以两个症状是同一个原因的两面，单修哪一面都会把另一面弄坏。
+
+**1.0.62 的修法**：
+
+```
+JS ：visualViewport.resize / scroll 时写 --dsh-handheld-vh = round(visualViewport.height)
+CSS：html[data-dsh-cover], html[data-dsh-cover] body { height: var(--dsh-handheld-vh, 100vh); overflow: hidden }
+     html[data-dsh-cover] [class*="_frame"]:has([data-phase]) { height: var(--dsh-handheld-vh, 100vh) }
+```
+
+键盘弹起 → 页面按**可见高度**重排 → composer 自然落在底部 ✓、消息列表自己滚 ✓、
+表头 sticky 在容器内钉住 ✓，三者不再互相打架。
