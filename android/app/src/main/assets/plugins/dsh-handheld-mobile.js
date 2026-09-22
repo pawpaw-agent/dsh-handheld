@@ -125,8 +125,13 @@ window.__ModuleLoader__.load({
        （真机实测 329px vs 视口 384px），里面的桌面两栏布局被压成一字一行。 */
     left: calc(-1 * (100vw + 12px));
     transition: left .22s cubic-bezier(.2, .7, .3, 1);
-    /* 刘海与手势条：抽屉自己吃安全区，里面的内容不必各自处理 */
-    padding-top: env(safe-area-inset-top, 0px);
+    /* 刘海与手势条：底部仍由抽屉自己吃安全区（手势条不该被内容压住）。
+       顶部**不再退避**（2026-09-22 用户要求）：会话页那条已经把顶部压到 12px
+       （见下面 [class*="_frame"]:has([data-phase]) 的 12px），侧栏却还整条让开
+       env(safe-area-inset-top)（本机 35px），于是「左右侧边栏比会话页多一截留白」。
+       改成同样的 12px —— 抽屉第一行是 logo（不可点），真正可点的行（新会话/收起）
+       落在 CSS y≈33 以下，仍在系统那条吃触摸的带子（约 0~32）之外。 */
+    padding-top: 12px;
     padding-bottom: env(safe-area-inset-bottom, 0px);
     border-right: 0 !important;
   }
@@ -591,7 +596,11 @@ window.__ModuleLoader__.load({
      左抽屉早就用 padding-top: env(safe-area-inset-top) 让开了（第 2 节），右侧栏漏了。
      补上同样的安全区；box-sizing: border-box 保证整体高度不被撑出屏幕。 */
   [data-sidebar-right-panel="fullscreen"] {
-    padding-top: env(safe-area-inset-top, 0px) !important;
+    /* 2026-09-22 用户要求：与会话页一样全屏，不再整条让开 env(safe-area-inset-top)。
+       保留 12px（= 会话页的压缩量）。⚠️ 这条曾经是为了「面板头落在系统吃触摸的带子里
+       点不动」才加到 safe-area 的 —— 改成 12px 之后面板头会升到 CSS y≈17–45，
+       必须真机复验那颗「收起」还能点到（点不到就把这里调回 ~20px）。 */
+    padding-top: 12px !important;
     box-sizing: border-box !important;
   }
 
