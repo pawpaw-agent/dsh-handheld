@@ -731,6 +731,19 @@ window.__ModuleLoader__.load({
     [data-handheld="frame"] [data-phase] header:has([class*="_titleRow"]) [class*="_tabs"] {
       margin-top: 4px !important;    /* 10 → 4 */
     }
+    /* 键盘弹出时把这条会话头钉在顶部（用户 2026-09-22：「会话页面键盘弹出时上面标题看不见」）。
+       真机取证（设备2 / SM-G7810，2026-09-22）：键盘一弹，整页上滚 1026px —— 正好是键盘高度
+       （正文节点 y1872 → 846、输入框 y2043 → 1017、按钮 y2187 → 1161，等比上移），
+       顶部 y42–213 那条（会话名 + 对话/轨迹 + 抽屉按钮）被整条顶出屏幕、连可见树里都没有了。
+       宿主把会话头放在滚动流里（position: relative，不是 sticky），所以这里钉住它。
+       背景必须不透明，否则正文会从标题底下透出来（实测底色 #151517，与宿主的
+       --dsw-alias-bg-base 暗色值一致）；z-index 压住正文但低于宿主那条 z-index:40 的全屏面板。 */
+    [data-handheld="frame"] [data-phase] header:has([class*="_titleRow"]) {
+      position: sticky !important;
+      top: 0 !important;
+      z-index: 6 !important;
+      background: var(--dsw-alias-bg-base, #151517) !important;
+    }
   }
 
   /* 更窄（折叠屏外屏 / 小屏）：再降一档字号与内边距，把「一行」保住。 */
