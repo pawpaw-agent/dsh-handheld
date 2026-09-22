@@ -910,13 +910,17 @@ window.__ModuleLoader__.load({
               btn.setAttribute("aria-label", spec[k].label);
               btn.setAttribute("title", spec[k].label);
               btn.appendChild(iconSvg(spec[k].d));
-              btn.addEventListener("click", (function (idx) {
+              // ⚠️ `row` 必须**随 idx 一起**绑进来：循环变量是 `var`（函数作用域），
+              // 只绑 idx 的话，所有行的按钮共享同一个 `row`，循环结束后它恒等于最后一行 ——
+              // 真机实测（设备1，2026-09-22）：点第一行「查看 dsh hand 项目」的重命名，
+              // 弹出来的却是第三行「光刻机光罩台1330Hz共振研究」。
+              btn.addEventListener("click", (function (rowEl, idx) {
                 return function (ev) {
                   ev.preventDefault();
                   ev.stopPropagation();
-                  runRowAction(row, idx);
+                  runRowAction(rowEl, idx);
                 };
-              })(k));
+              })(row, k));
               wrap.appendChild(btn);
             }
             anchor.parentElement.parentNode.insertBefore(wrap, anchor.parentElement);
