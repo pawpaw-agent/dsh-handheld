@@ -4,6 +4,7 @@ import android.app.Activity
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.graphics.Typeface
+import android.os.Build
 import android.os.Bundle
 import android.view.Gravity
 import android.view.View
@@ -12,6 +13,9 @@ import android.view.inputmethod.InputMethodManager
 import android.widget.FrameLayout
 import android.widget.LinearLayout
 import android.widget.TextView
+import androidx.core.view.ViewCompat
+import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
 import com.termux.shared.terminal.io.extrakeys.ExtraKeysConstants
 import com.termux.shared.terminal.io.extrakeys.ExtraKeysInfo
 import com.termux.shared.terminal.io.extrakeys.ExtraKeysView
@@ -75,8 +79,16 @@ class TuiActivity : Activity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+
+        // 「decor 不替我们让位」必须在 setContentView **之前**声明：这一句决定后面收到的
+        // 是「已经摆好的内容区」还是「原始 inset」。理由见 applyInsetsHandling()。
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            WindowCompat.setDecorFitsSystemWindows(window, false)
+        }
+
         val root = FrameLayout(this).apply { setBackgroundColor(COL_BG) }
         setContentView(root)
+        applyInsetsHandling(root)
 
         statusView = TextView(this).apply {
             text = "准备 SSH…"
@@ -157,6 +169,60 @@ class TuiActivity : Activity() {
         root.addView(statusView)
 
         startDbclient()
+    }
+
+    /**
+     * 自己算内容区（2026-09-22 真机回归的修复；证据见 docs/known-issues.md §九）。
+     *
+     * 为什么必须自己做：Android 15 起，targetSdk ≥ 35 的 App 被**强制 edge-to-edge**，
+     * 系统不再替应用让位 —— `windowSoftInputMode=adjustResize` 形同虚设。同一份 APK
+     * 双机实测：Android 13 上终端视图随键盘收缩 981px（正好是键盘高度）、PTY 39→21 行；
+     * Android 16 上窗口 frame 与 PTY 都不动，键盘直接盖住整条附加键栏（发现 1），
+     * 终端首行还落在挖孔带里（发现 4）。
+     *
+     * 做法：顶边避开系统声明的状态栏/挖孔带，底边取 max(系统栏, 键盘)，用 padding 收缩整列。
+     * `TerminalView` 在 `onSizeChanged` 里重算行列并给远端发 SIGWINCH —— 与 Android 13 上
+     * 系统替我们 resize 时走的是同一条路，所以 PTY 会跟着键盘走（发现 2 随之消失）。
+     *
+     * 顶边取 `systemBars | displayCutout` 的并集而不是只取状态栏：Android 13 上窗口本身
+     * 就摆在挖孔带之下（frame `[0,88]`），窗口内的挖孔 inset 是 0，不会重复让位；
+     * Android 16 上窗口盖住了挖孔（frame `[0,0]`），这时它才是 128 —— 正好补上发现 4。
+     *
+     * API < 30 不接管：那里 `adjustResize` 本来有效，而且没有 `WindowInsets.Type`。
+     */
+    private fun applyInsetsHandling(root: View) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) return
+        ViewCompat.setOnApplyWindowInsetsListener(root) { v, insets ->
+            val bars = insets.getInsets(
+                WindowInsetsCompat.Type.systemBars() or WindowInsetsCompat.Type.displayCutout()
+            )
+            val ime = insets.getInsets(WindowInsetsCompat.Type.ime())
+            val top = bars.top
+            val bottom = maxOf(bars.bottom, ime.bottom)
+            if (v.paddingTop != top || v.paddingBottom != bottom) {
+                v.setPadding(0, top, 0, bottom)
+                DiagLog.i(
+                    TAG,
+                    "insets: padTop=$top padBottom=$bottom " +
+                        "(bars=${bars.top}/${bars.bottom} cutout=${insets.getInsets(WindowInsetsCompat.Type.displayCutout()).top} " +
+                        "ime=${ime.bottom} density=${resources.displayMetrics.density})"
+                )
+                // 布局要等这一帧走完才生效，所以尺寸另发一条 —— 真机取证时直接看这两行。
+                v.post {
+                    val loc = IntArray(2)
+                    terminalView?.getLocationOnScreen(loc)
+                    DiagLog.i(
+                        TAG,
+                        "layout: root=${v.width}x${v.height} pad=$top/$bottom " +
+                            "termTop=${loc[1]} termH=${terminalView?.height} " +
+                            "extraKeysH=${extraKeysView?.height}"
+                    )
+                }
+            }
+            // 内容区由我们独占计算，不再往下传（子 View 不需要、也不该再各让一次）。
+            WindowInsetsCompat.CONSUMED
+        }
+        ViewCompat.requestApplyInsets(root)
     }
 
     /**
@@ -399,9 +465,11 @@ class TuiActivity : Activity() {
             }
         }
         extraKeysView = extras
-        // 键排高度：每行 25dp（两行共 50dp；⌨ 跨两行 = 50dp ≈ 最小可点击目标 48dp），
-        // 随 windowSoftInputMode=adjustResize 软键盘弹出时窗口收缩、
-        // 键排自动顶到键盘上方 —— 无需额外处理
+        // 键排高度：每行 25dp（两行共 50dp；⌨ 跨两行 = 50dp ≈ 最小可点击目标 48dp）。
+        // ⚠️ 2026-09-22 订正：这里原写「随 windowSoftInputMode=adjustResize 软键盘弹出时
+        // 窗口收缩、键排自动顶到键盘上方 —— 无需额外处理」。targetSdk 35 起这句不成立：
+        // Android 15+ 强制 edge-to-edge，系统不再让位，键盘会整条盖住键排（发现 1）。
+        // 现在由 applyInsetsHandling() 把键盘高度算进内容区，键排自然落在键盘上沿。
         val h = (50 * resources.displayMetrics.density).toInt()
         return LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
