@@ -1752,7 +1752,7 @@ window.__ModuleLoader__.load({
         };
       }, "dsh-handheld-mobile: right panel probe");
 
-      // ── 右侧栏展开时，把它工具栏上方的遮挡逐个让开（rev 1.0.56）────────────────────
+      // ── 右侧栏展开时，把它工具栏上方的遮挡逐个让开（rev 1.0.57）────────────────────
       // 用户 2026-09-22 真机上报：「右侧边栏打开后无法关闭，里面的按钮都用不了」。
       // elementsFromPoint 命中栈（Android 13 + 16 一致，见 tap-trace 的 stack 字段）：
       //   0. div._tabStrip_17p4l_156   (0,30 360x38)   ← 压在面板之上的 dockkit 标签条容器
@@ -1801,30 +1801,52 @@ window.__ModuleLoader__.load({
               }
               return;
             }
-            // 面板工具栏那条带子（实测 CSS y40–68）：取 3×4 个点问「谁在最上面」
-            var ys = [top + 44, top + 55, top + 66];
-            var xs = [0.08, 0.35, 0.6, 0.92];
-            var found = [];
-            for (var i = 0; i < ys.length; i++) {
-              for (var k = 0; k < xs.length; k++) {
-                var x = Math.round(window.innerWidth * xs[k]);
-                var y = Math.round(ys[i]);
-                var els = document.elementsFromPoint ? document.elementsFromPoint(x, y) : [];
-                for (var j = 0; j < els.length; j++) {
-                  var e = els[j];
-                  // 走到面板自己（或它的祖先/页面根）就停：这之前的都是压在面板上的
-                  if (e === panel || panel.contains(e)) break;
-                  if (e === document.documentElement || e === document.body) break;
-                  var tag = e.tagName.toLowerCase() + "." + String(e.className || "").slice(0, 24);
-                  if (found.indexOf(tag) < 0) found.push(tag);
-                  if (marked.indexOf(e) < 0) {
-                    e.style.setProperty("pointer-events", "none", "important");
-                    marked.push(e);
-                  }
+            // 面板工具栏那条带子（实测 CSS y40–68）：取 3×4 个点问「谁在最上面」。
+          //
+          // ⚠️ 判据不能用「面板之外的才算遮挡」—— 真机读数（rev 1.0.57）显示每个取样点上
+          // 第一个元素**本来就在面板里**，于是「遇到面板内元素就停」会一路 break、一个都标不到
+          // （peOff=0）。压在面板按钮上面的那层，本身就是面板 DOM 里的一份东西。
+          // 所以改成按「这一点本该由谁接住」来判：从最上层往下走，遇到的第一个**面板内的
+          // 可交互元素**（button/a/[role]/[tabindex]）或面板根，才是目标；它上面的都是遮挡。
+          // 另有两条保险：页面根不碰；**目标控件的祖先也不碰**（关掉祖先等于把它一起关掉）。
+          var INTERACTIVE_TAGS = { A: 1, BUTTON: 1, INPUT: 1, SELECT: 1, TEXTAREA: 1, LABEL: 1 };
+          var isInteractive = function (e) {
+            if (INTERACTIVE_TAGS[e.tagName]) return true;
+            var role = e.getAttribute ? e.getAttribute("role") : null;
+            if (role === "button" || role === "tab" || role === "link" || role === "menuitem") return true;
+            return !!(e.hasAttribute && e.hasAttribute("tabindex"));
+          };
+          var ys = [top + 44, top + 55, top + 66];
+          var xs = [0.08, 0.35, 0.6, 0.92];
+          var found = [];
+          for (var i = 0; i < ys.length; i++) {
+            for (var k = 0; k < xs.length; k++) {
+              var x = Math.round(window.innerWidth * xs[k]);
+              var y = Math.round(ys[i]);
+              var els = document.elementsFromPoint ? document.elementsFromPoint(x, y) : [];
+              // 目标 = 最上层那个「面板内的可交互元素」（或面板根）
+              var stop = els.length;
+              for (var t = 0; t < els.length; t++) {
+                if (panel.contains(els[t]) && (isInteractive(els[t]) || els[t] === panel)) { stop = t; break; }
+              }
+              for (var j = 0; j < stop; j++) {
+                var e = els[j];
+                if (e === document.documentElement || e === document.body) break;
+                var wrapsTarget = false;
+                for (var m = stop; m < els.length; m++) {
+                  if (e.contains && e.contains(els[m])) { wrapsTarget = true; break; }
+                }
+                if (wrapsTarget) continue;
+                var tag = e.tagName.toLowerCase() + "." + String(e.className || "").slice(0, 24);
+                if (found.indexOf(tag) < 0) found.push(tag);
+                if (marked.indexOf(e) < 0) {
+                  e.style.setProperty("pointer-events", "none", "important");
+                  marked.push(e);
                 }
               }
             }
-            window.__dshHandheldPeOff = marked.length;
+          }
+          window.__dshHandheldPeOff = marked.length;
             var key = found.join("|");
             if (key !== last) {
               last = key;
@@ -1916,6 +1938,16 @@ window.__ModuleLoader__.load({
                 left: Math.round(pb.left), w: Math.round(pb.width), iw: window.innerWidth,
                 open: pb.width >= window.innerWidth - 1 && pb.left <= 1
               };
+            })(),
+            // 命中栈里每一层「是不是在面板 DOM 内」的位图（第 0 位 = 最上层）。
+            // 用来验证「压着按钮的那层其实也在面板里」这个判断。
+            panelOwns: (function () {
+              var p = document.querySelector("[data-sidebar-right-panel]");
+              if (p === null || !document.elementsFromPoint) return null;
+              var es = document.elementsFromPoint(Math.round(ev.clientX), Math.round(ev.clientY));
+              var bits = [];
+              for (var i = 0; i < es.length && i < 8; i++) bits.push(p.contains(es[i]) ? 1 : 0);
+              return bits.join("");
             })(),
             stack: stack
           });
