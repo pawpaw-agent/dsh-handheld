@@ -3,6 +3,12 @@
   原生客户端：不依赖 Material Components / AppCompat 库，直接用平台内置主题。
   - Theme.Material（API 21+，minSdk 26 满足）深色基底，避免冷启动白闪。
   - 全 App 黑白色调与启动图标一致；状态栏/导航栏区域由 Activity 设为透明并沉浸隐藏。
+
+  ⚠️ targetSdk 35 起 `android:statusBarColor` / `android:navigationBarColor` 已 deprecated
+  且不再生效（Android 15 的强制 edge-to-edge）。这里保留它们有两个理由：一是对 Android 14
+  及更早的设备仍然生效（minSdk 26），二是值本来就是透明、与 edge-to-edge 的默认结果相同，
+  删掉也不改变观感。真正决定「内容画到系统栏后面」的是 Activity 里的
+  `setDecorFitsSystemWindows(false)`（见 MainActivity.applyImmersive）。
 -->
 <resources>
     <style name="Theme.DshHandheld" parent="@android:style/Theme.Material.NoActionBar">
