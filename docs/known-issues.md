@@ -1161,3 +1161,39 @@ adb -s $D shell input tap 1012 1299                      # ⌨ 收键盘，再�
 > ⚠️ 取证时若**终端开着**，`ps` 里会有**两个** `libdbclient.so`：一个 `-q -N … -L 127.0.0.1:3080`
 > （隧道），一个 `-y -t`（终端会话）。`scripts/device-tunnel-verify.mjs` 的「dbclient 进程只有 1 个」
 > 会把后者也算进去而报红 —— **那不是泄漏**，退出终端即恢复 1 个。
+
+### 2026-09-22 会话行动作按钮「点谁都作用到最后一行」（插件 rev 1.0.59，已修）
+
+用户报「会话的归档/分支/修改按钮逻辑有问题」。真机复现（设备 1 / SM-S9280）：
+点**第一行**「查看 dsh hand 项目」的「重命名」，弹出来的却是**第三行**
+「光刻机光罩台1330Hz共振研究」—— 动作对了，**会话错了**。
+
+根因是 `injectRowActions`（把宿主 ⋯ 菜单里的动作摊平成行内按钮那一段）的注入循环：
+
+```js
+for (var i = 0; i < rows.length; i++) {
+  var row = rows[i];                                  // var → 函数作用域
+  btn.addEventListener("click", (function (idx) {     // 只绑了 idx
+    return function (ev) { runRowAction(row, idx); };  // row 恒等于最后一行
+  })(k));
+}
+```
+
+`row` 是 `var`、被所有行的按钮**共享**，循环结束后指向最后一行 —— 于是每一行的
+归档/分叉/重命名都会作用到列表最后那个会话。改成把 `rowEl` 与 `idx` 一起绑进闭包：
+
+```js
+})(row, k)   // 并把形参改成 (rowEl, idx)
+```
+
+真机验证（设备 1）：点第一行「重命名」→ 对话框里是 **`查看 dsh hand 项目`**（修前是第三行）；
+点第一行「归档」→ 从列表消失的正是第一行那个会话、第三行还在。
+
+> 顺带扫了全文件同类写法（循环里 `addEventListener` 捕获 `var` 循环变量），只有这一处是真问题
+> （另一处是 `report("load")`，不引用循环变量）。
+
+> ⚠️ 宿主的归档是**幂等添加、没有取消接口**（`dsh-workspace`：`if (archivedSessionIds.includes(id)) return`，
+> API 侧也是 `if (!includes) push`）。真机验证归档那一步把当前会话archived 掉了，
+> 只能改状态文件撤：`~/.dsh/storages/workspace.json` 的 `global.archivedSessionIds` 删掉该 id
+> （**注意**同一 id 在 `tables.workspaces.*.sessionIds` 里还有一份，那是工作区顺序，**不能删**），
+> 且服务端把状态缓存在内存里 —— 改动要**下次重启 harness** 才生效。
