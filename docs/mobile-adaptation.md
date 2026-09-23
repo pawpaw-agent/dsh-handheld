@@ -352,10 +352,10 @@ Goal 条、右栏、附件删除 18×18、dockkit 标签关闭 20×20）；三�
 |---|---|---|
 | `MutationObserver` | 7（其中 **5 个** `subtree: true` 挂在 `documentElement`/`body` 上） | 帧标记、侧栏变宽、轮次监视、待输入监视、抽屉开合、右栏探针、面板遮挡 |
 | `setInterval` | 真正常驻 **2** 个：面板遮挡 `sync`（1s）、右栏探针 `look`（2s） | 另 1 个是轮次心跳 **300s**（可忽略）；行尾菜单 30ms 轮询只在点按后存活 ≤600ms；抽屉观察者挂载轮询 1s 且 30s 内自清 |
-| `getBoundingClientRect` / `elementsFromPoint` | 19 处调用点 | **真正的开销在这里**：每个都会强制一次同步布局 |
+| 几何读/命中测试 | `getBoundingClientRect` **19** 次、`getClientRects` **3** 次、`elementsFromPoint` 3 次、`elementFromPoint` 2 次 | **真正的开销在这里**：每个都会强制一次同步布局 |
 | 一次性诊断 | `layout-diag` / `stats-diag` / `side-diag` / `tap-diag` / `right-probe` / `ui recovery` | 全是加载后固定延时的 `setTimeout` 或点按驱动，**不周期跑**（这一点原先没有确认过，是这次核的） |
 
-**结论：成本不来自插件体积（2126 行、19 段 CSS），而来自「在脏树上读几何」。** 读 `getBoundingClientRect()`
+**结论：成本不来自插件体积（2170 行、17 段 CSS），而来自「在脏树上读几何」。** 读 `getBoundingClientRect()`
 时若 DOM 刚被改过，浏览器必须先做一次布局（forced synchronous layout）；真机上这个页面在流式输出期间
 DOM 几乎永远是脏的，于是**回调里每一次几何读都是一次 4~11ms 的布局**（插件自报的 `panel-sync` 耗时）。
 
