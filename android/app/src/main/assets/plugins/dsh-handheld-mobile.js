@@ -1822,7 +1822,9 @@ window.__ModuleLoader__.load({
             window.__dshHandheldPeOff = 0;
           };
           var last = "";
+          var slowPosted = 0;
           var sync = function () {
+            var t0 = window.performance && performance.now ? performance.now() : 0;
             var panel = document.querySelector("[data-sidebar-right-panel]");
             var open = false;
             var top = 0;
@@ -1892,6 +1894,16 @@ window.__ModuleLoader__.load({
             }
           }
           window.__dshHandheldPeOff = marked.length;
+          // 自证开销（用户问过「现在 web 性能会不会有问题」）：这条 effect 每 200ms 最多算一次，
+          // 面板关着时只做一次查询 + 一次 rect；只有真算久了才上报，免得刷屏。
+          if (t0) {
+            var ms = performance.now() - t0;
+            var nowMs = Date.now();
+            if (ms >= 4 && nowMs - slowPosted > 10000) {
+              slowPosted = nowMs;
+              postToApp({ type: "perf", what: "panel-sync", ms: Math.round(ms * 10) / 10, n: found.length });
+            }
+          }
             var key = found.join("|");
             if (key !== last) {
               last = key;
@@ -1969,11 +1981,17 @@ window.__ModuleLoader__.load({
       // 不再需要滚文档（滚文档会把 sticky 表头一起带走）。
       ctx.effect(function () {
         var root = document.documentElement;
+        var lastH = 0;
         var apply = function () {
           var vv = window.visualViewport;
           var h = vv && vv.height ? vv.height : window.innerHeight;
           if (!h) return;
-          root.style.setProperty("--dsh-handheld-vh", Math.round(h) + "px");
+          h = Math.round(h);
+          // 只在高度真的变了才写：visualViewport.scroll 触发很密，而写 CSS 变量会让样式树
+          // 失效 —— 这是本轮新增代码里唯一一处会随滚动反复付钱的地方。
+          if (h === lastH) return;
+          lastH = h;
+          root.style.setProperty("--dsh-handheld-vh", h + "px");
         };
         apply();
         if (window.visualViewport) {

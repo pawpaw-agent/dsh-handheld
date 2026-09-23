@@ -189,6 +189,10 @@ class DshApp : Application() {
                 // 右侧栏展开时顶部条带的命中探针（谁在那个区域吃掉了点击）。
                 DiagLog.i(TAG, "右侧栏探针：${json}")
             }
+            "perf" -> {
+                // 插件自报的耗时（只在超过阈值时发）——回答「新增的适配代码有没有拖慢页面」。
+                DiagLog.i(TAG, "页面耗时：${json}")
+            }
             "panel-blockers" -> {
                 // 右侧栏展开时，压在它工具栏之上的元素（被我们临时关掉命中的那些）。
                 DiagLog.i(TAG, "面板遮挡：${json}")
