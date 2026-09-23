@@ -41,7 +41,9 @@ jobs:
         run: |
           node --check android/app/src/main/assets/plugins/dsh-handheld-mobile.js
           node --check android/app/src/main/assets/plugins/mobile-bootstrap.js
-          echo "✓ 两个注入 bundle 语法通过"
+          # 验证脚本本身也过一遍：它们要 adb 才能真跑（CI 里跑不了），但语法错是能一秒拦住的。
+          for f in scripts/*.mjs; do node --check "$f"; done
+          echo "✓ 注入 bundle 与 scripts/*.mjs 语法通过"
 
       - name: Verify plugin ⇄ contract agreement
         run: node scripts/check-mobile-hooks.mjs --contract
