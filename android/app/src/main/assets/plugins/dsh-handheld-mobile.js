@@ -1854,17 +1854,43 @@ window.__ModuleLoader__.load({
           var slowPosted = 0;
           var lastScan = 0;
           var wasOpen = false;
+          var panelEl = null;
+          var getPanel = function () {
+            // 面板元素在一段会话里是稳定的：缓存它，省掉每次 sync 的一次全树属性选择器遍历。
+            if (panelEl !== null && panelEl.isConnected) return panelEl;
+            panelEl = document.querySelector("[data-sidebar-right-panel]");
+            return panelEl;
+          };
+          var closed = function () {
+            wasOpen = false;
+            if (marked.length > 0 || last !== "") {
+              restoreAll();
+              last = "";
+              postToApp({ type: "panel-blockers", open: false, n: 0 });
+            }
+          };
           var sync = function () {
             var t0 = window.performance && performance.now ? performance.now() : 0;
-            var panel = document.querySelector("[data-sidebar-right-panel]");
-            var open = false;
-            var top = 0;
-            if (panel !== null) {
-              var b = panel.getBoundingClientRect();
-              // 「展开」= 面板铺满视口（宿主是滑入的，落定后才成立；收起时 left=宽度）
-              open = b.width >= window.innerWidth - 1 && b.left <= 1;
-              top = b.top;
+            var panel = getPanel();
+            // ⚠️ 便宜的门必须排在读几何**之前**（rev 1.0.67）。宿主把 dock 的 expanded 状态
+            // 直接写在面板根上（client-ui-sidebar-right：`"data-sidebar-right-open": expanded || void 0`，
+            // 与 `aria-hidden` 互反），所以「没展开」**一个布局都不用读**就能判掉。
+            // 改之前是反过来的：先 `panel.getBoundingClientRect()` 再判 2 秒节流 —— 于是每次被叫醒
+            // 都强制刷一次布局，只换来一句「2 秒内扫过了」。而叫醒源是 setInterval(1s) 加上流式
+            // 期间 body 的 class/style 抖动（200ms 防抖）：闲置 1 次/秒、流式 ~5 次/秒的强制布局，
+            // 面板还关着的时候就全发生在空处。
+            // 附带修掉一个语义错：`visibility:hidden` 的元素**仍然有盒**，所以面板收起时若
+            // `data-sidebar-right-panel=fullscreen`，旧判据会把它当成「展开」，对着一个用户看不见的
+            // 面板扫遮挡。
+            if (panel === null || !panel.hasAttribute("data-sidebar-right-open")) {
+              closed();
+              return;
             }
+            var b = panel.getBoundingClientRect();
+            // 「展开」= 面板铺满视口。属性只说**该**展开，滑入动画那 ~300ms 几何还没落定 ——
+            // 此刻采样点会打偏到面板外，命中后面的无关元素，所以「落定」仍旧只认几何。
+            var open = b.width >= window.innerWidth - 1 && b.left <= 1;
+            var top = b.top;
             // ⚠️ 采样那 12 个点要调 elementsFromPoint，而它每次都**强制一次布局**（页面在持续
             // 变动时实测 4~11ms）。原先每个 sync 都扫（最多 5 次/秒）→ 面板开着时等于每 10 秒
             // 就往日志里写一条 ≥4ms。改成：**最多 2 秒扫一次**，面板刚打开/刚收起时强制扫一次
@@ -1872,18 +1898,14 @@ window.__ModuleLoader__.load({
             var nowTs = Date.now();
             var justToggled = open !== wasOpen;
             wasOpen = open;
-            if (open && !justToggled && nowTs - lastScan < 2000) {
-              return;
-            }
-            if (open) lastScan = nowTs;
             if (!open) {
-              if (marked.length > 0 || last !== "") {
-                restoreAll();
-                last = "";
-                postToApp({ type: "panel-blockers", open: false, n: 0 });
-              }
+              closed();
               return;
             }
+            if (!justToggled && nowTs - lastScan < 2000) {
+              return;
+            }
+            lastScan = nowTs;
             // 面板工具栏那条带子（实测 CSS y40–68）：取 3×4 个点问「谁在最上面」。
           //
           // ⚠️ 判据不能用「面板之外的才算遮挡」—— 真机读数（rev 1.0.58）显示每个取样点上
