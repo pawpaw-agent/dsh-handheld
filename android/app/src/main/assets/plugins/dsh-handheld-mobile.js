@@ -1823,6 +1823,8 @@ window.__ModuleLoader__.load({
           };
           var last = "";
           var slowPosted = 0;
+          var lastScan = 0;
+          var wasOpen = false;
           var sync = function () {
             var t0 = window.performance && performance.now ? performance.now() : 0;
             var panel = document.querySelector("[data-sidebar-right-panel]");
@@ -1834,6 +1836,17 @@ window.__ModuleLoader__.load({
               open = b.width >= window.innerWidth - 1 && b.left <= 1;
               top = b.top;
             }
+            // ⚠️ 采样那 12 个点要调 elementsFromPoint，而它每次都**强制一次布局**（页面在持续
+            // 变动时实测 4~11ms）。原先每个 sync 都扫（最多 5 次/秒）→ 面板开着时等于每 10 秒
+            // 就往日志里写一条 ≥4ms。改成：**最多 2 秒扫一次**，面板刚打开/刚收起时强制扫一次
+            // （遮挡是宿主 DOM 的一部分，被重渲染掉时最多 2 秒后自愈）。
+            var nowTs = Date.now();
+            var justToggled = open !== wasOpen;
+            wasOpen = open;
+            if (open && !justToggled && nowTs - lastScan < 2000) {
+              return;
+            }
+            if (open) lastScan = nowTs;
             if (!open) {
               if (marked.length > 0 || last !== "") {
                 restoreAll();
