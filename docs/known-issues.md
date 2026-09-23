@@ -1255,3 +1255,31 @@ CSS：html[data-dsh-cover], html[data-dsh-cover] body { height: var(--dsh-handhe
 
 键盘弹起 → 页面按**可见高度**重排 → composer 自然落在底部 ✓、消息列表自己滚 ✓、
 表头 sticky 在容器内钉住 ✓，三者不再互相打架。
+
+### 2026-09-23 左右侧边栏不再退避状态栏（插件 rev 1.0.63，已修）
+
+用户要求：「左右侧边栏有状态栏退避，要修改成会话页面一样全屏显示」。
+
+三处 `env(safe-area-inset-top)` 都在**插件自己的 CSS** 里，其中两处正是两个侧边栏：
+
+| 位置 | 选择器 | 改前 | 改后 |
+|---|---|---|---|
+| 左抽屉 | `[data-handheld="frame"] > [class*="_sidebarCol"]` | `padding-top: env(safe-area-inset-top)` | `padding-top: 12px` |
+| 右面板 | `[data-sidebar-right-panel="fullscreen"]` | 同上 | `padding-top: 12px` |
+
+会话页那条早被压到 12px（`[class*="_frame"]:has([data-phase]) { padding-top: 12px }`），
+所以侧栏比它多退了 `safe-area − 12px` 那一截。底部**照旧保留** `env(safe-area-inset-bottom)`
+（手势条不该被内容压住）。
+
+⚠️ 右面板那条安全区有历史包袱：它原本是为修「面板头落在系统吃触摸的带子（约 0~32 CSS px）
+里、最顶部点不动」才加上的（见第 8 节）。这次改成 12px 后必须复验 —— 真机结果（设备 1 /
+SM-S9280，safe-area 35px）：
+
+| 测量项 | 改前 | 改后 | 复验 |
+|---|---|---|---|
+| 左抽屉 `收起侧边栏` | y210（CSS 56）| **y123（CSS 33）** | 点一下抽屉正常收起 ✓ |
+| 右面板 `收起右侧边栏` | y210（CSS 56）| **y78（CSS 21）** | 点一下命中 `button.P3OORG_iconButton`、面板正常收起 ✓ |
+
+即：面板头虽然升到了 CSS 21–51（按钮中心约 y36，离那条 0~32 的带子很近），
+**仍然点得到** —— 那条带子的边界比注释里记的更靠上，而且第 7 节那套「让开遮挡」的逻辑
+（`peOff=4`）也在同一时刻生效。若日后换机型出现点不动，把这两处的 12px 调到约 20px 即可。
