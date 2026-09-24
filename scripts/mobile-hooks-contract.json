@@ -6,6 +6,7 @@
   },
   "dshHooks": [
     "data-approval-key",
+    "data-composer-seat",
     "data-composer-stats",
     "data-phase",
     "data-plan-review-key",

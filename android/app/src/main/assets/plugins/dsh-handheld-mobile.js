@@ -703,6 +703,27 @@ window.__ModuleLoader__.load({
     }
   }
 
+  /* ---------- 10b. 输入框吃满左右空间（2026-09-24，用户「输入框没有利用左右空间」）-----
+     真机实测（设备 2 / 1080x2400 / 360 CSS 宽）：输入卡片左右边界 CSS 28.0..331.7（宽 303.7），
+     而正文文字的 ink 是 24..335.7 —— 卡片比正文还窄 4px，两侧各空 28px。
+
+     那 28px 是两层叠出来的，不是宿主一家的：
+         12px = 我们第 11 节给滚动体（[class*="_scroll"]）的左右内边距
+         16px = 宿主 .uV2eYG_root 的 padding:0 var(--dsh-composer-side-clearance) 8px
+                （--dsh-composer-side-clearance 默认 16px，定义在 .wSkVaW_root 上）
+
+     顺带排掉一个看似可能的元凶：--dsh-composer-card-max-width = clamp(680px,…,920px) + 32px，
+     在 360 宽的屏上**根本不生效**，所以卡住宽度的就是上面这两层内边距。
+
+     改法：把变量挂在 data-composer-seat 上（宿主自己写的稳定属性，不是哈希类名）——
+     它只覆盖输入框那一棵子树，正文的 12px、各种卡片自己的 calc 都不受影响。
+     归零后卡片落在 12..348：与正文**容器**同宽，卡片内的占位文字起点 24 = 正文 ink 起点 24 ✓。 */
+  @media (max-width: 560px) {
+    [data-composer-seat] {
+      --dsh-composer-side-clearance: 0px !important;
+    }
+  }
+
   /* ---------- 11. 两侧与顶部：把宿主的留白还给内容（2026-09-19） ----------
      宿主在手机上白留得很明显（两条规则都是从安装产物里抽出来核对的）：
 
@@ -765,6 +786,13 @@ window.__ModuleLoader__.load({
     }
     [data-handheld="frame"] [data-phase] header:has([class*="_titleRow"]) [class*="_tabs"] {
       margin-top: 4px !important;    /* 10 → 4 */
+      /* 2026-09-24 用户：「轨迹无法点击，可以完全隐藏对话和轨迹按钮节约空间」——
+         整条隐藏，省下一行（页签 25px + 上边距 4px ≈ 29px 竖向空间）。
+         ⚠️ 这不是在修 bug：真机复验（设备 2 / Android 13 / rev 1.0.72）里「轨迹」是**能点**的
+         —— 点下去整屏 62.75% 的像素变化、视图切到轨迹，无障碍树里它也是 clickable=true。
+         所以这是按用户要求省空间；想恢复：删掉 display 这一行即可。
+         隐藏后「轨迹」视图在本 App 里就没有入口了（宿主只在会话头提供这一个切换口）。 */
+      display: none !important;
     }
     /* 键盘弹出时把这条会话头钉在顶部（用户 2026-09-22：「会话页面键盘弹出时上面标题看不见」）。
        真机取证（设备2 / SM-G7810，2026-09-22）：键盘一弹，整页上滚 1026px —— 正好是键盘高度
