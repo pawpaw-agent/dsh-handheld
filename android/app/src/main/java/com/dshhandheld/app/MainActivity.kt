@@ -132,6 +132,27 @@ class MainActivity : Activity() {
     // （runCatching 把设置失败吞了），所以那次实验不算数。这次切完回读，并把保持时间拉到 120s。
     private val audioModeRestore = Runnable { setCommAudioMode(false) }
 
+    /**
+     * 开机自动 A/B 探测（2026-09-25）：不再依赖「点中那颗按钮」——设备 2 上它是灰的，
+     * 手点根本触发不到。两次探测拉开 8 秒：
+     *   ① baseline  —— 不切模式，预期 NotReadableError（对照）
+     *   ② comm-mode —— 切 MODE_IN_COMMUNICATION 后再来一次
+     * 两次的 DOMException 逐字进日志，音频模式那条假设当场就有答案。
+     */
+    private var micProbeDone = false
+
+    private fun micProbe() {
+        if (micProbeDone) return
+        micProbeDone = true
+        DiagLog.i(TAG, "麦克风探测：开始（baseline → comm-mode）")
+        micSelfTest("baseline")
+        ui.postDelayed({
+            setCommAudioMode(true)
+            micSelfTest("comm-mode")
+        }, 8000)
+        ui.postDelayed({ setCommAudioMode(false) }, 30_000)
+    }
+
     private fun setCommAudioMode(on: Boolean) {
         val am = getSystemService(Context.AUDIO_SERVICE) as? android.media.AudioManager ?: return
         val want = if (on) android.media.AudioManager.MODE_IN_COMMUNICATION
@@ -158,7 +179,7 @@ class MainActivity : Activity() {
     //
     // 音频模式的尝试已撤掉：无效，且通信模式是全设备的（会把媒体声音改走听筒）。
 
-    private fun micSelfTest() {
+    private fun micSelfTest(tag: String) {
         val wv = webView ?: return
         val js = "(function(){window.__micTest='pending';" +
             "if(!navigator.mediaDevices||!navigator.mediaDevices.getUserMedia){window.__micTest='no-api';return;}" +
@@ -170,7 +191,7 @@ class MainActivity : Activity() {
         ui.postDelayed({
             runCatching {
                 wv.evaluateJavascript("window.__micTest") { r ->
-                    DiagLog.i(TAG, "麦克风自测：$r")
+                    DiagLog.i(TAG, "麦克风自测[$tag]：$r")
                 }
             }
         }, 3000)
@@ -524,6 +545,7 @@ class MainActivity : Activity() {
                     if (u?.startsWith("http") == true && !u.contains("?token=")) {
                         sshTokenAck = true
                         DiagLog.i(TAG, "onPageFinished: 正式页面加载完成 → ack=true url=$u")
+                        ui.postDelayed({ micProbe() }, 4000)
                         guideLine(3, "③ 打开 dsh 网页 ✓ 已打开", state = false)
                     } else if (u != null) {
                         // about:blank / 带 token 的中间页：刻意不置 ack（1.5.2 的 401 回归源于此）
@@ -596,7 +618,7 @@ class MainActivity : Activity() {
                         ui.removeCallbacks(audioModeRestore)
                         ui.postDelayed(audioModeRestore, 120_000)
                         request.grant(arrayOf(android.webkit.PermissionRequest.RESOURCE_AUDIO_CAPTURE))
-                        micSelfTest()
+                        micSelfTest("on-grant")
                         return
                     }
                     // 没授过就先问用户；请求挂在这里等结果（上一次没回话的先作废，
