@@ -123,6 +123,50 @@ class MainActivity : Activity() {
     private var pendingAuth: HttpAuthHandler? = null
     /** 页面那次麦克风请求：等系统权限结果回来再 grant/deny（见 onPermissionRequest）。 */
     private var pendingMicRequest: android.webkit.PermissionRequest? = null
+
+    // ── 语音输入：音频模式与录音监视（2026-09-25）─────────────────────────────
+    /**
+     * WebView 的 `getUserMedia` 会走回声消除，而回声消除要系统处于**通信模式**：
+     * 不切模式时 Chromium 直接报
+     *   `audio_manager_android.cc:883 Unable to select communication device!`
+     * 然后整个请求以 `NotReadableError: Could not start audio source` 失败 ——
+     * 真机上就是「语音识别失败：Could not st…」那条提示。
+     *
+     * 但通信模式是**全设备**的（会把媒体声音改走听筒），所以不能开了不管：
+     * 用 [AudioRecordingCallback] 盯着本包的录音配置，一旦没有我们的录音就切回 NORMAL；
+     * 另加 60 秒安全网（回调在某些机型上不一定来）。
+     */
+    private val audioModeRestore = Runnable { setCommAudioMode(false) }
+    private var recordingCallback: android.media.AudioManager.AudioRecordingCallback? = null
+
+    private fun setCommAudioMode(on: Boolean) {
+        val am = getSystemService(Context.AUDIO_SERVICE) as? android.media.AudioManager ?: return
+        val want = if (on) android.media.AudioManager.MODE_IN_COMMUNICATION
+                   else android.media.AudioManager.MODE_NORMAL
+        if (am.mode == want) return
+        DiagLog.i(TAG, "音频模式：${am.mode} → $want（语音输入需要通信模式）")
+        runCatching { am.mode = want }
+    }
+
+    private fun watchRecordingStop() {
+        if (recordingCallback != null) return
+        if (android.os.Build.VERSION.SDK_INT < android.os.Build.VERSION_CODES.Q) return
+        val am = getSystemService(Context.AUDIO_SERVICE) as? android.media.AudioManager ?: return
+        val cb = object : android.media.AudioManager.AudioRecordingCallback() {
+            override fun onRecordingConfigChanged(
+                configs: MutableList<android.media.AudioRecordingConfiguration>?
+            ) {
+                val ours = configs?.any { it.clientPackageName == packageName } == true
+                if (!ours) {
+                    DiagLog.i(TAG, "语音输入：本包录音已结束 → 音频模式切回 NORMAL")
+                    ui.removeCallbacks(audioModeRestore)
+                    setCommAudioMode(false)
+                }
+            }
+        }
+        recordingCallback = cb
+        runCatching { am.registerAudioRecordingCallback(cb, ui) }
+    }
     private var statusView: TextView? = null
     private var sshKeyPathInput: EditText? = null
 
@@ -539,6 +583,10 @@ class MainActivity : Activity() {
                         android.content.pm.PackageManager.PERMISSION_GRANTED
                     ) {
                         DiagLog.i(TAG, "页面权限请求：放行麦克风（origin=$origin）")
+                        setCommAudioMode(true)
+                        ui.removeCallbacks(audioModeRestore)
+                        ui.postDelayed(audioModeRestore, 60_000)
+                        watchRecordingStop()
                         request.grant(arrayOf(android.webkit.PermissionRequest.RESOURCE_AUDIO_CAPTURE))
                         return
                     }
@@ -548,6 +596,21 @@ class MainActivity : Activity() {
                     pendingMicRequest?.deny()
                     pendingMicRequest = request
                     requestPermissions(arrayOf(android.Manifest.permission.RECORD_AUDIO), REQ_MIC)
+                }
+
+                /**
+                 * 页面的 console 输出进日志 —— 语音输入这类问题第一现场就在页面侧
+                 * （dsh 把 DOMException 的名字/文案打在 console 里），不接出来只能靠猜。
+                 */
+                override fun onConsoleMessage(msg: android.webkit.ConsoleMessage?): Boolean {
+                    msg ?: return false
+                    // 只记 warning/error：dsh 页面平时的 console 输出很密，全记会把真正
+                    // 有用的那几条淹掉（语音输入这次的失败现场就是一条 console error）。
+                    if (msg.messageLevel() >= android.webkit.ConsoleMessage.MessageLevel.WARNING) {
+                        DiagLog.i(TAG, "页面 console[${msg.messageLevel()}] ${msg.message()} " +
+                            "@${msg.sourceId()}:${msg.lineNumber()}")
+                    }
+                    return true
                 }
 
                 override fun onProgressChanged(view: WebView?, newProgress: Int) {
