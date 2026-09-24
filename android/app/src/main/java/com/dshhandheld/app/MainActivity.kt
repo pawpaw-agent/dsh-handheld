@@ -132,12 +132,16 @@ class MainActivity : Activity() {
      * 然后整个请求以 `NotReadableError: Could not start audio source` 失败 ——
      * 真机上就是「语音识别失败：Could not st…」那条提示。
      *
-     * 但通信模式是**全设备**的（会把媒体声音改走听筒），所以不能开了不管：
-     * 用 [AudioRecordingCallback] 盯着本包的录音配置，一旦没有我们的录音就切回 NORMAL；
-     * 另加 60 秒安全网（回调在某些机型上不一定来）。
+     * 但通信模式是**全设备**的（会把媒体声音改走听筒），所以不能开了不管。恢复策略刻意
+     * 简单：**每次放行都切一次**（日志证明每次 getUserMedia 都会重新走 onPermissionRequest）
+     * + 15 秒后自动恢复 + App 退到后台时恢复。
+     *
+     * 原打算用 AudioRecordingCallback 精确判断「我们的录音停了」，但
+     * `AudioRecordingConfiguration` 没有 `getClientPackageName()`（只有 clientAudioSource/
+     * clientAudioSessionId/format/device）—— 认不出哪条配置是本包的，只好作罢。
      */
     private val audioModeRestore = Runnable { setCommAudioMode(false) }
-    private var recordingCallback: android.media.AudioManager.AudioRecordingCallback? = null
+    private val AUDIO_MODE_HOLD_MS = 15_000L
 
     private fun setCommAudioMode(on: Boolean) {
         val am = getSystemService(Context.AUDIO_SERVICE) as? android.media.AudioManager ?: return
@@ -146,26 +150,6 @@ class MainActivity : Activity() {
         if (am.mode == want) return
         DiagLog.i(TAG, "音频模式：${am.mode} → $want（语音输入需要通信模式）")
         runCatching { am.mode = want }
-    }
-
-    private fun watchRecordingStop() {
-        if (recordingCallback != null) return
-        if (android.os.Build.VERSION.SDK_INT < android.os.Build.VERSION_CODES.Q) return
-        val am = getSystemService(Context.AUDIO_SERVICE) as? android.media.AudioManager ?: return
-        val cb = object : android.media.AudioManager.AudioRecordingCallback() {
-            override fun onRecordingConfigChanged(
-                configs: MutableList<android.media.AudioRecordingConfiguration>?
-            ) {
-                val ours = configs?.any { it.clientPackageName == packageName } == true
-                if (!ours) {
-                    DiagLog.i(TAG, "语音输入：本包录音已结束 → 音频模式切回 NORMAL")
-                    ui.removeCallbacks(audioModeRestore)
-                    setCommAudioMode(false)
-                }
-            }
-        }
-        recordingCallback = cb
-        runCatching { am.registerAudioRecordingCallback(cb, ui) }
     }
     private var statusView: TextView? = null
     private var sshKeyPathInput: EditText? = null
@@ -585,8 +569,7 @@ class MainActivity : Activity() {
                         DiagLog.i(TAG, "页面权限请求：放行麦克风（origin=$origin）")
                         setCommAudioMode(true)
                         ui.removeCallbacks(audioModeRestore)
-                        ui.postDelayed(audioModeRestore, 60_000)
-                        watchRecordingStop()
+                        ui.postDelayed(audioModeRestore, AUDIO_MODE_HOLD_MS)
                         request.grant(arrayOf(android.webkit.PermissionRequest.RESOURCE_AUDIO_CAPTURE))
                         return
                     }
@@ -2351,6 +2334,9 @@ class MainActivity : Activity() {
         val busy = (application as? DshApp)?.pageBusy == true
         if (busy) DiagLog.i(TAG, "onPause: 页面正在生成，保留定时器（任务完成通知依赖它）")
         else webView?.pauseTimers()
+        // 退到后台就别占着通信模式（它会把全设备的媒体声音改走听筒）。
+        ui.removeCallbacks(audioModeRestore)
+        setCommAudioMode(false)
     }
 
     @Deprecated("Deprecated in Java")
