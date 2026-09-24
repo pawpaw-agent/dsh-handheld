@@ -6,6 +6,7 @@
   },
   "dshHooks": [
     "data-approval-key",
+    "data-composer-card",
     "data-composer-seat",
     "data-composer-stats",
     "data-phase",
@@ -24,6 +25,7 @@
     "_arrows",
     "_button_",
     "_chevron",
+    "_composerSeat",
     "_content",
     "_count",
     "_crumbs",
