@@ -2,6 +2,10 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
     <uses-permission android:name="android.permission.INTERNET" />
+    <!-- dsh 的语音输入走 getUserMedia + MediaRecorder（不是 WebView 不支持的 Web Speech API），
+         所以只要放行就能用。WebView 的权限请求还必须由 onPermissionRequest 显式 grant ——
+         不实现它，WebView 默认一律拒绝，那颗麦克风按钮就是死的。 -->
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
     <!-- 隧道保活：没有前台服务时 App 是 cached 进程，会被冻结（连 dbclient 子进程一起）
          并在内存压力下被优先杀掉。见 TunnelService 的类注释。 -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />

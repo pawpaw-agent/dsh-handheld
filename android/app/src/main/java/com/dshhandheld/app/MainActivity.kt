@@ -121,6 +121,8 @@ class MainActivity : Activity() {
     private var imeVisible = false
 
     private var pendingAuth: HttpAuthHandler? = null
+    /** 页面那次麦克风请求：等系统权限结果回来再 grant/deny（见 onPermissionRequest）。 */
+    private var pendingMicRequest: android.webkit.PermissionRequest? = null
     private var statusView: TextView? = null
     private var sshKeyPathInput: EditText? = null
 
@@ -360,6 +362,15 @@ class MainActivity : Activity() {
         const val REQ_NOTIF = 2003
         /** WebView 内 <input type=file> 的文件选择请求（与私钥导入分开）。 */
         const val REQ_WEB_FILE = 2002
+        /** 页面的麦克风请求：先申请系统 RECORD_AUDIO，拿到结果再放行那个 WebView 请求。 */
+        const val REQ_MIC = 2004
+
+        /** 隧道的两个回环 origin（与 [SshTunnel.PORT_CANDIDATES] 同源，别各写一份）。 */
+        fun tunnelOrigins(): Set<String> =
+            SshTunnel.PORT_CANDIDATES.map { "http://127.0.0.1:$it" }.toSet()
+
+        /** 这个 origin 是不是我们自己的隧道页面 —— 页面权限只放行它（见 onPermissionRequest）。 */
+        fun isTunnelOrigin(origin: String): Boolean = origin in tunnelOrigins()
 
         // ── 网页模态与系统 BACK（见 dismissWebModalThenFallback）────────────
         /** 页面里有没有活着的模态对话框（设置页就是其中之一，没有 URL 语义可退）。 */
@@ -491,6 +502,43 @@ class MainActivity : Activity() {
                 }
             }
             webChromeClient = object : WebChromeClient() {
+                /**
+                 * 页面的权限请求 —— 语音输入就卡在这一步。
+                 *
+                 * WebView 默认**拒绝**一切：不实现这个方法，dsh 那颗麦克风按钮点下去只会
+                 * 静默失败（getUserMedia 抛 NotAllowedError）。dsh 的语音输入用的是
+                 * `getUserMedia` + `MediaRecorder`（不是 WebView 不支持的 Web Speech API），
+                 * 页面又在 127.0.0.1 这个安全上下文里，所以只要这里放行就能用。
+                 *
+                 * 只放行**隧道 origin 的音频采集**，其余一律拒绝 —— 这个 WebView 平时只装
+                 * 我们自己的 dsh 页面，但它也可能导航到别处。
+                 */
+                override fun onPermissionRequest(request: android.webkit.PermissionRequest?) {
+                    request ?: return
+                    val origin = request.origin?.toString().orEmpty()
+                    val wantsMic = request.resources
+                        ?.contains(android.webkit.PermissionRequest.RESOURCE_AUDIO_CAPTURE) == true
+                    if (!wantsMic || !isTunnelOrigin(origin)) {
+                        DiagLog.i(TAG, "页面权限请求：拒绝（origin=$origin，" +
+                            "resources=${request.resources?.joinToString() ?: "-"}）")
+                        request.deny()
+                        return
+                    }
+                    if (checkSelfPermission(android.Manifest.permission.RECORD_AUDIO) ==
+                        android.content.pm.PackageManager.PERMISSION_GRANTED
+                    ) {
+                        DiagLog.i(TAG, "页面权限请求：放行麦克风（origin=$origin）")
+                        request.grant(arrayOf(android.webkit.PermissionRequest.RESOURCE_AUDIO_CAPTURE))
+                        return
+                    }
+                    // 没授过就先问用户；请求挂在这里等结果（上一次没回话的先作废，
+                    // 否则页面那个 getUserMedia 会一直等着）。
+                    DiagLog.i(TAG, "页面权限请求：先申请 RECORD_AUDIO（origin=$origin）")
+                    pendingMicRequest?.deny()
+                    pendingMicRequest = request
+                    requestPermissions(arrayOf(android.Manifest.permission.RECORD_AUDIO), REQ_MIC)
+                }
+
                 override fun onProgressChanged(view: WebView?, newProgress: Int) {
                     if (newProgress >= 100) {
                         progressBar?.visibility = View.GONE
@@ -1354,6 +1402,21 @@ class MainActivity : Activity() {
         requestCode: Int, permissions: Array<out String>, grantResults: IntArray
     ) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        if (requestCode == REQ_MIC) {
+            val ok = grantResults.isNotEmpty() &&
+                grantResults[0] == android.content.pm.PackageManager.PERMISSION_GRANTED
+            DiagLog.i(TAG, "RECORD_AUDIO 结果：granted=$ok")
+            val req = pendingMicRequest
+            pendingMicRequest = null
+            if (req == null) return
+            if (ok) {
+                req.grant(arrayOf(android.webkit.PermissionRequest.RESOURCE_AUDIO_CAPTURE))
+            } else {
+                req.deny()
+                status("语音输入需要麦克风权限（设置 → 应用 → 权限）")
+            }
+            return
+        }
         if (requestCode != REQ_NOTIF) return
         val granted = grantResults.isNotEmpty() &&
             grantResults[0] == android.content.pm.PackageManager.PERMISSION_GRANTED
