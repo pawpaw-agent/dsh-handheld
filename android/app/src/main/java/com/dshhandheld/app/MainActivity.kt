@@ -157,14 +157,6 @@ class MainActivity : Activity() {
         }, 3000)
     }
 
-    private fun setCommAudioMode(on: Boolean) {
-        val am = getSystemService(Context.AUDIO_SERVICE) as? android.media.AudioManager ?: return
-        val want = if (on) android.media.AudioManager.MODE_IN_COMMUNICATION
-                   else android.media.AudioManager.MODE_NORMAL
-        if (am.mode == want) return
-        DiagLog.i(TAG, "音频模式：${am.mode} → $want（语音输入需要通信模式）")
-        runCatching { am.mode = want }
-    }
     private var statusView: TextView? = null
     private var sshKeyPathInput: EditText? = null
 
