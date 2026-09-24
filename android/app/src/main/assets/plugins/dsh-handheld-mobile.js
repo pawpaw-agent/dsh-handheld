@@ -2484,16 +2484,21 @@ window.__ModuleLoader__.load({
             for (var i = 0; i < all.length; i++) {
               if (all[i].dataset && all[i].dataset.handheldCss) { alive = all[i]; break; }
             }
-            if (alive !== null) { __healTag = alive; return; }
-            // 表没了就自己造一张 —— 样式文本由**这里**持有，不依赖那个已经随 fiber 一起
-            // 被拆掉的 effect（第一版就栽在这：钩子定义在 effect 之后，看门狗手里是空的）。
-            if (__healTag === null || !__healTag.isConnected) {
-              __healTag = document.createElement("style");
-              __healTag.dataset.handheldCss = "dsh-handheld-mobile/mobile.css";
-              __healTag.textContent = CSS;
+            // ⚠️ 这里**不能提前 return**：表活着只是三件事之一，补标与补目录按钮还在后面。
+            // 第一版就是在这句上栽的 —— 表一活，后面两段永远不执行（toggles 恒为 0）。
+            if (alive !== null) {
+              __healTag = alive;
+            } else {
+              // 表没了就自己造一张 —— 样式文本由**这里**持有，不依赖那个已经随 fiber
+              // 一起被拆掉的 effect（第一版还栽在这：钩子定义在 effect 之后，手里是空的）。
+              if (__healTag === null || !__healTag.isConnected) {
+                __healTag = document.createElement("style");
+                __healTag.dataset.handheldCss = "dsh-handheld-mobile/mobile.css";
+                __healTag.textContent = CSS;
+              }
+              document.head.appendChild(__healTag);
+              window.__dshHandheldHeals = (window.__dshHandheldHeals || 0) + 1;
             }
-            document.head.appendChild(__healTag);
-            window.__dshHandheldHeals = (window.__dshHandheldHeals || 0) + 1;
           } catch (e) { /* 自愈失败不该影响页面 */ }
           // 目录入口：插件那颗按钮是注册进宿主槽里的（随 fiber 一起没了），而宿主在
           // 「侧栏还有窄条」的状态下**不挂载**它自己的 HeaderLeadingControls ——
