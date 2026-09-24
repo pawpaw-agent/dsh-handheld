@@ -136,9 +136,17 @@ window.__ModuleLoader__.load({
        顶部**不再退避**（2026-09-22 用户要求）：会话页那条已经把顶部压到 12px
        （见下面 [class*="_frame"]:has([data-phase]) 的 12px），侧栏却还整条让开
        env(safe-area-inset-top)（本机 35px），于是「左右侧边栏比会话页多一截留白」。
-       改成同样的 12px —— 抽屉第一行是 logo（不可点），真正可点的行（新会话/收起）
-       落在 CSS y≈33 以下，仍在系统那条吃触摸的带子（约 0~32）之外。 */
-    padding-top: 12px;
+       ⚠️ 2026-09-24 用户再报「左右侧边栏顶部空间比会话页面大」—— 上一版只把外层
+       对齐成 12px 是不够的：**「外层同值」≠「第一行内容同位置」**，里面还叠着宿主
+       自己的内边距。真机同一判据（顶部第一行可见内容的 y，设备像素 / 3.75）实测：
+
+         会话页 22.1   ← 基准
+         左抽屉 39.5   ← 多 17.4 = 我们的 12 + 宿主侧栏根的 6（padding:6px 12px）
+         右栏   34.9   ← 多 12.8 = 我们的 12（宿主 tab strip 自己还有 10px）
+
+       所以这里归零：12 → 0，宿主侧栏根那 6px 也在下面那条规则里一起让开
+       （12 + 6 = 18 ≈ 要消掉的 17.4）。 */
+    padding-top: 0;
     padding-bottom: env(safe-area-inset-bottom, 0px);
     border-right: 0 !important;
   }
@@ -176,6 +184,10 @@ window.__ModuleLoader__.load({
   [data-handheld="frame"] > [class*="_sidebarCol"] > * {
     width: 100% !important;
     max-width: none !important;
+    /* 宿主侧栏根自带 padding:6px var(--dsh-sidebar-inline-padding)；左右那 12px 要留着
+       （内容不该贴边），只让开**顶部**那 6px —— 与上一条的 12→0 合起来正好消掉实测的
+       17.4px（12 + 6 = 18）。改完抽屉第一行落在 CSS 21.5，与会话页的 22.1 齐平。 */
+    padding-top: 0 !important;
   }
   @media (max-width: 560px) {
     [data-handheld="frame"] > [class*="_sidebarCol"] [class*="_projectRow"],
@@ -604,10 +616,14 @@ window.__ModuleLoader__.load({
      补上同样的安全区；box-sizing: border-box 保证整体高度不被撑出屏幕。 */
   [data-sidebar-right-panel="fullscreen"] {
     /* 2026-09-22 用户要求：与会话页一样全屏，不再整条让开 env(safe-area-inset-top)。
-       保留 12px（= 会话页的压缩量）。⚠️ 这条曾经是为了「面板头落在系统吃触摸的带子里
-       点不动」才加到 safe-area 的 —— 改成 12px 之后面板头会升到 CSS y≈17–45，
-       必须真机复验那颗「收起」还能点到（点不到就把这里调回 ~20px）。 */
-    padding-top: 12px !important;
+       ⚠️ 2026-09-24 再收一档（12 → 0）：真机实测第一行可见内容 34.9，比会话页的 22.1
+       多 12.8，正好是我们这 12px —— 宿主 dockkit 的 tab strip 自己就带
+       padding:10px 6px 0 10px（见 index-DPX2bQLO.css 的 ._tabStrip_），我们那 12px 是
+       纯叠加。归零后第一行落在 22.9，与会话页齐平。
+       ⚠️ 这条曾经是为了「面板头落在系统吃触摸的带子里点不动」才加的 safe-area ——
+       归零后面板工具栏升到 CSS y≈22–52，与会话页头部按钮（12.8–42.9，天天在用）同一带子，
+       但仍必须真机复验那颗「收起」点得到（点不到就把 padding-top 调回 ~8px）。 */
+    padding-top: 0 !important;
     box-sizing: border-box !important;
   }
 
