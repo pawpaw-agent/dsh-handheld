@@ -1195,13 +1195,21 @@ window.__ModuleLoader__.load({
       // ── 样式表 ──────────────────────────────────────────────
       ctx.effect(function () {
         var tag = document.createElement("style");
-        tag.dataset.plugin = "dsh-handheld-mobile";
+        // ⚠️ 2026-09-25：**不能**用 data-plugin 标归属。dsh 0.1.7-rc.2 的加载器有这么一段：
+        //     function removeOwnedStyles(id) {
+        //       遍历所有 style 元素，凡 dataset.plugin === 该包 id 的就 remove()。
+        //     }
+        // 它在 reconcile/替换 entry 时按包名删样式 —— 我们的表当时挂着 plugin=插件 id，
+        // 于是被当成「宿主自己该管的样式」删掉，连同 entry fiber 一起（effect 全灭）。
+        // 换成宿主不认识的标记，这条删除路径就够不着我们。
+        tag.dataset.handheldCss = "dsh-handheld-mobile/mobile.css";
         try {
           window.__dshHandheldStyleAdds = (window.__dshHandheldStyleAdds || 0) + 1;
         } catch (e) { /* 诊断永远不该影响主流程 */ }
         tag.dataset.pluginCss = "dsh-handheld-mobile/mobile.css";
         tag.textContent = CSS;
         document.head.appendChild(tag);
+        try { if (window.__dshHandheldHealHook) window.__dshHandheldHealHook(tag); } catch (e) { /* 诊断 */ }
         // 宿主的组件样式是各自 append 上去的，有的还带 !important。再 append 一次让
         // 这张表停在 <head> 末尾，层叠顺序才是稳定的，而不是靠运气。
         window.setTimeout(function () {
@@ -2453,6 +2461,32 @@ window.__ModuleLoader__.load({
 
       // 注入链的一次性时序（见文件顶部注释）：nav = 导航起点到本文件开始执行（含取回+解析），
       // apply = 本文件开始执行到适配层装配完。这两个数决定「还值不值得为省字节去动构建链」。
+      // ── 样式自愈看门狗（2026-09-25）─────────────────────────────
+      // 新版加载器会拆掉我们 entry 的 fiber（effect 随之全灭）。effect 之外建的定时器
+      // 不受影响（已实测：apply 里的裸 setTimeout 照跑）。所以这里留一条自愈：
+      // 表被删了就补回去，并把「哪些还活着」一并报上来 —— 用来分辨
+      // 「只是样式被删」与「整个插件都被拆了」。
+      try {
+        var __healTag = null;
+        var __healKeep = function () {
+          try {
+            var alive = null;
+            var all = document.querySelectorAll("style");
+            for (var i = 0; i < all.length; i++) {
+              if (all[i].dataset && all[i].dataset.handheldCss) { alive = all[i]; break; }
+            }
+            if (alive === null && __healTag !== null && document.head) {
+              document.head.appendChild(__healTag);
+              window.__dshHandheldHeals = (window.__dshHandheldHeals || 0) + 1;
+            } else if (alive !== null) {
+              __healTag = alive;
+            }
+          } catch (e) { /* 自愈失败不该影响页面 */ }
+        };
+        window.__dshHandheldHealHook = function (tag) { __healTag = tag; };
+        window.setInterval(__healKeep, 2000);
+      } catch (e) { /* 诊断永远不该影响主流程 */ }
+
       // ── 环境诊断（一次性，2026-09-25）─────────────────────────
       // 起因：换到 dsh 0.1.7-rc.2 后，手机上整份适配 CSS **一条都没生效**（宿主桌面布局
       // 原样呈现），而 apply 是跑完的（plugin-init 出声）。适配 CSS 整块包在
@@ -2490,10 +2524,23 @@ window.__ModuleLoader__.load({
               if (all[k].dataset && all[k].dataset.pluginCss) ours++;
             }
           } catch (e) { /* 诊断永远不该影响主流程 */ }
+          var aliveCss = 0;
+          try {
+            var st = document.querySelectorAll("style");
+            for (var z = 0; z < st.length; z++) {
+              if (st[z].dataset && st[z].dataset.handheldCss) aliveCss++;
+            }
+          } catch (e) { /* 诊断 */ }
           postToApp({
             type: "perf",
             what: "env-diag",
             stage: stage,
+            heals: window.__dshHandheldHeals || 0,
+            aliveCss: aliveCss,
+            uiToggle: count('[data-handheld="toggle"]'),
+            uiFab: count('[data-handheld="fab"]'),
+            uiBackdrop: count('[data-handheld="backdrop"]'),
+            frameTagged: count('[data-handheld="frame"]'),
             applies: window.__dshHandheldApplies || 0,
             styleAdds: window.__dshHandheldStyleAdds || 0,
             styleRemoves: window.__dshHandheldStyleRemoves || 0,
