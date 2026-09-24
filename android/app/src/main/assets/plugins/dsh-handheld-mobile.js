@@ -2495,6 +2495,37 @@ window.__ModuleLoader__.load({
             document.head.appendChild(__healTag);
             window.__dshHandheldHeals = (window.__dshHandheldHeals || 0) + 1;
           } catch (e) { /* 自愈失败不该影响页面 */ }
+          // 目录入口：插件那颗按钮是注册进宿主槽里的（随 fiber 一起没了），而宿主在
+          // 「侧栏还有窄条」的状态下**不挂载**它自己的 HeaderLeadingControls ——
+          // 于是抽屉一个入口都没有（真机试点确认：头部只剩 👥 与 ⏱）。这里补一颗裸按钮，
+          // 点它就去点**宿主侧栏自己那颗 toggle**（它调的就是 layout.toggleSidebar()，
+          // 不需要 ctx）。样式复用插件已有的 [data-handheld="toggle"] 那条。
+          try {
+            if (document.querySelector('[data-handheld="toggle"]') === null) {
+              var hdr = document.querySelector('[data-handheld="frame"] [data-phase] header')
+                     || document.querySelector('[data-handheld="frame"] header');
+              if (hdr !== null) {
+                var tb = document.createElement("button");
+                tb.type = "button";
+                tb.setAttribute("data-handheld", "toggle");
+                tb.setAttribute("aria-label", "目录");
+                tb.title = "目录";
+                tb.innerHTML = '<svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">'
+                  + '<rect x="1.75" y="2.75" width="12.5" height="10.5" rx="2" stroke="currentColor" stroke-width="1.2"/>'
+                  + '<path d="M6.25 2.75v10.5" stroke="currentColor" stroke-width="1.2"/></svg>';
+                tb.addEventListener("click", function (ev) {
+                  ev.preventDefault();
+                  ev.stopPropagation();
+                  var host = document.querySelector('button[class*="_iconButton"][class*="_toggle"]')
+                          || document.querySelector('[class*="_sidebarCol"] button[class*="_toggle"]');
+                  if (host !== null) host.click();
+                }, true);
+                hdr.appendChild(tb);
+                window.__dshHandheldToggles = (window.__dshHandheldToggles || 0) + 1;
+              }
+            }
+          } catch (e) { /* 自愈失败不该影响页面 */ }
+
           // 光有样式表不够：整套移动 CSS 都挂在 html.dsh-handheld-mobile 与
           // [data-handheld="frame"] 两个标记上，而它们是 effect 打的 —— fiber 被拆后
           // 一个被 disposer 撤掉、另一个被 ShellOverlay 的 cleanup 撤掉（真机实测：
@@ -2578,6 +2609,7 @@ window.__ModuleLoader__.load({
             stage: stage,
             heals: window.__dshHandheldHeals || 0,
             reframes: window.__dshHandheldReframes || 0,
+            toggles: window.__dshHandheldToggles || 0,
             watcherOn: window.__dshHandheldWatcherOn || 0,
             turnTicks: window.__dshHandheldTurnTicks || 0,
             styleAdds2: window.__dshHandheldStyleAdds || 0,
