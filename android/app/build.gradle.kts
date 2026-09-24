@@ -66,7 +66,7 @@ android {
         // deprecated 且 no-op（见 themes.xml 与 applyImmersive 的注释）—— 但我们设的值本来
         // 就是 TRANSPARENT，而 edge-to-edge 下的默认值也是透明，结果相同。
         //
-        // 真正需要在真机上盯的是**终端模式**：TuiActivity 既不调 applyImmersive 也不消费任何
+        // 真正需要在真机上盯的是**终端模式**（已移除）：TuiActivity 既不调 applyImmersive 也不消费任何
         // inset，此前靠主题的 `windowFullscreen` 全屏。35 起 edge-to-edge 强制生效后，终端
         // 字符网格会铺到系统栏底下 —— 那是「真的看不见那几行」，不是留白问题。
         // 待办见 docs/known-issues.md「targetSdk 35 真机验证清单」。
@@ -146,9 +146,7 @@ dependencies {
     // compileSdk 37（连带 build-tools 37 与 `platforms;android-37.0`）—— 单列一步。
     implementation("androidx.core:core-ktx:1.18.0")
     implementation("androidx.webkit:webkit:1.17.0")
-    // Termux 终端组件（GPL-3.0，见项目 LICENSE）：TUI 模式的终端渲染 + 软键盘交互。
-    // JitPack 多模块坐标：group 为 termux/termux-app 仓库点分路径（否则 Gradle
-    // 会把 4 段坐标当成 group:artifact:version:module 而找不到）。
-    // terminal-view 依赖 terminal-emulator（含 NDK 原生渲染，x86/x86_64/arm 全部 ABI）。
-    implementation("com.github.termux.termux-app:terminal-view:0.118.1")
+    // 2026-09-25：原生终端（TUI 模式）已移除 —— dsh 的 web 界面自带终端面板
+    // （右栏 → 新建终端），WebView 里的 xterm + WebSocket 足够用。
+    // 随之去掉的还有 Termux terminal-view（GPL-3.0）与 vendored 的 com.termux.* 源码。
 }

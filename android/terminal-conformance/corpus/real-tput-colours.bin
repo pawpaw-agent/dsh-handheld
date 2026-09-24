@@ -1,2 +1,0 @@
-bash: -c: line 1: syntax error near unexpected token `do'
-bash: -c: line 1: `timeout 10 for i in $(seq 0 255); do tput setaf $i; printf '%3d ' $i; done; tput sgr0'

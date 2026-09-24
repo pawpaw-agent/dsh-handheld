@@ -13,7 +13,7 @@ import com.dshhandheld.diag.DiagLog
 /**
  * SSH 本地端口转发 —— dbclient 进程方案。
  *
- * 与终端模式（TuiActivity）共用同一我们 CI 编译的 dropbear dbclient：
+ * 与（已移除的）原生终端共用同一我们 CI 编译的 dropbear dbclient：
  * 密码/证书/TOFU（-y）/known_hosts（HOME）走完全一致的环境变量与参数，
  * 不再引入第二套 SSH 实现（JSch 依赖移除后，认证行为 100% 统一）。
  *
@@ -470,7 +470,7 @@ class SshTunnel(
     /** 与终端模式一致的认证 env（HOME 写 known_hosts；密码经 DROPBEAR_PASSWORD）。 */
     private fun baseEnv(): Map<String, String> {
         val m = mutableMapOf(
-            // 必须与终端模式同一个 HOME（TuiActivity 用 filesDir），否则 TOFU 信任
+            // 必须与原终端模式同一个 HOME（TuiActivity 用 filesDir），否则 TOFU 信任
             // 会分成两份 known_hosts：隧道接受过的公钥，终端模式下还要再接受一次。
             "HOME" to (homeDir ?: "/data/data/com.dshhandheld.app"),
             "TERM" to "xterm-256color"
@@ -574,7 +574,7 @@ class SshTunnel(
         /**
          * dbclient 的 `HOME`：同样由 DshApp.onCreate 注入（`filesDir`）。
          *
-         * 必须与终端模式（TuiActivity 的 `filesDir`）指向同一处，否则 `known_hosts`
+         * 必须与原终端模式（`filesDir`）指向同一处，否则 `known_hosts`
          * 会分两份，同一主机的 TOFU 信任要在两个模式里各接受一次。
          */
         @Volatile

@@ -17,55 +17,6 @@ jobs:
   # data-composer-input, …) which have NO version contract: dsh evolves on its
   # own, the plugin is vendored and pinned. If dsh renames one, the adaptation
   # silently breaks and you only find out on the phone.
-  conformance:
-    name: Terminal conformance harness
-    runs-on: ubuntu-latest
-
-    steps:
-      - uses: actions/checkout@v7
-
-      - name: Set up JDK 17
-        uses: actions/setup-java@v6
-        with:
-          distribution: 'temurin'
-          java-version: '17'
-
-      - name: Set up Gradle
-        uses: gradle/actions/setup-gradle@v6
-        with:
-          # v6 把缓存实现拆成了独立组件：默认的 'enhanced' 是**商业**的
-          # gradle-actions-caching，升级到 v6 即视为接受其 Terms of Use。
-          # 本项目是 GPL-3.0，不想顺手接受一份专有条款，所以显式选开源的 basic
-          # （基于 @actions/cache，MIT）。功能上对本项目够用：缓存 ~/.gradle/caches
-          # 与 ~/.gradle/wrapper，键由构建文件派生。
-          # 若哪天想换回 enhanced，删掉这两行即可 —— 但那是知情选择。
-          cache-provider: basic
-        # 刻意不写 gradle-version：版本由 android/gradle/wrapper/gradle-wrapper.properties
-        # 决定，`./gradlew` 自行下载。此前 CI 写死 8.5、wrapper 也写 8.5、本地脚本还调
-        # 裸 `gradle` —— 三个出处，改一处就会静默漂移。
-
-      - name: Run conformance gate (coverage + selftest + check)
-        run: |
-          cd android
-          ./gradlew :terminal-conformance:conformance --no-daemon
-
-      # Invariant, not a nicety: terminal-conformance contains android.util /
-      # android.graphics stand-ins so the reference emulator links on a plain JVM.
-      # If it ever became an app dependency those stubs would collide with the real
-      # framework classes, so the module must stay out of the APK's graph.
-      - name: Verify the harness stays out of the app's dependency graph
-        run: |
-          cd android
-          # 必须开 pipefail（审计 M12）：默认 shell 只看管道最后一个命令的退出码，
-          # gradle 失败/配置改名时 stdout 为空 → grep 退 1 → 这步会打印 ✓ —— 不变量永久空转。
-          set -o pipefail
-          if ./gradlew :app:dependencies --configuration releaseRuntimeClasspath --no-daemon \
-               | grep -q "terminal-conformance"; then
-            echo "::error:::app must never depend on :terminal-conformance (android.* stubs would enter the APK)"
-            exit 1
-          fi
-          echo "✓ :app does not depend on :terminal-conformance（且这次查询确实跑完了）"
-
   build-dropbear:
     name: Build dropbear dbclient (arm64)
     runs-on: ubuntu-latest
@@ -142,7 +93,7 @@ jobs:
     runs-on: ubuntu-latest
     # Gate the artifact on the terminal harness: when it fails, terminal behaviour in
     # this tree is unverified, so there is no point producing an APK from it.
-    needs: [build-dropbear, conformance]
+    needs: [build-dropbear]
 
     steps:
       - uses: actions/checkout@v7

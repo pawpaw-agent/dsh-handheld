@@ -139,7 +139,7 @@ object DiagLog {
     /**
      * 平台 `Log` 的 Throwable 重载也必须照抄 —— 少一个就是**编译期**才发现，
      * 而且只有真正用了 3 参数那个调用点会报错（0.1.6 的 CI 就栽在这上面：
-     * `TuiActivity.kt:334` 的 `Log.e(TAG, "...", e)`）。
+     * 已移除的 `TuiActivity.kt:334` 的 `Log.e(TAG, "...", e)`）。
      */
     fun w(tag: String, msg: String, tr: Throwable) {
         val m = redact(msg); Log.w(tag, m, tr); record('W', tag, withTrace(m, tr))

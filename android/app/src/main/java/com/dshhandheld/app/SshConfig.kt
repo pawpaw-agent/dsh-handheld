@@ -16,7 +16,7 @@ import java.io.File
  *
  * 注意**有意不合并**的一点：私钥的处理两条路径不同。建隧道（[toAuth]）要求
  * `keyPath` 非空，而终端模式在缺私钥时会回退到 `dropbearkey` 现生成一对
- * （见 `TuiActivity.resolveKeyPath`）。所以这里只提供字段与 [toAuth]，
+ * （原 `TuiActivity.resolveKeyPath`，随原生终端一并移除）。所以这里只提供字段与 [toAuth]，
  * 终端模式的回退逻辑仍留在原处。
  *
  * 可见性是 public（默认）：`DshApp.ensureTunnel` 是 public 且以它作参数，

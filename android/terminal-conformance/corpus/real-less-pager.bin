@@ -1,35 +1,0 @@
-[?1049h[22;0;0t[24;1H[?1h=# Network services, Internet style[m
-#[m
-# Updated from https://www.iana.org/assignments/service-names-port-numbers/servi[m ce-names-port-numbers.xhtml .[m
-#[m
-# New ports will be added on request if they have been officially assigned[m
-# by IANA and used in the real-world or are needed by a debian package.[m
-# If you need a huge list of used numbers please install the nmap package.[m
-[m
-tcpmux          1/tcp                           # TCP port service multiplexer[m
-echo            7/tcp[m
-echo            7/udp[m
-discard         9/tcp           sink null[m
-discard         9/udp           sink null[m
-systat          11/tcp          users[m
-daytime         13/tcp[m
-daytime         13/udp[m
-netstat         15/tcp[m
-qotd            17/tcp          quote[m
-chargen         19/tcp          ttytst source[m
-chargen         19/udp          ttytst source[m
-ftp-data        20/tcp[m
-ftp             21/tcp[m
-[7m/etc/services[27m[K[Kfsp             21/udp          fspd[m
-ssh             22/tcp                          # SSH Remote Login Protocol[m
-telnet          23/tcp[m
-smtp            25/tcp          mail[m
-time            37/tcp          timserver[m
-time            37/udp          timserver[m
-whois           43/tcp          nicname[m
-tacacs          49/tcp                          # Login Host Protocol (TACACS)[m
-tacacs          49/udp[m
-domain          53/tcp                          # Domain Name Server[m
-domain          53/udp[m
-bootps          67/udp[m
-:[K[K[?1l>[?1049l[23;0;0t

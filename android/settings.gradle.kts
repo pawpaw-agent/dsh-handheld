@@ -20,4 +20,4 @@ include(":app")
 
 // Terminal conformance harness: pure JVM, never a dependency of :app.
 // See docs/terminal-rewrite-plan.md (phase 0) and the module's build script.
-include(":terminal-conformance")
+// 2026-09-25：原生终端移除，其 conformance 模块一并删除。

@@ -36,6 +36,13 @@
 
 ### 终端模式
 
+> ⛔ **2026-09-25：原生终端已整体移除。** 起因是 dsh 的 web 界面自带终端面板
+> （右栏 → 新建终端，`dsh-client-ui-sidebar-terminal`，xterm + WebSocket，WebView 直接可用）。
+> 随之删掉：`TuiActivity`、`DshTerminalExtraKeys`、vendored 的 `com.termux.*`、
+> `terminal-view` 依赖、`terminal-conformance` 模块与 CI 的 conformance 任务、
+> 连接屏的「看网页 / 开终端」切换。**下面这一节保留为历史记录。**
+
+
 | 环节 | 结果 |
 |---|---|
 | SSH 连接 + 提示符 | `xsj@rasp:~$`，**彩色**（`TERM=xterm-256color` 生效） |

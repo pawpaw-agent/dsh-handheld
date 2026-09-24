@@ -289,7 +289,7 @@ class DshApp : Application() {
         reportLastExit()
         SshTunnel.binPath = File(applicationInfo.nativeLibraryDir, "libdbclient.so")
             .takeIf { it.exists() }?.absolutePath
-        // HOME 用 filesDir，与终端模式（TuiActivity）一致：两边写同一份 known_hosts，
+        // HOME 用 filesDir，与原终端模式（）一致：两边写同一份 known_hosts，
         // TOFU 信任才不会分裂成两份。见 SshTunnel.homeDir。
         SshTunnel.homeDir = filesDir.absolutePath
         // 开关打开着就把通知渠道准备好（顺手做一次渠道迁移：删掉旧的 dsh-turn）。

@@ -259,9 +259,6 @@ class MainActivity : Activity() {
      */
     private var connectAttempt = 0
 
-    /** 连接屏当前选的是「看网页」还是「开终端」。 */
-    private var webMode = true
-
     /**
      * 切到某一屏。**唯一**改动连接屏可见性的地方。
      *
@@ -325,7 +322,6 @@ class MainActivity : Activity() {
 
         connectMainBtn?.text = when {
             connecting -> "取消连接"
-            !webMode -> "打开终端"
             tunneled && pageAlive -> "打开 dsh 网页"
             else -> "连上并打开 dsh 网页"
         }
@@ -1288,20 +1284,6 @@ class MainActivity : Activity() {
         statusView = status
         actionZone.addView(status, rowParams(width = ViewGroup.LayoutParams.MATCH_PARENT))
 
-        // 看网页 / 开终端：不再是独立一步，而是决定主按钮做什么
-        val webModeBtn = segment("看 dsh 网页", true)
-        val termModeBtn = segment("打开终端", false)
-        val modeGroup = RadioGroup(this@MainActivity).apply {
-            orientation = RadioGroup.HORIZONTAL
-            addView(webModeBtn, LinearLayout.LayoutParams(0, dp(40), 1f).apply { marginEnd = dp(6) })
-            addView(termModeBtn, LinearLayout.LayoutParams(0, dp(40), 1f).apply { marginStart = dp(6) })
-        }
-        actionZone.addView(modeGroup, rowParams(top = dp(10), width = ViewGroup.LayoutParams.MATCH_PARENT))
-        modeGroup.setOnCheckedChangeListener { _, _ ->
-            webMode = webModeBtn.isChecked
-            syncConnectUi()
-        }
-
         /** 校验失败：红框 + 红字贴在字段下面 + 把它滚进视野 + 聚焦（软键盘跟着弹）。 */
         fun fail(field: EditText, err: TextView, msg: String) {
             err.text = msg
@@ -1325,7 +1307,7 @@ class MainActivity : Activity() {
             }
             // 隧道与页面都在（且要的是网页）→ 直接回网页：不重连、不重载、不动 token，
             // 也就不该被表单校验拦下。
-            if (webMode && tunneled && pageAlive) {
+            if (tunneled && pageAlive) {
                 DiagLog.i(TAG, "连接屏：回网页（隧道活着、页面在）")
                 showScreen(Screen.WEB)
                 return
@@ -1362,12 +1344,6 @@ class MainActivity : Activity() {
                 SshTunnel.Auth.Password(pw)
             }
             updateSummary()
-            if (!webMode) {
-                persistSshConfig(sh, sport, su, target, auth)
-                DiagLog.i(TAG, "连接屏：打开终端（终端自己建连接，不经这里的隧道）")
-                startActivity(Intent(this@MainActivity, TuiActivity::class.java))
-                return
-            }
             if (!beginConnect()) { status("正在连接中，请稍候…"); return }
             connectAttempt++
             connectFailed = false

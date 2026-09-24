@@ -2,7 +2,7 @@
 
 **把 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)（`dsh`）装进口袋的 Android 客户端。**
 
-完整 dsh Web 界面 + 内置 SSH 隧道 + 终端模式。**服务端零改动**：不用装服务端插件，也不需要 `--host 0.0.0.0`。
+完整 dsh Web 界面 + 内置 SSH 隧道。**服务端零改动**：不用装服务端插件，也不需要 `--host 0.0.0.0`。
 
 ```
 App（全屏 WebView / SSH 终端）
@@ -152,7 +152,7 @@ metadata 版本 ≤ 编译器可读上限）。
 
 ```
 android/
-  app/                         # App 本体：连接屏 + WebView 壳 + 隧道编排 + 终端模式
+  app/                         # App 本体：连接屏 + WebView 壳 + 隧道编排
     src/main/java/com/dshhandheld/{app,protocol}/   # MainActivity / DshApp / SshTunnel …
     src/main/java/com/termux/shared/terminal/io/    # vendored 的 Termux 额外键栏（见 License）
     src/main/assets/                                # 已无注入资产（2026-09-25 移除）

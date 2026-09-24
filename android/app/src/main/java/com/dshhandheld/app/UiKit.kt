@@ -10,7 +10,7 @@ import android.widget.TextView
  * 连接屏与终端模式共用的 UI 基元。
  *
  * 抽出来的两个理由：
- *  1. **配色**此前在 `MainActivity` 与 `TuiActivity` 各定义一份（`values/colors.xml` 里
+ *  1. **配色**此前在 `MainActivity` 与已移除的 `TuiActivity` 各定义一份（`values/colors.xml` 里
  *     还有第三份，13 个颜色全零引用，已删）。同一组黑白色调写两遍，改一处就会漂移。
  *  2. **按钮 chrome**在两个 Activity 里共重复 12 次（`text` / `isAllCaps` / 字号 / 字色 /
  *     背景 / 点击），只有文案与三种样式不同。其中两处漏了字号，正是复制粘贴漂移的证据。
