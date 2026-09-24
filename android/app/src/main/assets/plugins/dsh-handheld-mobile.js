@@ -1279,9 +1279,10 @@ window.__ModuleLoader__.load({
       // ── 任务完成 → 通知 App ──────────────────────────────────
       //
       // 判据是 dsh 自己那个「深度求索中…」指示器：dsh-client-ui-chat 的 ChatView 里
-      //   div[class*="_turnStatus"][role=status][aria-live=polite] {t("chat.deepDiving")}
+      //   div[class 后缀 turnStatus][role=status][aria-live=polite] {t("chat.deepDiving")}
       // 它在 `running` 为真时挂载、结束就卸载，所以我们盯的是**它从有到无**的那一次跃迁。
-      // 类名 `_turnStatus` 全安装唯一（只有 dsh-client-ui-chat 定义它），不依赖文案语种。
+      // 那个类名当时全安装唯一（只有 dsh-client-ui-chat 定义它），不依赖文案语种；
+      // 0.1.7-rc.2 起改用 data-turn-process（见下面 turn watcher 的说明）。
       //
       // 三条不显然的实现约束：
       //  1. **不能用 requestAnimationFrame 节流**（上面那个标记兜底 effect 用了，它没事，
@@ -1440,7 +1441,25 @@ window.__ModuleLoader__.load({
       }, "dsh-handheld-mobile: side symmetry diag");
 
       ctx.effect(function () {
-        var TURN_STATUS = '[class*="_turnStatus"]';
+        // ⚠️ 2026-09-25 适配 dsh 0.1.7-rc.2：旧选择器（class 后缀 turnStatus 那条）在新产物里
+        // **已经不存在**（契约检查抓到「这条适配规则已经空转」）。新版把那个指示器重做成了
+        // 每个回合一个「回合过程」节点：
+        //   <button data-turn-process="<回合号>" data-turn-process-messages/-tool-calls/-subagents>
+        //     <span>深度求索中，用时{duration}  ← 运行中每秒跳一次
+        //           已完成工作 / 用时 {duration} / 处理失败   ← 结束后静态
+        //   </button>
+        // 用 data-* 而不是哈希类名（`TurnProcessNodeView_root` 那种）—— 后者一升级就变。
+        var TURN_STATUS = '[data-turn-process]';
+        // 运行中的判据：**标签在跳秒**。这是新 DOM 里唯一跨语种的可观测信号：
+        //   · 回合结束后节点**不会卸载**（变成"已完成工作/用时 N 秒"），所以旧版那条
+        //     「isConnected 变 false = 结束」不再成立；
+        //   · 也没有任何 data-* 暴露"这一轮还开着"（`data.closed` 只活在 JS 里）；
+        //   · 而运行中标签每秒更新用时（`LIVE_RUN_CLOCK_INTERVAL_MS`），**思考与工具调用期间
+        //     也照跳**，所以它同时覆盖「没在输出文字」的那段。
+        // 代价：结束最多晚 TICK_WINDOW_MS 才认出来（旧版是卸载即报）。App 那边还有 Host
+        // 事件流这条权威路径兜底（见 DshApp 的两路信号对账），所以这个延迟可接受。
+        var TICK_WINDOW_MS = 3000;
+        var PICK_IDLE_MS = 5000;   // 空手时最多 5 秒重挑一次（1 秒轮询下别每秒全树扫）
         var MIN_TURN_MS = 1500;
         var HEARTBEAT_MS = 60000;
         // 存活探针周期（2026-09-17 真机诊断）：renderer 被系统 waive/冻结时它就会消失 ——
@@ -1516,15 +1535,24 @@ window.__ModuleLoader__.load({
          */
         var pick = function () {
           var list = document.querySelectorAll(TURN_STATUS);
-          var fallback = null;
-          var connected = null;
+          var bestOnScreen = null, bestOnScreenTurn = -1;
+          var bestAny = null, bestAnyTurn = -1;
+          var fallback = null, connected = null;
           for (var i = 0; i < list.length; i++) {
             var el = list[i];
             if (!el.isConnected) continue;
             if (connected === null) connected = el;
-            if (onScreen(el)) return el;
             if (fallback === null && el.getClientRects().length > 0) fallback = el;
+            // 回合号 = data-turn-process 的值；新版每个回合一个节点，**只关心最新的那个**
+            // （旧的回合节点会一直留着当"已完成工作"的摘要）。
+            var n = parseInt(el.getAttribute("data-turn-process") || "-1", 10);
+            if (!isFinite(n)) n = -1;
+            if (n > bestAnyTurn) { bestAnyTurn = n; bestAny = el; }
+            if (onScreen(el) && n > bestOnScreenTurn) { bestOnScreenTurn = n; bestOnScreen = el; }
           }
+          // 仍然优先可见的那个（旧版这条判据的理由没变：别 latch 到隐藏副本上）。
+          if (bestOnScreen !== null) return bestOnScreen;
+          if (bestAny !== null) return bestAny;
           return fallback !== null ? fallback : connected;
         };
         var live = function (el) {
@@ -1541,20 +1569,37 @@ window.__ModuleLoader__.load({
           return out;
         };
 
+        var lastLabel = "";
+        var lastTick = 0;
+        var lastPickAt = 0;
+
         var check = function () {
           if (disposed) return;
           checks++;
-          if (!live(found)) found = pick();
-          var present = found !== null;
           var at = now();
-          if (present && !running) {
+          if (!live(found)) {
+            // 空手时别每秒全树重挑（1 秒轮询 + 没有回合节点 = 每秒一次 querySelectorAll）；
+            // 结构变化那条路（mutation）仍然会立刻重挑。
+            if (found !== null || at - lastPickAt >= PICK_IDLE_MS) {
+              found = pick();
+              lastPickAt = at;
+            }
+          }
+          var present = found !== null;
+          if (present) {
+            var txt = String(found.textContent || "").slice(0, 48);
+            if (txt !== lastLabel) { lastLabel = txt; lastTick = at; }
+          }
+          // 「在跑」= 有节点 **且** 它的标签刚跳过（见上面 TICK_WINDOW_MS 的说明）。
+          var active = present && (at - lastTick < TICK_WINDOW_MS);
+          if (active && !running) {
             running = true;
             startedAt = at;
             lastBeat = at;
             // 标题也带上：页面被冻时「结束」由 Host 的事件流报告（见 HarnessEventsClient），
             // 那条路径拿不到 DOM，只能用这里记下的标题。
             post({ type: "turn-start", title: sessionLabel() });
-          } else if (!present && running) {
+          } else if (!active && running) {
             running = false;
             var ms = Math.round(at - startedAt);
             // **一律上报结束**（`short` 只是给 App 的一个提示）：只发开始、不发结束会让
@@ -1573,6 +1618,7 @@ window.__ModuleLoader__.load({
               type: "turn-state",
               running: running,
               present: present,
+              active: active,
               watching: found !== null ? geom(found) : null,
               nodes: probe(),
             });
@@ -1585,6 +1631,9 @@ window.__ModuleLoader__.load({
           checkTimed();
         });
         observer.observe(document.documentElement, { childList: true, subtree: true });
+        // 跳秒是 characterData 变更 —— `childList` 观察者收不到，所以必须有一条轮询来驱动
+        // 「标签还在跳吗」这个判据。1 秒一次，每次只读一个节点的 textContent（不碰布局）。
+        var tickPoll = window.setInterval(function () { checkTimed(); }, 1000);
         // 定时器也跑 check()：mutation 只是**触发源**之一，定时复查能在「DOM 变了但回调被合并/
         // 漏掉」时兜住；它同时是存活探针的载体（renderer 被冻时这条就没了）。
         var tickTimer = window.setInterval(function () {
@@ -1604,6 +1653,7 @@ window.__ModuleLoader__.load({
           disposed = true;
           observer.disconnect();
           window.clearInterval(tickTimer);
+          window.clearInterval(tickPoll);
         };
       }, "dsh-handheld-mobile: turn watcher");
 

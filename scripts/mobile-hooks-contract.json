@@ -14,7 +14,8 @@
     "data-sidebar-collapsed",
     "data-sidebar-right-mode",
     "data-sidebar-right-open",
-    "data-sidebar-right-panel"
+    "data-sidebar-right-panel",
+    "data-turn-process"
   ],
   "otherHostHooks": [],
   "classHooks": [
@@ -61,8 +62,7 @@
     "_time",
     "_title",
     "_titleRow",
-    "_trigger",
-    "_turnStatus"
+    "_trigger"
   ],
   "classHooksPlugin": [
     "_moreButton"
