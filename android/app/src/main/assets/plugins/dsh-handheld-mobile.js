@@ -184,9 +184,12 @@ window.__ModuleLoader__.load({
   [data-handheld="frame"] > [class*="_sidebarCol"] > * {
     width: 100% !important;
     max-width: none !important;
-    /* 宿主侧栏根自带 padding:6px var(--dsh-sidebar-inline-padding)；左右那 12px 要留着
-       （内容不该贴边），只让开**顶部**那 6px —— 与上一条的 12→0 合起来正好消掉实测的
-       17.4px（12 + 6 = 18）。改完抽屉第一行落在 CSS 21.5，与会话页的 22.1 齐平。 */
+  }
+  /* 顶部那 6px 在**侧栏根**上（宿主 .hHd-Xa_root 展开态 padding:6px 12px），而它不是
+     sidebarCol 的直接子节点 —— 2026-09-24 实测：按「> *」写的那条没匹配上（去掉我们的
+     12px 后第一行只从 39.5 降到 27.5，正好只等于我们那一档）。所以改用**结构定位**：
+     谁**直接包着 logoRow**，谁就是侧栏根，不依赖任何哈希类名，也不依赖中间有几层包裹。 */
+  [data-handheld="frame"] [class*="_sidebarCol"] *:has(> [class*="_logoRow"]) {
     padding-top: 0 !important;
   }
   @media (max-width: 560px) {
@@ -1518,6 +1521,65 @@ window.__ModuleLoader__.load({
           window.clearInterval(tickTimer);
         };
       }, "dsh-handheld-mobile: turn watcher");
+
+      // ── 顶部空间自证（2026-09-24，用户报「左右侧边栏顶部空间比会话页面大」）──────
+      // 「外层 padding 同值」不等于「第一行内容同位置」：里面还叠着宿主自己的内边距，而
+      // 那些规则写在哪个节点上、中间有几层包裹，光读 CSS 推不出来（已经推错过一次）。
+      // 这里把三处「第一行」连同祖先链的 类名 / rect.top / padding-top / margin-top 直接报回来，
+      // 一次看清空间是谁的。只在加载后与抽屉开合时各跑一次，不进任何循环。
+      ctx.effect(function () {
+        var chainOf = function (el) {
+          var out = [];
+          var cur = el;
+          for (var i = 0; i < 4 && cur && cur.nodeType === 1; i++) {
+            var cs = window.getComputedStyle ? getComputedStyle(cur) : null;
+            var b = cur.getBoundingClientRect();
+            out.push({
+              cls: String(cur.className || "").slice(0, 30),
+              top: Math.round(b.top),
+              padT: cs ? cs.paddingTop : "?",
+              marT: cs ? cs.marginTop : "?",
+              h: Math.round(b.height),
+            });
+            cur = cur.parentElement;
+          }
+          return out;
+        };
+        var report = function (stage) {
+          var col = document.querySelector('[data-handheld="frame"] > [class*="_sidebarCol"]');
+          postToApp({
+            type: "topspace-diag",
+            stage: stage,
+            sessionHeader: chainOf(document.querySelector('[data-phase] header')),
+            drawerCol: chainOf(col),
+            drawerRoot: chainOf(col ? col.querySelector(':scope *:has(> [class*="_logoRow"])') : null),
+            logoRow: chainOf(document.querySelector('[data-handheld="frame"] [class*="_logoRow"]')),
+            tabStrip: chainOf(document.querySelector('[class*="_tabStrip"]')),
+          });
+        };
+        var t1 = window.setTimeout(function () { report("load+3s"); }, 3000);
+        // 抽屉开合各报一次（懒挂：frame 是宿主渲染的，apply() 时还没影）
+        var colObserver = null;
+        var wasOpen = null;
+        var attach = function () {
+          if (colObserver !== null) return true;
+          var el = document.querySelector('[data-handheld="frame"]');
+          if (el === null || !window.MutationObserver) return false;
+          colObserver = new MutationObserver(function () {
+            var open = !el.hasAttribute("data-sidebar-collapsed");
+            if (open !== wasOpen) { wasOpen = open; window.setTimeout(function () { report(open ? "drawer-open" : "drawer-close"); }, 350); }
+          });
+          colObserver.observe(el, { attributes: true, attributeFilter: ["data-sidebar-collapsed"] });
+          return true;
+        };
+        attach();
+        var attachTimer = window.setInterval(function () { if (attach()) window.clearInterval(attachTimer); }, 1000);
+        return function () {
+          window.clearTimeout(t1);
+          window.clearInterval(attachTimer);
+          if (colObserver) colObserver.disconnect();
+        };
+      }, "dsh-handheld-mobile: topspace diag");
 
       // ── 需要你选择 → 通知 App ────────────────────────────────
       //

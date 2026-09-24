@@ -197,6 +197,11 @@ class DshApp : Application() {
                 // 右侧栏展开时，压在它工具栏之上的元素（被我们临时关掉命中的那些）。
                 DiagLog.i(TAG, "面板遮挡：${json}")
             }
+            "topspace-diag" -> {
+                // 三处「第一行」的祖先链（类名/位置/padding）——「侧边栏顶部空间比会话页大」
+                // 这类问题的判据，光读 CSS 推不出来（已经推错过一次）。
+                DiagLog.i(TAG, "顶部空间：${json}")
+            }
             "tap-diag" -> {
                 // 手指档体检：可点击元素里有多少不达 44×44、多少「隐形但仍吃点击」。
                 DiagLog.i(TAG, "点击体检：${json}")
