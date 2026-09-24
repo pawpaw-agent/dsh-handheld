@@ -48,6 +48,28 @@ window.__ModuleLoader__.load({
 
     var h = react.createElement;
 
+    // ── JS 开销归因（2026-09-25，用户问「注入的代码会影响流式响应吗」）──────────────
+    // 流式期间真正会反复跑的只有三个回调：frame marker 的 mark（每帧一次）、
+    // turn watcher 的 check、needs-input 的 check（后两个**每个 mutation 批次**一次，
+    // 而 needs-input 在「没有待输入节点」时要走一次**全树** querySelector）。
+    // 光看帧统计分不出「是渲染慢还是 JS 慢」，所以这里把这三个回调各自的累计耗时量出来，
+    // 每 10 秒报一次（低于 20ms 就静默 —— 10 秒 20ms = 单核 0.2%，不值得记）。
+    // 包装只多两次 performance.now()（~100ns），不影响被量的对象。
+    var __cost = { mark: 0, turn: 0, ask: 0 };
+    var __costN = { mark: 0, turn: 0, ask: 0 };
+    var __now = function () {
+      return (window.performance && performance.now) ? performance.now() : Date.now();
+    };
+    var __wrap = function (name, fn) {
+      return function () {
+        var t = __now();
+        try { return fn.apply(null, arguments); } finally {
+          __cost[name] += __now() - t;
+          __costN[name]++;
+        }
+      };
+    };
+
     /** 发一条消息给原生侧；没有桥（桌面浏览器 / 老版本 App）就什么都不做。 */
     var postToApp = function (payload) {
       var bridge = window.dshNative;
@@ -1196,11 +1218,12 @@ window.__ModuleLoader__.load({
             }
           }
         };
+        var markTimed = __wrap("mark", mark);
         var schedule = function () {
           if (raf !== 0 || disposed) return;
           raf = window.requestAnimationFrame(function () {
             raf = 0;
-            mark();
+            markTimed();
           });
         };
         var observer = new MutationObserver(schedule);
@@ -1211,7 +1234,7 @@ window.__ModuleLoader__.load({
           childList: true, subtree: true,
           attributes: true, attributeFilter: ["data-handheld"],
         });
-        mark();
+        markTimed();
         return function () {
           disposed = true;
           observer.disconnect();
@@ -1523,9 +1546,10 @@ window.__ModuleLoader__.load({
           }
         };
 
+        var checkTimed = __wrap("turn", check);
         var observer = new MutationObserver(function () {
           mutations++;
-          check();
+          checkTimed();
         });
         observer.observe(document.documentElement, { childList: true, subtree: true });
         // 定时器也跑 check()：mutation 只是**触发源**之一，定时复查能在「DOM 变了但回调被合并/
@@ -1609,6 +1633,27 @@ window.__ModuleLoader__.load({
         };
       }, "dsh-handheld-mobile: topspace diag");
 
+      // ── JS 开销上报（见文件顶部累加器）─────────────────────────
+      ctx.effect(function () {
+        var timer = window.setInterval(function () {
+          var total = __cost.mark + __cost.turn + __cost.ask;
+          if (total >= 20) {
+            postToApp({
+              type: "perf",
+              what: "js-cost",
+              ms: Math.round(total * 10) / 10,
+              mark: Math.round(__cost.mark * 10) / 10, markN: __costN.mark,
+              turn: Math.round(__cost.turn * 10) / 10, turnN: __costN.turn,
+              ask: Math.round(__cost.ask * 10) / 10, askN: __costN.ask,
+              vis: document.visibilityState || "?",
+            });
+          }
+          __cost.mark = 0; __cost.turn = 0; __cost.ask = 0;
+          __costN.mark = 0; __costN.turn = 0; __costN.ask = 0;
+        }, 10000);
+        return function () { window.clearInterval(timer); };
+      }, "dsh-handheld-mobile: js cost probe");
+
       // ── 需要你选择 → 通知 App ────────────────────────────────
       //
       // 「一轮结束」不是唯一该叫用户回来的时刻，甚至不是最该叫的：**它在等你在手机上点一下**
@@ -1641,7 +1686,8 @@ window.__ModuleLoader__.load({
           postToApp({ type: "needs-input", title: sessionLabel(), key: key });
         };
 
-        var observer = new MutationObserver(check);
+        var checkTimed = __wrap("ask", check);
+        var observer = new MutationObserver(checkTimed);
         observer.observe(document.documentElement, { childList: true, subtree: true });
         check();
         return function () {
