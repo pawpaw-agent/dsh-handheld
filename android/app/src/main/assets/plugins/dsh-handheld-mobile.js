@@ -1176,6 +1176,9 @@ window.__ModuleLoader__.load({
     exports.name = "dsh-handheld-mobile";
 
     exports.apply = function (ctx) {
+      try {
+        window.__dshHandheldApplies = (window.__dshHandheldApplies || 0) + 1;
+      } catch (e) { /* 诊断永远不该影响主流程 */ }
       var slots = ctx.slots;
       var layout = ctx.layout;
       var toggleSidebar = function () {
@@ -1193,6 +1196,9 @@ window.__ModuleLoader__.load({
       ctx.effect(function () {
         var tag = document.createElement("style");
         tag.dataset.plugin = "dsh-handheld-mobile";
+        try {
+          window.__dshHandheldStyleAdds = (window.__dshHandheldStyleAdds || 0) + 1;
+        } catch (e) { /* 诊断永远不该影响主流程 */ }
         tag.dataset.pluginCss = "dsh-handheld-mobile/mobile.css";
         tag.textContent = CSS;
         document.head.appendChild(tag);
@@ -1202,6 +1208,9 @@ window.__ModuleLoader__.load({
           if (tag.isConnected) document.head.appendChild(tag);
         }, 0);
         return function () {
+          try {
+            window.__dshHandheldStyleRemoves = (window.__dshHandheldStyleRemoves || 0) + 1;
+          } catch (e) { /* 诊断永远不该影响主流程 */ }
           tag.remove();
         };
       }, "dsh-handheld-mobile: styles");
@@ -2450,8 +2459,8 @@ window.__ModuleLoader__.load({
       // MOBILE_QUERY 里，所以嫌疑集中在「媒体查询为什么不再成立」——
       // 但 innerW=384 已经由引导脚本证明（max-width 那半为真），剩下的必须问页面。
       // 没有别的求值入口（App 只有内部 evaluateJavascript），所以只能靠这一发取证。
-      try {
-        window.setTimeout(function () {
+      var __envSample = function (stage) {
+        try {
           var mq = function (q) {
             try { return window.matchMedia && window.matchMedia(q).matches ? 1 : 0; } catch (e) { return -1; }
           };
@@ -2474,9 +2483,21 @@ window.__ModuleLoader__.load({
           try {
             if (styleTag && styleTag.sheet) rules = styleTag.sheet.cssRules ? styleTag.sheet.cssRules.length : -2;
           } catch (e) { rules = -3; }
+          var ours = 0;
+          try {
+            var all = document.querySelectorAll("style");
+            for (var k = 0; k < all.length; k++) {
+              if (all[k].dataset && all[k].dataset.pluginCss) ours++;
+            }
+          } catch (e) { /* 诊断永远不该影响主流程 */ }
           postToApp({
             type: "perf",
             what: "env-diag",
+            stage: stage,
+            applies: window.__dshHandheldApplies || 0,
+            styleAdds: window.__dshHandheldStyleAdds || 0,
+            styleRemoves: window.__dshHandheldStyleRemoves || 0,
+            ourStyles: ours,
             mq: mq(MOBILE_QUERY),
             mqW: mq("(max-width: 1023px)"),
             mqP: mq("(pointer: coarse)"),
@@ -2499,7 +2520,11 @@ window.__ModuleLoader__.load({
             nTurnProcess: count('[data-turn-process]'),
             nPhase: count('[data-phase]'),
           });
-        }, 2000);
+        } catch (e) { /* 诊断永远不该影响主流程 */ }
+      };
+      try {
+        window.setTimeout(function () { __envSample("t2"); }, 2000);
+        window.setTimeout(function () { __envSample("t12"); }, 12000);
       } catch (e) { /* 诊断永远不该影响主流程 */ }
 
       try {
