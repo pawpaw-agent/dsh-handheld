@@ -712,13 +712,31 @@ window.__ModuleLoader__.load({
   @media (max-width: 560px) {
     [data-composer-stats] {
       max-width: none !important;
-      padding-left: 5px !important;
-      padding-right: 5px !important;
+      padding-left: 8px !important;
+      padding-right: 8px !important;
       justify-content: space-between !important;
       gap: 3px !important;
       /* 一行到底：换行会让底部多占一行（用户 2026-09-18 明确不要）。 */
       flex-wrap: nowrap !important;
       font-size: 10px !important;
+      /* 2026-09-25 用户：「将会话页面最底部的统计信息移到最顶部」——
+         它本来挂在 composer dock 槽里（输入卡片**下方**），这里用 fixed 把它挪到页面最顶：
+           · 祖先链上没有 transform / will-change / contain（已核对宿主与插件两侧），
+             所以 fixed 相对视口，不会跟着内容滚；
+           · z-index 8：压住正文与会话头（6），但低于 FAB（21）与抽屉/右栏（40）——
+             抽屉或面板打开时它会正常被盖住；
+           · 左右两个胶囊分列两端、中间留空 —— 屏幕顶部正中是挖孔（本机 128 / 88 设备像素），
+             中间那点空档正好避开它；
+           · 头部由外壳 padding-top 整体下移让位（见下面 _frame 那条 12 → 17px）。 */
+      position: fixed !important;
+      top: 0 !important;
+      left: 0 !important;
+      right: 0 !important;
+      z-index: 8 !important;
+      margin: 0 !important;
+      padding-top: 1px !important;
+      line-height: 13px !important;
+      background: var(--dsw-alias-bg-base, #151517) !important;
     }
     /* 极端长的计数（4 位以上「轮/步」）也只允许尾部省略，不再换行。 */
     [data-composer-stats] > * {
@@ -802,7 +820,9 @@ window.__ModuleLoader__.load({
        没 cover 时 env 是 0、宿主也不加，不需要动。
        （本模板里**不能出现反引号** —— 已经踩过四次，会把模板提前结束。）*/
     html[data-dsh-cover] [class*="_frame"]:has([data-phase]) {
-      padding-top: 12px !important;
+      /* 12 → 17：顶上多了一条常驻的统计带（统计行 fixed 在 y=0，高约 14px），
+         头部要整体让开它，否则标题会被压在带子底下。 */
+      padding-top: 17px !important;
     }
     /* 顶部间距交给外壳那一层，这里不再叠加（原来 cover 时给 14px，现在 2px）。 */
     html[data-dsh-cover] [data-handheld="frame"] [data-phase] header:has([class*="_titleRow"]) {
