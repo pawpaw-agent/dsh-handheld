@@ -1637,7 +1637,11 @@ window.__ModuleLoader__.load({
       ctx.effect(function () {
         var timer = window.setInterval(function () {
           var total = __cost.mark + __cost.turn + __cost.ask;
-          if (total >= 20) {
+          // 2026-09-25：取证期间**不设阈值**，连调用次数一起报 —— 否则「一条都没有」
+          // 分不清是「成本低」还是「页面根本没在变」。只在前 15 分钟报（有界），
+          // 之后回到「超过 20ms 才报」，不会长期刷日志。
+          var probing = __now() < 15 * 60 * 1000;
+          if (probing || total >= 20) {
             postToApp({
               type: "perf",
               what: "js-cost",
@@ -1646,6 +1650,7 @@ window.__ModuleLoader__.load({
               turn: Math.round(__cost.turn * 10) / 10, turnN: __costN.turn,
               ask: Math.round(__cost.ask * 10) / 10, askN: __costN.ask,
               vis: document.visibilityState || "?",
+              probing: probing,
             });
           }
           __cost.mark = 0; __cost.turn = 0; __cost.ask = 0;
