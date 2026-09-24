@@ -111,7 +111,12 @@ metadata 版本 ≤ 编译器可读上限）。
 
 ## 移动端界面适配
 
-dsh 官方前端是桌面布局，窄屏下侧栏常驻挤占内容。本项目在 **App 侧**注入一个**自研的**客户端插件
+**2026-09-25 起本仓库不再注入任何东西。** 此前有一层自研的手机端适配（注入进 dsh 页面，
+改布局、补抽屉、报回合状态），它已被整体移除 —— 直接原因是 dsh 0.1.7-rc.2 的加载器会按服务端
+清单 reconcile，把注入的插件 entry 整个拆掉（fiber 销毁 + 按包名删样式）。历史与教训见
+[`docs/mobile-adaptation.md`](docs/mobile-adaptation.md)。现在页面交给 dsh 自己的响应式布局。
+
+（以下为已移除的那一层的原始说明，保留作记录）dsh 官方前端是桌面布局，窄屏下侧栏常驻挤占内容。本项目在 **App 侧**注入一个**自研的**客户端插件
 （`android/app/src/main/assets/plugins/dsh-handheld-mobile.js`）：`addDocumentStartJavaScript` 钩住
 `__DSH_BOOT__` 启动图，`shouldInterceptRequest` 从 APK assets 供 bundle，**服务端零改动**。
 
@@ -120,8 +125,7 @@ dsh 官方前端是桌面布局，窄屏下侧栏常驻挤占内容。本项目�
 只能在手机上发现 —— 所以 CI 里有一只契约金丝雀：
 
 ```sh
-node scripts/check-mobile-hooks.mjs --contract   # CI 门禁：插件实读的钩子 ⇄ 契约文件
-node scripts/check-mobile-hooks.mjs              # 升级 dsh 后在本机跑（对照已安装的 dsh 产物）
+# （注入层移除后，这两个检查脚本与契约文件已一并删除）
 ```
 
 设计取舍与能力边界见 [`docs/mobile-adaptation.md`](docs/mobile-adaptation.md)，验证方式（本地渲染回环、
@@ -151,7 +155,7 @@ android/
   app/                         # App 本体：连接屏 + WebView 壳 + 隧道编排 + 终端模式
     src/main/java/com/dshhandheld/{app,protocol}/   # MainActivity / DshApp / SshTunnel …
     src/main/java/com/termux/shared/terminal/io/    # vendored 的 Termux 额外键栏（见 License）
-    src/main/assets/plugins/                        # 注入的移动端适配插件（自研）
+    src/main/assets/                                # 已无注入资产（2026-09-25 移除）
     src/main/jniLibs/arm64-v8a/                     # dbclient / dropbearkey（CI 阶段构建后放入）
   terminal-conformance/        # 纯 JVM 终端行为回归测试台（不进 APK）
 scripts/                       # dropbear 交叉编译、契约金丝雀、渲染回环、API 推送

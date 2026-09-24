@@ -117,34 +117,6 @@ class MainActivity : Activity() {
             }
         }
     }
-    /**
-     * 不持 Activity 的兜底 WebViewClient（审计 M1）。
-     *
-     * 只保留一件事：把适配层 bundle 喂给页面（`shouldInterceptRequest`）——
-     * 页面在 Activity 被销毁期间重载时，这一条仍然必须成立，否则移动端适配会静默消失。
-     *
-     * 注意它是 `private class`（**不是** `inner class`）：Kotlin 的嵌套类不持有外部实例，
-     * 这正是它存在的理由。
-     */
-    private class DetachedWebViewClient(private val app: DshApp) : WebViewClient() {
-        override fun shouldInterceptRequest(
-            view: WebView?,
-            request: android.webkit.WebResourceRequest?
-        ): android.webkit.WebResourceResponse? {
-            interceptCalls.incrementAndGet()   // 每一条子资源都从这里过，先记一笔
-            val u = request?.url?.toString() ?: return null
-            if (!isPluginBundleUrl(u)) return null
-            val bytes = app.pluginBundleBytes ?: return null
-            DiagLog.i(TAG, "适配层 bundle：第 ${bundleServes.incrementAndGet()} 次喂给页面" +
-                "（兜底路径/缓存字节, ${bytes.size}B, 累计拦截 ${interceptCalls.get()} 次）")
-            return android.webkit.WebResourceResponse(
-                "text/javascript", "utf-8", ByteArrayInputStream(bytes)
-            ).apply {
-                setResponseHeaders(mapOf("Content-Length" to bytes.size.toString()))
-            }
-        }
-    }
-
     /** 键盘当前是否可见（由 root 的 insets 监听维护）。 */
     private var imeVisible = false
 
@@ -426,69 +398,6 @@ class MainActivity : Activity() {
 
         const val PREF_SERVER_TOKEN = "server_token" // dsh 0.1.2+ 一次性启动 token（服务重启后自动更新）
 
-        // ── 手机端适配插件（dsh-handheld-mobile，本仓库自研）────────────────
-        // 纯 App 侧注入，服务端零改动：doc-start 时用 setter 钩住 window.__DSH_BOOT__，
-        // 在服务端写入的启动图里补一条插件项（entry + batch，URL 指向我们自己的 agent
-        // 数据 URL）；WebView 引导循环按清单 create 该插件时，shouldInterceptRequest 命中
-        // 该 URL 返回 APK assets 里的插件 bundle。
-        // 插件运行时外部依赖仅 react/jsx-runtime + dsh-client-ui-primitives，均已在前端壳
-        // 的 staticModules 种子里（已验证），无需额外注入。
-        //
-        // 2026-09-13 起这一层是**我们自己的代码**：此前 vendored 的第三方
-        // dsh-web-mobile（MIT）已删除 —— 每次上游发版都要在它体内重打补丁，补丁与上游
-        // 代码混在一起说不清归属。适配层源码见 assets/plugins/dsh-handheld-mobile.js。
-        //
-        // id 必须与那个 bundle 内的 `id: "dsh-handheld-mobile"` 一致，改不得（CI 有断言）。
-        // rev 只是 WebView 侧的缓存键：内容变更必须换 rev，否则可能命中旧缓存。
-        const val MOBILE_PLUGIN_ID = "dsh-handheld-mobile"
-        const val MOBILE_PLUGIN_REV = "dsh-handheld-mobile-1.0.89"
-        const val MOBILE_PLUGIN_URL = "/plugins/??$MOBILE_PLUGIN_ID/client.js&rev=$MOBILE_PLUGIN_REV"
-
-        /**
-         * 这条请求是不是「要我们的适配层 bundle」。
-         *
-         * 判据从「URL 里含子串」收紧成「origin 是隧道那两个回环地址 + 路径含插件 id」（审计 L7）：
-         * 原先任何 origin 上只要路径里出现 `/plugins/` 与插件 id，就会被喂我们 APK 里的 bundle。
-         * 功能上无害，但属于「本机资源被无关页面引用」的松边界。
-         *
-         * 放在 companion 里：兜底的 `DetachedWebViewClient` 是**嵌套类**（刻意不持 Activity），
-         * 它只能调 companion 成员。
-         */
-        // ── 计量（2026-09-24，用户问「webview 的插入逻辑可以优化吗」）─────────────
-        // 优化前先把三件事量出来，否则全是猜：
-        //   · 拦截回调被调了多少次（它是**每个子资源请求**都会走一遍的路径）；
-        //   · bundle 被喂了几次（页面每次加载一次？还是多次？）；
-        //   · 每次喂花多久（热路径是从 APK assets 现读，兜底路径才是缓存的那份）。
-        internal val interceptCalls = java.util.concurrent.atomic.AtomicInteger(0)
-        internal val bundleServes = java.util.concurrent.atomic.AtomicInteger(0)
-
-        fun isPluginBundleUrl(u: String): Boolean {
-            // ⚠️ 顺序要紧：本函数被**每一个**子资源请求调用（前端壳的 JS/CSS/字体/图标…），
-            // 而 `Uri.parse` 每次都要分配并解析。先做两次零成本子串判断，只有疑似命中时才解析。
-            if (!u.contains("/plugins/") || !u.contains("$MOBILE_PLUGIN_ID/client.js")) return false
-            val uri = runCatching { android.net.Uri.parse(u) }.getOrNull() ?: return false
-            if (uri.host != "127.0.0.1") return false
-            return uri.port in SshTunnel.PORT_CANDIDATES
-        }
-
-        /** 隧道的两个回环 origin（与 [SshTunnel.PORT_CANDIDATES] 同源，别各写一份）。 */
-        fun tunnelOrigins(): Set<String> =
-            SshTunnel.PORT_CANDIDATES.map { "http://127.0.0.1:$it" }.toSet()
-
-        /**
-         * 读注入引导脚本（assets 单一来源），把占位符换成上面的常量。
-         *
-         * 脚本内容放在 `assets/plugins/mobile-bootstrap.js` 而不是这里的裸字符串：
-         * 验证 harness（scripts/ui-verify.mjs）必须与 App 执行**逐字相同**的引导逻辑，
-         * 两份副本一定会漂移。现在两边读同一份文件，只各自填占位符；常量是否一致由
-         * CI 不变量守着。
-         */
-        fun mobileBootstrapJs(assets: android.content.res.AssetManager): String =
-            assets.open("plugins/mobile-bootstrap.js").use { it.readBytes() }
-                .toString(Charsets.UTF_8)
-                .replace("{{ID}}", MOBILE_PLUGIN_ID)
-                .replace("{{URL}}", MOBILE_PLUGIN_URL)
-                .replace("{{REV}}", MOBILE_PLUGIN_REV)
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -524,63 +433,7 @@ class MainActivity : Activity() {
                 loadWithOverviewMode = true
                 useWideViewPort = true
             }
-            if (WebViewFeature.isFeatureSupported(WebViewFeature.DOCUMENT_START_SCRIPT)) {
-                // 引导脚本从 assets 读入（单一来源，与验证 harness 共用同一份文件）
-                val bootstrap = try {
-                    // 显式限定接收者：这里的 apply 块接收者是 WebView，不写全会在
-                    // 外层作用域里去找 assets，读起来容易误会。
-                    mobileBootstrapJs(this@MainActivity.assets)
-                } catch (e: Exception) {
-                    DiagLog.e(TAG, "读取 mobile-bootstrap.js 失败，移动端适配将不生效：${e.message}")
-                    null
-                }
-                if (bootstrap != null) {
-                    // origin 收窄（审计 L8）：原先 `setOf("*")` —— 引导脚本会在**任意**页面上
-                    // 执行（它只定义 __DSH_BOOT__ 的 setter，风险低，但没必要的宽）。
-                    // 同时把句柄记在 Application 上：WebView 是保活的，重建 Activity 时先移除旧的，
-                    // 免得同一个 WebView 上累积 N 份（= §六 B3）。句柄不随 Activity 销毁而移除 ——
-                    // 没有 Activity 时页面若重载，注入仍需生效。
-                    val app = application as DshApp
-                    runCatching { app.bootstrapRemover?.invoke() }
-                    val handler = WebViewCompat.addDocumentStartJavaScript(
-                        this, bootstrap, tunnelOrigins()
-                    )
-                    app.bootstrapRemover = { handler.remove() }
-                }
-            }
             webViewClient = object : WebViewClient() {
-                // 拦截手机端适配插件 bundle：返回 APK assets 里的客户端脚本
-                override fun shouldInterceptRequest(
-                    view: WebView?,
-                    request: android.webkit.WebResourceRequest?
-                ): android.webkit.WebResourceResponse? {
-                    interceptCalls.incrementAndGet()   // 同上：这条路径才是真正天天走的那条
-                    val u = request?.url?.toString() ?: return null
-                    if (!isPluginBundleUrl(u)) return null
-                    // 2026-09-24 修：这里原先**每次请求都** `assets.open(...).readBytes()` ——
-                    // 实测 123,235 B / 读盘 1~4ms，而缓存好的 `app.pluginBundleBytes`（by lazy）
-                    // 只用在那条几乎不跑的兜底路径上：缓存写在了错的那一边。
-                    // 现在热路径也走缓存；只有缓存取不到（assets 读失败过一次）时才回落到现读。
-                    val cached = app.pluginBundleBytes
-                    val t0 = android.os.SystemClock.elapsedRealtime()
-                    val bytes = cached
-                        ?: try {
-                            assets.open("plugins/dsh-handheld-mobile.js").use { it.readBytes() }
-                        } catch (e: Exception) { return null }
-                    DiagLog.i(TAG, "适配层 bundle：第 ${bundleServes.incrementAndGet()} 次喂给页面" +
-                        "（${if (cached != null) "缓存字节" else "现读 assets"}, ${bytes.size}B, " +
-                        "取字节 ${android.os.SystemClock.elapsedRealtime() - t0}ms, " +
-                        "累计拦截 ${interceptCalls.get()} 次）")
-                    return android.webkit.WebResourceResponse(
-                        "text/javascript", "utf-8", ByteArrayInputStream(bytes)
-                    ).apply {
-                        // 只补 Content-Length：长度已知，渲染进程不必按未知长度流式处理。
-                        // 刻意**不动**缓存语义（不加 Cache-Control/ETag）—— 拦截发生在 HTTP 缓存
-                        // 之前，加了也省不掉这次回调；而长缓存会把「忘记换 rev」的后果从
-                        // 「重启前一直是旧的」（1.0.53 真出过一次）放大成「清数据前一直是旧的」。
-                        setResponseHeaders(mapOf("Content-Length" to bytes.size.toString()))
-                    }
-                }
                 override fun onPageStarted(view: WebView?, url: String?, favicon: android.graphics.Bitmap?) {
                     // 新导航开始 → 清掉上一次的失败标记（它决定 onPageFinished 要不要隐藏覆盖层）
                     if (navFailed) DiagLog.i(TAG, "onPageStarted: 清掉上一次的导航失败标记")
@@ -2335,11 +2188,10 @@ class MainActivity : Activity() {
         // downloadListener 都是捕获 `this@MainActivity` 的匿名对象，而它们挂在
         // Application 保活的 WebView 上 —— 只换 context 的话，旧 Activity 依然不可回收，
         // 而且页面回调（onPageFinished → hideErrorPage() 等）会继续打到死实例上。
-        // 换成一个只持 Application 的兜底 client：页面在没有 Activity 时重载，
-        // 仍然要能从 assets 拿到适配层 bundle。
+        // 换成一个不持 Activity 的兜底 client（注入层移除后它已无事可做，只求不泄漏）。
         val wv = webView
         if (wv != null && app != null) {
-            wv.webViewClient = DetachedWebViewClient(app)
+            wv.webViewClient = WebViewClient()
             wv.webChromeClient = android.webkit.WebChromeClient()
             wv.setDownloadListener(null)
             DiagLog.i(TAG, "onDestroy: 已把 WebView 的三个 client 换成不持 Activity 的兜底实现")

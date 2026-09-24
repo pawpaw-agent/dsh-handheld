@@ -41,7 +41,7 @@ import com.dshhandheld.diag.DiagLog
  * ## 什么时候不该发
  *
  * 前台不发（用户正看着屏幕，响一声只会烦人）、开关关着不发、没授权不发 —— 三条判断都在
- * [DshApp.onPageMessage] 里，这里只管「怎么发」。
+ * [DshApp.onHostTurnStatus] 里，这里只管「怎么发」。
  */
 object Notifier {
 

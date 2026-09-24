@@ -28,8 +28,8 @@ GPLv3-only**（Termux `v0.118.1` 的 `termux-shared` 主许可；其 MIT 例外�
 完整核对见 `docs/terminal-rewrite-plan.md` 附录 B；7 个文件「哪几个被本地改过、
 为什么必须 vendoring」见 `docs/consolidation-audit.md` §4.1。
 
-另打包 Dropbear `dbclient` / `dropbearkey`（MIT 风格）。手机端适配层
-（`assets/plugins/dsh-handheld-mobile.js`）是本仓库自研，无第三方代码 —— 此前 vendored 的
+另打包 Dropbear `dbclient` / `dropbearkey`（MIT 风格）。**2026-09-25 起不再注入手机端适配层**
+（原 `assets/plugins/dsh-handheld-mobile.js` 已删除）。此前 vendored 的
 第三方 dsh-web-mobile 及其许可证已于 2026-09-13 一并删除。
 
 > **发布前待确认**：Apache-2.0 要求随附许可证文本，当前 APK 内没有 —— CI 把 dropbear 的

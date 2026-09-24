@@ -35,7 +35,7 @@ import java.util.concurrent.CopyOnWriteArrayList
  * 后台行为：**有前台服务**（[com.dshhandheld.app.TunnelService]，0.1.8 起）—— 进程不进
  * cached 队列，既不冻结也不容易被低内存杀手挑中，隧道看门狗因此有机会自愈。
  * 历史上这里写过「没有前台服务、完成通知改由服务端经微信推送」：那条路 2026-09-14
- * 已被 App 自己的任务完成通知取代（[Notifier] + 页面消息通道 [attachPageBridge]）。
+ * 已被 App 自己的任务完成通知取代（[Notifier] + Host 事件流）。
  */
 class DshApp : Application() {
 
@@ -83,177 +83,15 @@ class DshApp : Application() {
             // renderer 活下来 —— 真机实测**没有效果**（后台 6 分钟仍然一条心跳都没有），
             // 却让一个 renderer 进程长期不被 waive。通知现在由 [HarnessEventsClient] 从 Host 的
             // 权威状态拿到，不再依赖页面，所以这里已经撤掉。
-            attachPageBridge(view)
         }
     }
 
     // ── 页面 → App 的消息通道（任务完成通知的触发源）──────────────────────
     /**
-     * 注册 WebView 消息通道。
+     * 是否正在生成。
      *
-     * **只在这里注册一次**：WebView 是跨 Activity 保活的（见类注释），而
-     * `addWebMessageListener` 是**累加**的 —— 挂在 Activity 里注册，每次重建都会多一层
-     * 监听，同一条消息发 N 次、通知也发 N 条。
-     *
-     * 通道名与页面约定：`window.dshNative.postMessage(JSON.stringify({type, ...}))`。
-     * 允许的 origin 只有隧道实际会用的那两个（`SshTunnel.PORT_CANDIDATES`）——
-     * 这是个**只进不出**的通道（App 不向页面发指令），但也没必要让任意 origin 都能进来。
-     */
-    private fun attachPageBridge(view: WebView) {
-        if (!WebViewFeature.isFeatureSupported(WebViewFeature.WEB_MESSAGE_LISTENER)) {
-            DiagLog.w(TAG, "WebView 不支持 WEB_MESSAGE_LISTENER，任务完成通知不会触发")
-            return
-        }
-        val origins = SshTunnel.PORT_CANDIDATES.map { "http://127.0.0.1:$it" }.toSet()
-        try {
-            WebViewCompat.addWebMessageListener(
-                view, PAGE_BRIDGE, origins
-            ) { _, message, origin, isMainFrame, _ ->
-                if (!isMainFrame) return@addWebMessageListener
-                onPageMessage(message.data, origin?.toString())
-            }
-            DiagLog.i(TAG, "已注册页面消息通道 $PAGE_BRIDGE（允许 origin：$origins）")
-        } catch (e: Exception) {
-            DiagLog.w(TAG, "注册页面消息通道失败：${e.javaClass.simpleName}: ${e.message}")
-        }
-    }
-
-    /**
-     * 页面来的一条消息。
-     *
-     * 目前只有一种：`{"type":"turn-done","title":"<会话标题>","ms":<这一轮跑了多久>}` ——
-     * 由 `assets/plugins/dsh-handheld-mobile.js` 在「深度求索中…」消失时发出。
-     *
-     * 三道闸门决定要不要真的弹通知：用户开关 → 是否在前台 → 系统权限（后者在 [Notifier]）。
-     */
-    private fun onPageMessage(data: String?, origin: String?) {
-        if (data.isNullOrBlank()) return
-        val json = runCatching { org.json.JSONObject(data) }.getOrNull()
-        if (json == null) {
-            DiagLog.w(TAG, "页面消息不是 JSON（来自 $origin）：${data.take(80)}")
-            return
-        }
-        when (json.optString("type")) {
-            "turn-start" -> {
-                pageBusy = true
-                lastTurnTitle = json.optString("title").takeIf { it.isNotBlank() } ?: lastTurnTitle
-                // 认下「这一轮属于哪支会话」（见 syncEventsClient）：权柄在事件流那边 ——
-                // 页面被系统冻住时它不会报结束，靠这条把两路信号对上。
-                watchSession = lastRunningSession
-                pendingWatch = watchSession == null
-                turnNotified = false   // 新一轮：允许再通知一次（去重按轮算）
-                DiagLog.i(TAG, "页面报告：一轮生成开始（pageBusy=true，watch=${watchSession ?: "待对齐"}）")
-            }
-            "turn-done" -> {
-                pageBusy = false
-                // 页面这条路已经报过了：把事件流那边的等待清掉，免得同一轮弹两条通知。
-                watchSession = null
-                pendingWatch = false
-                val title = json.optString("title").takeIf { it.isNotBlank() }
-                val ms = json.optLong("ms", 0L)
-                // 页面侧现在**一律上报结束**（含 <1.5s 的闪现，带 short=true）——只上报「开始」
-                // 会让 pageBusy 永远卡在 true，后台的 pauseTimers 省电设计就静默失效了
-                // （2026-09-17 审计 H8）。太短的一轮由这里决定不打扰用户。
-                if (json.optBoolean("short", false)) {
-                    DiagLog.i(TAG, "页面报告：一轮生成结束（${ms}ms），太短，不通知")
-                    return
-                }
-                val on = prefs.getBoolean(PREF_NOTIF_TURN, false)
-                val foreground = visibleActivities.get() > 0
-                DiagLog.i(TAG, "页面报告：一轮生成结束（${ms}ms，标题=$title，开关=$on，前台=$foreground）")
-                when {
-                    !on -> Unit
-                    foreground -> DiagLog.i(TAG, "App 在前台，不发通知")
-                    // 真机实测：事件流那条路只早到 138ms，两条路会各发一条（用户会看到两次提醒）。
-                    // 去重按「轮」算 —— turn-start 时复位，谁先到谁发。
-                    turnNotified -> DiagLog.i(TAG, "这一轮已经通知过（事件流先到），不重复发")
-                    else -> {
-                        turnNotified = true
-                        Notifier.turnDone(this, title)
-                    }
-                }
-            }
-            "layout-diag" -> {
-                // 顶部留白到底是谁的：header/标题行/页签/正文起点的 rect 与计算样式。
-                DiagLog.i(TAG, "布局诊断：${json}")
-            }
-            "stats-diag" -> {
-                // 统计行的真实几何（scrollWidth/clientWidth/字号）：调参不再靠估。
-                DiagLog.i(TAG, "统计行几何：${json}")
-            }
-            "tap-trace" -> {
-                // 右侧栏/顶部区域的点击追踪：命中谁、在不在面板里、面板左上角在哪。
-                DiagLog.i(TAG, "点击追踪：${json}")
-            }
-            "right-probe" -> {
-                // 右侧栏展开时顶部条带的命中探针（谁在那个区域吃掉了点击）。
-                DiagLog.i(TAG, "右侧栏探针：${json}")
-            }
-            "perf" -> {
-                // 插件自报的耗时（只在超过阈值时发）——回答「新增的适配代码有没有拖慢页面」。
-                DiagLog.i(TAG, "页面耗时：${json}")
-            }
-            "panel-blockers" -> {
-                // 右侧栏展开时，压在它工具栏之上的元素（被我们临时关掉命中的那些）。
-                DiagLog.i(TAG, "面板遮挡：${json}")
-            }
-            "topspace-diag" -> {
-                // 三处「第一行」的祖先链（类名/位置/padding）——「侧边栏顶部空间比会话页大」
-                // 这类问题的判据，光读 CSS 推不出来（已经推错过一次）。
-                DiagLog.i(TAG, "顶部空间：${json}")
-            }
-            "tap-diag" -> {
-                // 手指档体检：可点击元素里有多少不达 44×44、多少「隐形但仍吃点击」。
-                DiagLog.i(TAG, "点击体检：${json}")
-            }
-            "ui-recovery" -> {
-                // 页面侧的「连接 / 会话列表」复健动作（研究结论的落地证据）：补拉基线、重连、体检。
-                DiagLog.i(TAG, "界面复健：${json}")
-            }
-            "side-diag" -> {
-                // 左右内缩到底谁贡献的：滚动体的 margin/padding/滚动条槽 + 实际滚动条宽度。
-                DiagLog.i(TAG, "对称性诊断：${json}")
-            }
-            "viewport-diag" -> {
-                // 引导脚本报的 viewport 事实（innerH/screen 高/dpr/meta）：用来确认
-                // 「viewport-fit=cover 到底生效没有」——顶部那 34px 就是这么定案的。
-                DiagLog.i(TAG, "viewport 诊断：${json}")
-            }
-            "turn-tick" -> {
-                // 每 5 分钟一条的存活探针：JS 到底有没有在跑（renderer 被冻就没有这一条）。
-                // 2026-09-17 那几次「后台收不到通知」就是靠它定性的，别删。
-                DiagLog.i(TAG, "页面存活探针：${json}")
-            }
-            "turn-state" -> {
-                // 诊断心跳：页面每隔 60s（且这期间有过 DOM 变化）自报一次「它看见什么」。
-                // 它是「一次都没命中」那种失败形态的唯一证据，所以只记日志、不参与通知。
-                // 审计 M21 的答案就是靠它拿到的：两份 _turnStatus 在 rects/visibility 上
-                // 完全一样，只有几何能区分。
-                DiagLog.i(TAG, "页面心跳：${json}")
-            }
-            "needs-input" -> {
-                val title = json.optString("title").takeIf { it.isNotBlank() }
-                val key = json.optString("key")
-                val on = prefs.getBoolean(PREF_NOTIF_TURN, false)
-                val foreground = visibleActivities.get() > 0
-                DiagLog.i(TAG, "页面报告：在等你选择（key=$key，标题=$title，开关=$on，前台=$foreground）")
-                when {
-                    !on -> Unit
-                    foreground -> DiagLog.i(TAG, "App 在前台，不发通知")
-                    else -> Notifier.needsInput(this, title)
-                }
-            }
-            // 认不出的消息也把**内容**记下来：适配层的诊断心跳（turn-state）走的就是这条。
-            // 2026-09-17 那次「完成后没有收到弹窗提醒」，日志里只有「一条 turn-done 都没有」
-            // 可查 —— 有它就能直接看到观察者当时看到几个候选节点。
-            else -> DiagLog.w(TAG, "未知的页面消息：${json.toString().take(200)}")
-        }
-    }
-
-    /**
-     * 页面是否正在生成。
-     *
-     * 由页面的 `turn-start` / `turn-done` 消息维护；[MainActivity.onPause] 用它决定要不要
+     * 2026-09-25 起**唯一来源是 Host 事件流**（[HarnessEventsClient] → [onHostTurnStatus]）：
+     * 注入层已移除，页面不再自报回合状态。[MainActivity.onPause] 用它决定要不要
      * `pauseTimers()` —— 生成期间暂停定时器会把「结束了」这个信号一起推迟，通知就永远不会响。
      */
     @Volatile
@@ -372,29 +210,29 @@ class DshApp : Application() {
     /** 「任务完成」通知开关是否开着（页面在后台是否必须保持活着由它决定，见 MainActivity.onPause）。 */
     fun turnNotifyEnabled(): Boolean = prefs.getBoolean(PREF_NOTIF_TURN, false)
 
-    /** 订阅 Host 权威回合状态的客户端（见 [HarnessEventsClient] 的类注释）。 */
+    /**
+     * 订阅 Host 权威回合状态的客户端（见 [HarnessEventsClient] 的类注释）。
+     *
+     * 2026-09-25 注入层移除后，这条事件流是「一轮在不在跑」的**唯一**来源 ——
+     * 它同时负责 [pageBusy]（决定后台要不要 pauseTimers）与任务完成通知。
+     */
     private var eventsClient: HarnessEventsClient? = null
     private var eventsBase: String? = null
 
-    /** 事件流最近一次报告「在跑」的会话（turn-start 时用它把两路信号对上）。 */
-    @Volatile private var lastRunningSession: String? = null
-    /** 正在等哪一支会话跑完；null 表示「页面还没报告开始」或「已经报过了」。 */
-    @Volatile private var watchSession: String? = null
-    /** 页面已经报了开始，但事件流还没告诉我们「谁在跑」—— 等下一帧 running=true 认领。 */
-    @Volatile private var pendingWatch = false
-    /** 最近一次 turn-start 带的标题，给事件流那条通知用。 */
-    @Volatile private var lastTurnTitle: String? = null
-    /** 这一轮是否已经发过通知（两条路径都会到，谁先到谁发）。 */
-    @Volatile private var turnNotified = false
+    /** 事件流报告的「正在跑」的会话；null = 当前没有在跑的一轮。 */
+    @Volatile private var runningSession: String? = null
 
     /**
-     * 按「通知开关 + 当前隧道」同步事件订阅。
+     * 按当前隧道同步事件订阅。
      *
      * 三个入口都要调它：隧道起来/关掉、用户改开关、进程重建。独立成一处是为了不出现
      * 「隧道换了端口而订阅还指着旧端口」这种静默失效（3080 ⇄ 13080）。
+     *
+     * **不再按通知开关决定订不订**：开关只该管「要不要打扰用户」，而 [pageBusy] 关系到
+     * 后台会不会被 pauseTimers 冻住 —— 那个判断与开关无关（注入层在时是页面自报，
+     * 现在只剩这一条路）。
      */
     fun syncEventsClient() {
-        if (!turnNotifyEnabled()) { stopEventsClient(); return }
         val base = liveTunnel()?.localBaseUrl
         if (base == null) { stopEventsClient(); return }
         if (eventsClient != null && eventsBase == base) return
@@ -413,58 +251,26 @@ class DshApp : Application() {
     }
 
     /**
-     * Host 报告的权威回合状态。页面被冻时它是**唯一**还能到达的「跑完了」信号。
+     * Host 报告的权威回合状态 —— 注入层移除后它自己就是完整的一路。
      */
     private fun onHostTurnStatus(sessionId: String, running: Boolean) {
         if (running) {
-            lastRunningSession = sessionId
-            if (pendingWatch) {
-                watchSession = sessionId
-                pendingWatch = false
-                DiagLog.i(TAG, "事件流：认领本轮会话 $sessionId")
-            }
+            if (runningSession == sessionId) return
+            runningSession = sessionId
+            pageBusy = true
+            DiagLog.i(TAG, "事件流报告回合开始（session=$sessionId，pageBusy=true）")
             return
         }
-        if (watchSession == null && !pendingWatch) return   // 页面没报过开始 → 不由事件流发通知
-        val watched = watchSession
-        if (watched != null && watched != sessionId) return // 别的会话结束了，与我们无关
-        watchSession = null
-        pendingWatch = false
-        // 页面被冻时它自己不会报结束：这里顺手把 pageBusy 复位（省电那套依赖它）。
+        if (runningSession != sessionId) return
+        runningSession = null
         pageBusy = false
         val foreground = visibleActivities.get() > 0
         DiagLog.i(TAG, "事件流报告回合结束（session=$sessionId，前台=$foreground）")
         if (!turnNotifyEnabled()) return
         if (foreground) { DiagLog.i(TAG, "App 在前台，不发通知"); return }
-        if (turnNotified) { DiagLog.i(TAG, "这一轮已经通知过（页面先到），不重复发"); return }
-        turnNotified = true
-        Notifier.turnDone(this, lastTurnTitle)
-    }
-
-    /**
-     * 适配层 bundle 的字节（读一次，缓存）。
-     *
-     * 给 [MainActivity.DetachedWebViewClient] 用：Activity 销毁后 WebView 仍由本 Application
-     * 保活，页面若在这期间重载，`shouldInterceptRequest` 还得把 bundle 喂出去 ——
-     * 而那个 client 刻意不持 Activity，只能从 Application 拿（审计 M1）。
-     */
-    /**
-     * 「移除已注入的那份 document-start 脚本」的动作（审计 L8/B3）。
-     *
-     * WebView 是 Application 保活的，所以「注入了几份」这件事也必须跟它同寿命记在一处：
-     * 记在 Activity 上就会随重建丢引用、于是每重建一次就多一份脚本在同一个 WebView 上累积。
-     *
-     * 存**动作**而不是句柄：`WebViewCompat.addDocumentStartJavaScript` 返回的句柄类型名
-     * 在 androidx.webkit 各版本里变过（写死它会让整个 App 编译不过 —— CI 实测踩过一次），
-     * 由调用方就地捕获、这里只负责在下次注入前把它调用掉。
-     */
-    @Volatile
-    var bootstrapRemover: (() -> Unit)? = null
-
-    val pluginBundleBytes: ByteArray? by lazy {
-        runCatching {
-            assets.open("plugins/dsh-handheld-mobile.js").use { it.readBytes() }
-        }.onFailure { DiagLog.w(TAG, "读取适配层 bundle 失败：${it.message}") }.getOrNull()
+        // 标题拿不到了：它原先由页面在 turn-start 时带过来（注入层已移除）。
+        // 通知退回通用文案 —— 为一条标题保留「页面带标题」的通道不值得。
+        Notifier.turnDone(this, null)
     }
 
     private fun notifyTunnelAlive(alive: Boolean) {
@@ -739,14 +545,11 @@ class DshApp : Application() {
         /** 新拨号前最多等多久让上一次「断开」把旧 owner 收完（正常 <100ms）。 */
         private const val CLOSE_JOIN_MS = 5_000L
 
-        /** 页面注入的桥对象名：页面侧写 `window.dshNative.postMessage(...)`。 */
-        private const val PAGE_BRIDGE = "dshNative"
-
         /**
          * 「任务完成时提醒我」开关的偏好键。
          *
          * 定义在这里（而不是 MainActivity）是因为**读写分居两处**：开关在连接屏，
-         * 判断在 [onPageMessage]。键名写两遍就会漂移成「开了没反应」。
+         * 判断在 [onHostTurnStatus]。键名写两遍就会漂移成「开了没反应」。
          */
         const val PREF_NOTIF_TURN = "notif_turn_done"
 

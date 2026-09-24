@@ -17,85 +17,6 @@ jobs:
   # data-composer-input, …) which have NO version contract: dsh evolves on its
   # own, the plugin is vendored and pinned. If dsh renames one, the adaptation
   # silently breaks and you only find out on the phone.
-  #
-  # This job asserts the vendored plugin still reads exactly the hooks declared
-  # in the committed contract, so re-vendoring cannot quietly widen our
-  # dependency on unverified hooks. It is static (Node only, no browser, no
-  # dsh install) and runs in seconds.
-  #
-  # The FULL check — proving each declared hook actually exists in the installed
-  # dsh frontend — needs dsh present, so it runs on the machine that has dsh:
-  #   node scripts/check-mobile-hooks.mjs
-  # Run it after every dsh upgrade. See docs/mobile-ui-verification.md.
-  mobile-contract:
-    name: Mobile adaptation contract
-    runs-on: ubuntu-latest
-
-    steps:
-      - uses: actions/checkout@v7
-
-      # 先做一次语法检查：注入的 bundle 是**模板字面量**拼出来的（CSS 那段在 `` ` `` 里），
-      # 注释里混进一个反引号就会把模板提前结束、语法直接坏 —— 而这个错在「读文本」的
-      # 契约检查里看不出来（2026-09-18 本人踩过三次）。node --check 一秒就能拦住。
-      - name: Syntax-check the injected bundles
-        run: |
-          node --check android/app/src/main/assets/plugins/dsh-handheld-mobile.js
-          node --check android/app/src/main/assets/plugins/mobile-bootstrap.js
-          # 验证脚本本身也过一遍：它们要 adb 才能真跑（CI 里跑不了），但语法错是能一秒拦住的。
-          for f in scripts/*.mjs; do node --check "$f"; done
-          echo "✓ 注入 bundle 与 scripts/*.mjs 语法通过"
-
-      - name: Verify plugin ⇄ contract agreement
-        run: node scripts/check-mobile-hooks.mjs --contract
-
-      - name: Verify the bootstrap template is the single source
-        run: |
-          # The injection bootstrap lives in assets and is read by BOTH the app
-          # (MainActivity.mobileBootstrapJs) and the verification harness. If it
-          # drifted back into a Kotlin raw string the harness would test
-          # something the app does not run.
-          test -f android/app/src/main/assets/plugins/mobile-bootstrap.js \
-            || { echo "::error::mobile-bootstrap.js 缺失"; exit 1; }
-          if grep -q 'Object.defineProperty(window, "__DSH_BOOT__"' \
-               android/app/src/main/java/com/dshhandheld/app/MainActivity.kt; then
-            echo "::error::MainActivity 里又出现了内联的注入脚本 —— 必须只从 assets 读取"
-            exit 1
-          fi
-          # 光有否定断言不够（审计 M13）：把「读资产 / 注入脚本」那两行删掉，上面两条都不会红，
-          # 而适配注入就静默消失了。补正向断言。
-          grep -q 'assets.open("plugins/mobile-bootstrap.js")' \
-            android/app/src/main/java/com/dshhandheld/app/MainActivity.kt \
-            || { echo "::error::MainActivity 不再从 assets 读 mobile-bootstrap.js"; exit 1; }
-          grep -q 'addDocumentStartJavaScript' \
-            android/app/src/main/java/com/dshhandheld/app/MainActivity.kt \
-            || { echo "::error::MainActivity 不再注入引导脚本（addDocumentStartJavaScript 消失）"; exit 1; }
-          echo "✓ 注入脚本只有 assets 一份，且 App 确实在读它、注入它"
-
-      - name: Verify nothing CI-only ships inside the APK
-        run: |
-          # assets/ 会被**整个**打进 APK。这里放的东西必须是运行时真正需要的，
-          # 否则每个用户都会下载到一份只对 CI 有意义的文件。
-          # 真实教训：契约文件曾被放在 assets/plugins/ 下，随 0.1.4 发布包一起发了出去。
-          #
-          # 审计 M13：原先只枚举 assets/plugins/ 一个子目录（注释说的却是整个 assets/），
-          # 且 `|| true` 会把 ls 失败一起吞掉 —— 现在对整棵 assets/ 做白名单，并断言文件数非零。
-          allowed='plugins/dsh-handheld-mobile\.js|plugins/mobile-bootstrap\.js'
-          found=$(cd android/app/src/main/assets && find . -type f | sed 's|^\./||' | sort)
-          total=$(printf '%s\n' "$found" | grep -c . || true)
-          if [ "$total" -eq 0 ]; then
-            echo "::error::assets/ 里一个文件都没有 —— 这条检查空转了"
-            exit 1
-          fi
-          unexpected=$(printf '%s\n' "$found" | grep -vEx "$allowed" || true)
-          if [ -n "$unexpected" ]; then
-            echo "::error::assets/ 里有非运行时文件（会被打进 APK）：$unexpected"
-            exit 1
-          fi
-          echo "✓ assets/ 只含运行时文件（$total 个）"
-
-  # Terminal conformance gate: proves the differential test bed still works.
-  # Runs first and needs no Android SDK — it is pure JVM, so it finishes in seconds
-  # and a failure here means the corpus or the harness rotted, not the app.
   conformance:
     name: Terminal conformance harness
     runs-on: ubuntu-latest
@@ -221,7 +142,7 @@ jobs:
     runs-on: ubuntu-latest
     # Gate the artifact on the terminal harness: when it fails, terminal behaviour in
     # this tree is unverified, so there is no point producing an APK from it.
-    needs: [build-dropbear, conformance, mobile-contract]
+    needs: [build-dropbear, conformance]
 
     steps:
       - uses: actions/checkout@v7
@@ -396,7 +317,7 @@ jobs:
           # artifact 路径写错时默认只 warning（审计 L10）——这里要它直接失败。
           if-no-files-found: error
 
-      # 另出一份 **debug** 包，专供真机验证移动端适配。
+      # 另出一份 **debug** 包，专供真机排查（注入层已于 2026-09-25 移除）。
       #
       # 为什么需要它：MainActivity 只在 debuggable 时开 `setWebContentsDebuggingEnabled`，
       # 而 release 包必须保持不可调试（上面那步硬校验）。于是「真机上页面到底被适配成什么样」
