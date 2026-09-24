@@ -1650,7 +1650,10 @@ window.__ModuleLoader__.load({
         observer.observe(document.documentElement, { childList: true, subtree: true });
         // 跳秒是 characterData 变更 —— `childList` 观察者收不到，所以必须有一条轮询来驱动
         // 「标签还在跳吗」这个判据。1 秒一次，每次只读一个节点的 textContent（不碰布局）。
-        var tickPoll = window.setInterval(function () { checkTimed(); }, 1000);
+        var tickPoll = window.setInterval(function () {
+          try { window.__dshHandheldTurnTicks = (window.__dshHandheldTurnTicks || 0) + 1; } catch (e) { /* 诊断 */ }
+          checkTimed();
+        }, 1000);
         // 定时器也跑 check()：mutation 只是**触发源**之一，定时复查能在「DOM 变了但回调被合并/
         // 漏掉」时兜住；它同时是存活探针的载体（renderer 被冻时这条就没了）。
         var tickTimer = window.setInterval(function () {
@@ -2475,15 +2478,19 @@ window.__ModuleLoader__.load({
             for (var i = 0; i < all.length; i++) {
               if (all[i].dataset && all[i].dataset.handheldCss) { alive = all[i]; break; }
             }
-            if (alive === null && __healTag !== null && document.head) {
-              document.head.appendChild(__healTag);
-              window.__dshHandheldHeals = (window.__dshHandheldHeals || 0) + 1;
-            } else if (alive !== null) {
-              __healTag = alive;
+            if (alive !== null) { __healTag = alive; return; }
+            // 表没了就自己造一张 —— 样式文本由**这里**持有，不依赖那个已经随 fiber 一起
+            // 被拆掉的 effect（第一版就栽在这：钩子定义在 effect 之后，看门狗手里是空的）。
+            if (__healTag === null || !__healTag.isConnected) {
+              __healTag = document.createElement("style");
+              __healTag.dataset.handheldCss = "dsh-handheld-mobile/mobile.css";
+              __healTag.textContent = CSS;
             }
+            document.head.appendChild(__healTag);
+            window.__dshHandheldHeals = (window.__dshHandheldHeals || 0) + 1;
           } catch (e) { /* 自愈失败不该影响页面 */ }
         };
-        window.__dshHandheldHealHook = function (tag) { __healTag = tag; };
+        window.setTimeout(__healKeep, 300);
         window.setInterval(__healKeep, 2000);
       } catch (e) { /* 诊断永远不该影响主流程 */ }
 
@@ -2536,6 +2543,8 @@ window.__ModuleLoader__.load({
             what: "env-diag",
             stage: stage,
             heals: window.__dshHandheldHeals || 0,
+            turnTicks: window.__dshHandheldTurnTicks || 0,
+            styleAdds2: window.__dshHandheldStyleAdds || 0,
             aliveCss: aliveCss,
             uiToggle: count('[data-handheld="toggle"]'),
             uiFab: count('[data-handheld="fab"]'),
