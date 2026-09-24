@@ -132,95 +132,12 @@ class MainActivity : Activity() {
     // `NotReadableError: Could not start audio source`；修好后自测返回 `ok:`。
     //
     // 顺带否掉两个假设（都真机测过）：
-    //   · 不是设备/WebView 版本问题 —— 设备 1（Android 16/WebView 151）与
-    //     设备 2（Android 13/WebView 153）失败形态完全一样；
+    //   · 不是设备/WebView 版本问题 —— 设备 1（Android 16 / WebView 151）与
+    //     设备 2（Android 13 / WebView 153）的失败形态完全一样；
     //   · 不需要切 MODE_IN_COMMUNICATION —— 基线（MODE_NORMAL）就成功了。那套切换
-    //     已撤掉：通信模式是全设备的，会把媒体声音改走听筒，白担风险。
+    //     已撤掉：通信模式是**全设备**的，会把媒体声音改走听筒，白担风险。
     //
     // 验证用的自动探测/自测也一并撤掉（它们会在开机时抓一次麦克风，且刷日志）。
-
-    /** 页面那次麦克风请求：等系统权限结果回来再 grant/deny（见 onPermissionRequest）。 */
-    private var pendingMicRequest: android.webkit.PermissionRequest? = null
-
-    // ── 语音输入（2026-09-25）─────────────────────────────────────────────
-    //
-    // 音频模式：Chromium 每次 getUserMedia 都会紧跟着报
-    //   `audio_manager_android.cc Unable to select communication device!`
-    // 然后以 NotReadableError 拒绝。上一轮试过切 MODE_IN_COMMUNICATION，但**没有回读确认**
-    // （runCatching 把设置失败吞了），所以那次实验不算数。这次切完回读，并把保持时间拉到 120s。
-    private val audioModeRestore = Runnable { setCommAudioMode(false) }
-
-    /**
-     * 开机自动 A/B 探测（2026-09-25）：不再依赖「点中那颗按钮」——设备 2 上它是灰的，
-     * 手点根本触发不到。两次探测拉开 8 秒：
-     *   ① baseline  —— 不切模式，预期 NotReadableError（对照）
-     *   ② comm-mode —— 切 MODE_IN_COMMUNICATION 后再来一次
-     * 两次的 DOMException 逐字进日志，音频模式那条假设当场就有答案。
-     */
-    private var micProbeDone = false
-
-    private fun micProbe() {
-        if (micProbeDone) return
-        micProbeDone = true
-        DiagLog.i(TAG, "麦克风探测：开始（baseline → comm-mode）")
-        micSelfTest("baseline")
-        ui.postDelayed({
-            setCommAudioMode(true)
-            micSelfTest("comm-mode")
-        }, 8000)
-        ui.postDelayed({ setCommAudioMode(false) }, 30_000)
-    }
-
-    private fun setCommAudioMode(on: Boolean) {
-        val am = getSystemService(Context.AUDIO_SERVICE) as? android.media.AudioManager ?: return
-        val want = if (on) android.media.AudioManager.MODE_IN_COMMUNICATION
-                   else android.media.AudioManager.MODE_NORMAL
-        val before = am.mode
-        if (before == want) { DiagLog.i(TAG, "音频模式：已是 $want，无需切换"); return }
-        val err = runCatching { am.mode = want }.exceptionOrNull()
-        // 回读：上轮的教训是「只记意图不记结果」等于没测。
-        DiagLog.i(TAG, "音频模式：$before → 目标 $want，实际 ${am.mode}" +
-            (err?.let { "（异常 ${it.javaClass.simpleName}）" } ?: ""))
-    }
-
-    //
-    // 已确认并修好的：WebView 的权限链（清单 RECORD_AUDIO + 运行时申请 +
-    // onPermissionRequest 放行）。修之前页面直接报「麦克风权限未开启」。
-    //
-    // **仍未解决**：权限放行后 getUserMedia 依然以
-    //   NotReadableError: Could not start audio source
-    // 失败（App 侧自测的原始读数，见 [micSelfTest]）。已排除：权限（appops=foreground）、
-    // 全局传感器隐私（未开）、麦克风被占用（录音活动为空）、音频模式（试过切
-    // MODE_IN_COMMUNICATION，chromium 仍报 Unable to select communication device —— 那条
-    // 是噪音，不是根因）。剩下的嫌疑在 WebView 的音频采集本身（设备 2 的 WebView 是 153，
-    // 这台是 151，值得对照）。
-    //
-    // 音频模式的尝试已撤掉：无效，且通信模式是全设备的（会把媒体声音改走听筒）。
-
-    private var micSelfTestAt = 0L
-
-    private fun micSelfTest(tag: String) {
-        val wv = webView ?: return
-        // 防重入：自测自己会触发 onPermissionRequest，若在那里再调一次就是死循环
-        //（真机踩过：日志被 "ok:" 刷屏几百条）。
-        val now = android.os.SystemClock.elapsedRealtime()
-        if (now - micSelfTestAt < 10_000) return
-        micSelfTestAt = now
-        val js = "(function(){window.__micTest='pending';" +
-            "if(!navigator.mediaDevices||!navigator.mediaDevices.getUserMedia){window.__micTest='no-api';return;}" +
-            "navigator.mediaDevices.getUserMedia({audio:true}).then(function(s){" +
-            "var t=s.getAudioTracks()[0];window.__micTest='ok:'+(t?t.label:'no-track');" +
-            "s.getTracks().forEach(function(x){x.stop()});" +
-            "}).catch(function(e){window.__micTest='err:'+e.name+':'+e.message});})()"
-        runCatching { wv.evaluateJavascript(js, null) }
-        ui.postDelayed({
-            runCatching {
-                wv.evaluateJavascript("window.__micTest") { r ->
-                    DiagLog.i(TAG, "麦克风自测[$tag]：$r")
-                }
-            }
-        }, 3000)
-    }
 
     private var statusView: TextView? = null
     private var sshKeyPathInput: EditText? = null
