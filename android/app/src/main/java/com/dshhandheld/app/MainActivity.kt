@@ -126,6 +126,25 @@ class MainActivity : Activity() {
 
     // ── 语音输入（2026-09-25）─────────────────────────────────────────────
     //
+    // 音频模式：Chromium 每次 getUserMedia 都会紧跟着报
+    //   `audio_manager_android.cc Unable to select communication device!`
+    // 然后以 NotReadableError 拒绝。上一轮试过切 MODE_IN_COMMUNICATION，但**没有回读确认**
+    // （runCatching 把设置失败吞了），所以那次实验不算数。这次切完回读，并把保持时间拉到 120s。
+    private val audioModeRestore = Runnable { setCommAudioMode(false) }
+
+    private fun setCommAudioMode(on: Boolean) {
+        val am = getSystemService(Context.AUDIO_SERVICE) as? android.media.AudioManager ?: return
+        val want = if (on) android.media.AudioManager.MODE_IN_COMMUNICATION
+                   else android.media.AudioManager.MODE_NORMAL
+        val before = am.mode
+        if (before == want) { DiagLog.i(TAG, "音频模式：已是 $want，无需切换"); return }
+        val err = runCatching { am.mode = want }.exceptionOrNull()
+        // 回读：上轮的教训是「只记意图不记结果」等于没测。
+        DiagLog.i(TAG, "音频模式：$before → 目标 $want，实际 ${am.mode}" +
+            (err?.let { "（异常 ${it.javaClass.simpleName}）" } ?: ""))
+    }
+
+    //
     // 已确认并修好的：WebView 的权限链（清单 RECORD_AUDIO + 运行时申请 +
     // onPermissionRequest 放行）。修之前页面直接报「麦克风权限未开启」。
     //
@@ -573,6 +592,9 @@ class MainActivity : Activity() {
                         android.content.pm.PackageManager.PERMISSION_GRANTED
                     ) {
                         DiagLog.i(TAG, "页面权限请求：放行麦克风（origin=$origin）")
+                        setCommAudioMode(true)
+                        ui.removeCallbacks(audioModeRestore)
+                        ui.postDelayed(audioModeRestore, 120_000)
                         request.grant(arrayOf(android.webkit.PermissionRequest.RESOURCE_AUDIO_CAPTURE))
                         micSelfTest()
                         return
@@ -2338,6 +2360,9 @@ class MainActivity : Activity() {
         val busy = (application as? DshApp)?.pageBusy == true
         if (busy) DiagLog.i(TAG, "onPause: 页面正在生成，保留定时器（任务完成通知依赖它）")
         else webView?.pauseTimers()
+        // 退到后台别占着通信模式（它会把全设备的媒体声音改走听筒）。
+        ui.removeCallbacks(audioModeRestore)
+        setCommAudioMode(false)
     }
 
     @Deprecated("Deprecated in Java")
