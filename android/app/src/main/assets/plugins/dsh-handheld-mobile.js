@@ -1854,6 +1854,13 @@ window.__ModuleLoader__.load({
           var slowPosted = 0;
           var lastScan = 0;
           var wasOpen = false;
+          // 轮转采样（rev 1.0.68）：一次 elementsFromPoint 就是一次**强制布局**，原来每次扫
+          // 3 行 × 4 列 = 12 次，真机实测 5.3~17.2ms。采样点一个不少，只是把它们摊到时间上：
+          // 开合瞬间（justToggled）扫满 3 行，稳态每 2 秒只扫 1 行 → 一次扫描只有 1 次强制布局，
+          // 三行轮完仍是一个 6 秒内的完整覆盖。
+          var fullScan = true;
+          var scanCursor = 0;
+          var cycleTags = [];
           var panelEl = null;
           var getPanel = function () {
             // 面板元素在一段会话里是稳定的：缓存它，省掉每次 sync 的一次全树属性选择器遍历。
@@ -1915,6 +1922,7 @@ window.__ModuleLoader__.load({
               return;
             }
             lastScan = nowTs;
+            if (justToggled) fullScan = true;   // 刚打开/刚收起：这一轮扫满，别让用户等轮转
             // 面板工具栏那条带子（实测 CSS y40–68）：取 3×4 个点问「谁在最上面」。
           //
           // ⚠️ 判据不能用「面板之外的才算遮挡」—— 真机读数（rev 1.0.58）显示每个取样点上
@@ -1933,10 +1941,12 @@ window.__ModuleLoader__.load({
           var ys = [top + 44, top + 55, top + 66];
           var xs = [0.08, 0.35, 0.6, 0.92];
           var found = [];
-          for (var i = 0; i < ys.length; i++) {
+          var rows = fullScan ? ys.length : 1;
+          var rowBase = fullScan ? 0 : scanCursor % ys.length;
+          for (var i = 0; i < rows; i++) {
+            var y = Math.round(ys[(rowBase + i) % ys.length]);
             for (var k = 0; k < xs.length; k++) {
               var x = Math.round(window.innerWidth * xs[k]);
-              var y = Math.round(ys[i]);
               var els = document.elementsFromPoint ? document.elementsFromPoint(x, y) : [];
               // 目标 = 最上层那个「面板内的可交互元素」（或面板根）
               var stop = els.length;
@@ -1966,6 +1976,15 @@ window.__ModuleLoader__.load({
               }
             }
           }
+          scanCursor++;
+          // 每轮到一个新周期（采样行回到第 0 行）才重开累计 —— 这样 `key` 的语义仍是
+          // 「上一次完整覆盖里见到的遮挡」，与改动前（每次扫满 3 行看一次）等价；
+          // 否则单行扫描会让 key 每 2 秒变一次，日志被刷爆。
+          if (rowBase === 0) cycleTags = [];
+          for (var q = 0; q < found.length; q++) {
+            if (cycleTags.indexOf(found[q]) < 0) cycleTags.push(found[q]);
+          }
+          fullScan = false;
           window.__dshHandheldPeOff = marked.length;
           // 自证开销（用户问过「现在 web 性能会不会有问题」）：这条 effect 每 200ms 最多算一次，
           // 面板关着时只做一次查询 + 一次 rect；只有真算久了才上报，免得刷屏。
@@ -1977,10 +1996,11 @@ window.__ModuleLoader__.load({
               postToApp({ type: "perf", what: "panel-sync", ms: Math.round(ms * 10) / 10, n: found.length });
             }
           }
-            var key = found.join("|");
+            // 上报按「一个轮转周期里累计到的集合」比 —— 单行扫描会让 key 每 2 秒变一次。
+            var key = cycleTags.slice().sort().join("|");
             if (key !== last) {
               last = key;
-              postToApp({ type: "panel-blockers", open: true, n: marked.length, at: found });
+              postToApp({ type: "panel-blockers", open: true, n: marked.length, at: cycleTags });
             }
           };
           // 合并突发变更：宿主在流式输出时 DOM 抖得很厉害，不能每个 mutation 都算一遍几何。
