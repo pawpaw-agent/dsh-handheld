@@ -143,6 +143,30 @@ class MainActivity : Activity() {
     private val audioModeRestore = Runnable { setCommAudioMode(false) }
     private val AUDIO_MODE_HOLD_MS = 15_000L
 
+    /**
+     * 语音输入自检：页面报「语音识别失败」时，光看页面那条被截断的提示是查不下去的
+     * （2026-09-25 真机就卡在这里：权限已放行、麦克风空闲、音频模式也切了，仍失败）。
+     * 这里从 App 侧直接跑一次 getUserMedia，把 DOMException 的 **name + message** 读回来 ——
+     * 那才是根因现场。结果落日志，不进 UI。
+     */
+    private fun micSelfTest() {
+        val wv = webView ?: return
+        val js = "(function(){window.__micTest='pending';" +
+            "if(!navigator.mediaDevices||!navigator.mediaDevices.getUserMedia){window.__micTest='no-api';return;}" +
+            "navigator.mediaDevices.getUserMedia({audio:true}).then(function(s){" +
+            "var t=s.getAudioTracks()[0];window.__micTest='ok:'+(t?t.label:'no-track');" +
+            "s.getTracks().forEach(function(x){x.stop()});" +
+            "}).catch(function(e){window.__micTest='err:'+e.name+':'+e.message});})()"
+        runCatching { wv.evaluateJavascript(js, null) }
+        ui.postDelayed({
+            runCatching {
+                wv.evaluateJavascript("window.__micTest") { r ->
+                    DiagLog.i(TAG, "麦克风自测：$r")
+                }
+            }
+        }, 3000)
+    }
+
     private fun setCommAudioMode(on: Boolean) {
         val am = getSystemService(Context.AUDIO_SERVICE) as? android.media.AudioManager ?: return
         val want = if (on) android.media.AudioManager.MODE_IN_COMMUNICATION
@@ -571,6 +595,7 @@ class MainActivity : Activity() {
                         ui.removeCallbacks(audioModeRestore)
                         ui.postDelayed(audioModeRestore, AUDIO_MODE_HOLD_MS)
                         request.grant(arrayOf(android.webkit.PermissionRequest.RESOURCE_AUDIO_CAPTURE))
+                        micSelfTest()
                         return
                     }
                     // 没授过就先问用户；请求挂在这里等结果（上一次没回话的先作废，
