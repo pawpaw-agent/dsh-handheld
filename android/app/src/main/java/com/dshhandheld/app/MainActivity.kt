@@ -131,9 +131,12 @@ class MainActivity : Activity() {
             view: WebView?,
             request: android.webkit.WebResourceRequest?
         ): android.webkit.WebResourceResponse? {
+            interceptCalls.incrementAndGet()   // 每一条子资源都从这里过，先记一笔
             val u = request?.url?.toString() ?: return null
             if (!isPluginBundleUrl(u)) return null
             val bytes = app.pluginBundleBytes ?: return null
+            DiagLog.i(TAG, "适配层 bundle：第 ${bundleServes.incrementAndGet()} 次喂给页面" +
+                "（兜底路径/缓存字节, ${bytes.size}B, 累计拦截 ${interceptCalls.get()} 次）")
             return android.webkit.WebResourceResponse(
                 "text/javascript", "utf-8", ByteArrayInputStream(bytes)
             )
@@ -446,11 +449,21 @@ class MainActivity : Activity() {
          * 放在 companion 里：兜底的 `DetachedWebViewClient` 是**嵌套类**（刻意不持 Activity），
          * 它只能调 companion 成员。
          */
+        // ── 计量（2026-09-24，用户问「webview 的插入逻辑可以优化吗」）─────────────
+        // 优化前先把三件事量出来，否则全是猜：
+        //   · 拦截回调被调了多少次（它是**每个子资源请求**都会走一遍的路径）；
+        //   · bundle 被喂了几次（页面每次加载一次？还是多次？）；
+        //   · 每次喂花多久（热路径是从 APK assets 现读，兜底路径才是缓存的那份）。
+        internal val interceptCalls = java.util.concurrent.atomic.AtomicInteger(0)
+        internal val bundleServes = java.util.concurrent.atomic.AtomicInteger(0)
+
         fun isPluginBundleUrl(u: String): Boolean {
+            // ⚠️ 顺序要紧：本函数被**每一个**子资源请求调用（前端壳的 JS/CSS/字体/图标…），
+            // 而 `Uri.parse` 每次都要分配并解析。先做两次零成本子串判断，只有疑似命中时才解析。
+            if (!u.contains("/plugins/") || !u.contains("$MOBILE_PLUGIN_ID/client.js")) return false
             val uri = runCatching { android.net.Uri.parse(u) }.getOrNull() ?: return false
             if (uri.host != "127.0.0.1") return false
-            if (uri.port !in SshTunnel.PORT_CANDIDATES) return false
-            return u.contains("/plugins/") && u.contains("$MOBILE_PLUGIN_ID/client.js")
+            return uri.port in SshTunnel.PORT_CANDIDATES
         }
 
         /** 隧道的两个回环 origin（与 [SshTunnel.PORT_CANDIDATES] 同源，别各写一份）。 */
@@ -536,11 +549,16 @@ class MainActivity : Activity() {
                     view: WebView?,
                     request: android.webkit.WebResourceRequest?
                 ): android.webkit.WebResourceResponse? {
+                    interceptCalls.incrementAndGet()   // 同上：这条路径才是真正天天走的那条
                     val u = request?.url?.toString() ?: return null
                     if (!isPluginBundleUrl(u)) return null
+                    val t0 = android.os.SystemClock.elapsedRealtime()
                     val bytes = try {
                         assets.open("plugins/dsh-handheld-mobile.js").use { it.readBytes() }
                     } catch (e: Exception) { return null }
+                    DiagLog.i(TAG, "适配层 bundle：第 ${bundleServes.incrementAndGet()} 次喂给页面" +
+                        "（热路径/现读 assets, ${bytes.size}B, 读盘 ${android.os.SystemClock.elapsedRealtime() - t0}ms, " +
+                        "累计拦截 ${interceptCalls.get()} 次）")
                     return android.webkit.WebResourceResponse(
                         "text/javascript", "utf-8", ByteArrayInputStream(bytes)
                     )
