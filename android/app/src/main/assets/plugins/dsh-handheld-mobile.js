@@ -471,6 +471,11 @@ window.__ModuleLoader__.load({
   [data-handheld="frame"] [data-phase] header [class*="_titleRow"] {
     min-width: 0 !important;
     gap: 2px !important;
+    /* 2026-09-25 设计优化：新版头部实测 46px 高（titleRow 44），而里面只有两个图标 ——
+       手机上这是白占的一整条。压到 30px 让出 16px 给正文。 */
+    min-height: 30px !important;
+    height: 30px !important;
+    align-items: center !important;
   }
   [data-handheld="frame"] [data-phase] header [class*="_crumbs"] {
     min-width: 0 !important;
@@ -790,6 +795,21 @@ window.__ModuleLoader__.load({
      会话头用 header:has([class*="_titleRow"]) 锚定 —— 宿主里还有别的 _header 类
      （面板头 36px 那种），不加 :has 会一起压坏。 */
   @media (max-width: 560px) {
+    /* 2026-09-25 设计优化：新版输入区实测 144px（占 800 高的 18%）。这里压两处：
+       ① dock 行（上下文表）从 ~28px 压到 ~18px；② 卡片内的行距收紧。
+       不动按钮本身的尺寸 —— 手指档是硬约束（见第 2f 节）。 */
+    [data-handheld="frame"] [class*="_composerSeat"] [class*="_dock"] {
+      padding-top: 0 !important;
+      gap: 4px !important;
+      min-height: 0 !important;
+    }
+    [data-handheld="frame"] [class*="_composerSeat"] [class*="_dock"] > * {
+      margin: 0 !important;
+    }
+    [data-handheld="frame"] [class*="_composerSeat"] [class*="_row"] {
+      padding-top: 0 !important;
+      padding-bottom: 4px !important;
+    }
     [data-handheld="frame"] [data-phase] [class*="_scroll"] {
       padding-left: 12px !important;
       padding-right: 12px !important;
@@ -2576,7 +2596,7 @@ window.__ModuleLoader__.load({
             return parts.slice(0, 2).join(" ").slice(0, 54);
           };
           var dump = function (el, depth) {
-            if (el === null || el === undefined || depth > 2) return null;
+            if (el === null || el === undefined || depth > 3) return null;
             var r = el.getBoundingClientRect();
             var o = {
               t: el.tagName.toLowerCase(),
@@ -2587,8 +2607,8 @@ window.__ModuleLoader__.load({
             var dh = el.getAttribute("data-handheld");
             if (dh) o.dh = dh;
             if (el.getAttribute("data-composer-card") !== null) o.cc = 1;
-            if (depth < 2) {
-              for (var i = 0; i < el.children.length && i < 6; i++) {
+            if (depth < 3) {
+              for (var i = 0; i < el.children.length && i < 8; i++) {
                 var c = dump(el.children[i], depth + 1);
                 if (c !== null) o.ch.push(c);
               }
