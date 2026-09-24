@@ -126,6 +126,24 @@ class MainActivity : Activity() {
 
     // ── 语音输入（2026-09-25）─────────────────────────────────────────────
     //
+    // 修的是**权限链**：清单 RECORD_AUDIO + MODIFY_AUDIO_SETTINGS、运行时申请、
+    // onPermissionRequest 只放行隧道 origin 的音频采集。修之前页面直接报
+    // 「麦克风权限未开启」，App 侧自测 getUserMedia 报
+    // `NotReadableError: Could not start audio source`；修好后自测返回 `ok:`。
+    //
+    // 顺带否掉两个假设（都真机测过）：
+    //   · 不是设备/WebView 版本问题 —— 设备 1（Android 16/WebView 151）与
+    //     设备 2（Android 13/WebView 153）失败形态完全一样；
+    //   · 不需要切 MODE_IN_COMMUNICATION —— 基线（MODE_NORMAL）就成功了。那套切换
+    //     已撤掉：通信模式是全设备的，会把媒体声音改走听筒，白担风险。
+    //
+    // 验证用的自动探测/自测也一并撤掉（它们会在开机时抓一次麦克风，且刷日志）。
+
+    /** 页面那次麦克风请求：等系统权限结果回来再 grant/deny（见 onPermissionRequest）。 */
+    private var pendingMicRequest: android.webkit.PermissionRequest? = null
+
+    // ── 语音输入（2026-09-25）─────────────────────────────────────────────
+    //
     // 音频模式：Chromium 每次 getUserMedia 都会紧跟着报
     //   `audio_manager_android.cc Unable to select communication device!`
     // 然后以 NotReadableError 拒绝。上一轮试过切 MODE_IN_COMMUNICATION，但**没有回读确认**
@@ -552,7 +570,6 @@ class MainActivity : Activity() {
                     if (u?.startsWith("http") == true && !u.contains("?token=")) {
                         sshTokenAck = true
                         DiagLog.i(TAG, "onPageFinished: 正式页面加载完成 → ack=true url=$u")
-                        ui.postDelayed({ micProbe() }, 4000)
                         guideLine(3, "③ 打开 dsh 网页 ✓ 已打开", state = false)
                     } else if (u != null) {
                         // about:blank / 带 token 的中间页：刻意不置 ack（1.5.2 的 401 回归源于此）
@@ -621,9 +638,6 @@ class MainActivity : Activity() {
                         android.content.pm.PackageManager.PERMISSION_GRANTED
                     ) {
                         DiagLog.i(TAG, "页面权限请求：放行麦克风（origin=$origin）")
-                        setCommAudioMode(true)
-                        ui.removeCallbacks(audioModeRestore)
-                        ui.postDelayed(audioModeRestore, 120_000)
                         request.grant(arrayOf(android.webkit.PermissionRequest.RESOURCE_AUDIO_CAPTURE))
                         return
                     }
@@ -2388,9 +2402,6 @@ class MainActivity : Activity() {
         val busy = (application as? DshApp)?.pageBusy == true
         if (busy) DiagLog.i(TAG, "onPause: 页面正在生成，保留定时器（任务完成通知依赖它）")
         else webView?.pauseTimers()
-        // 退到后台别占着通信模式（它会把全设备的媒体声音改走听筒）。
-        ui.removeCallbacks(audioModeRestore)
-        setCommAudioMode(false)
     }
 
     @Deprecated("Deprecated in Java")
