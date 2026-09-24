@@ -205,10 +205,4 @@ object DiagLog {
         }
     }
 
-    /** 只清内存缓冲（磁盘文件是追加式的，不在这里动）。 */
-    fun clearRing() {
-        synchronized(ring) { ring.clear() }
-        ringCleared++
-        i(TAG, "内存日志缓冲已清空")
-    }
 }

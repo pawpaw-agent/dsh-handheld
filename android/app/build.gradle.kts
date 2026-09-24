@@ -145,7 +145,7 @@ dependencies {
     // 因此当前上限是 core-ktx 1.18.0 + webkit 1.17.0。再往上走 core-ktx 1.19.0 需要
     // compileSdk 37（连带 build-tools 37 与 `platforms;android-37.0`）—— 单列一步。
     implementation("androidx.core:core-ktx:1.18.0")
-    implementation("androidx.webkit:webkit:1.17.0")
+    // （2026-09-25：androidx.webkit 随注入层移除 —— document-start 脚本不再需要）
     // 2026-09-25：原生终端（TUI 模式）已移除 —— dsh 的 web 界面自带终端面板
     // （右栏 → 新建终端），WebView 里的 xterm + WebSocket 足够用。
     // 随之去掉的还有 Termux terminal-view（GPL-3.0）与 vendored 的 com.termux.* 源码。

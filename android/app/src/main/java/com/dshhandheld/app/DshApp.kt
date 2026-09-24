@@ -8,8 +8,6 @@ import android.content.MutableContextWrapper
 import android.os.Build
 import android.webkit.WebView
 import androidx.annotation.RequiresApi
-import androidx.webkit.WebViewCompat
-import androidx.webkit.WebViewFeature
 import com.dshhandheld.diag.DiagLog
 import com.dshhandheld.protocol.HarnessEventsClient
 import com.dshhandheld.protocol.SshTunnel
@@ -296,7 +294,7 @@ class DshApp : Application() {
         // 不能等到第一条通知才建：渠道是用户在系统设置里能单独调的对象，
         // 「第一条通知之前看不到它」会让「为什么没弹横幅」变成一个查不到的空白。
         if (prefs.getBoolean(PREF_NOTIF_TURN, false)) {
-            Notifier.ensureChannels(this, Notifier.CHANNEL_TURN)
+            Notifier.ensureChannels(this)
             Notifier.ensureChannels(this, Notifier.CHANNEL_ASK)
         }
         // 冷启动时隧道可能还没恢复：syncEventsClient 自己会在没有隧道时什么都不做，

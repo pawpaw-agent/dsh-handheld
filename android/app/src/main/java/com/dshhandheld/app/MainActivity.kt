@@ -42,10 +42,7 @@ import android.widget.ScrollView
 import android.widget.TextView
 import android.widget.Toast
 import androidx.core.widget.doAfterTextChanged
-import androidx.webkit.WebViewCompat
-import androidx.webkit.WebViewFeature
 import com.dshhandheld.protocol.SshTunnel
-import java.io.ByteArrayInputStream
 import java.io.File
 import java.io.FileOutputStream
 import java.util.concurrent.atomic.AtomicBoolean
@@ -1210,7 +1207,7 @@ class MainActivity : Activity() {
         /** 打开：权限齐了就落盘，缺权限则先去申请（结果在 onRequestPermissionsResult 处理）。 */
         fun enableTurnNotif() {
             prefs.edit().putBoolean(DshApp.PREF_NOTIF_TURN, true).apply()
-            Notifier.ensureChannels(this@MainActivity, Notifier.CHANNEL_TURN)
+            Notifier.ensureChannels(this@MainActivity)
             Notifier.ensureChannels(this@MainActivity, Notifier.CHANNEL_ASK)
             status("已开启提醒")
             refreshNotifHint()
@@ -1442,7 +1439,7 @@ class MainActivity : Activity() {
         val sw = notifSwitchView ?: return
         if (granted) {
             prefs.edit().putBoolean(DshApp.PREF_NOTIF_TURN, true).apply()
-            Notifier.ensureChannels(this, Notifier.CHANNEL_TURN)
+            Notifier.ensureChannels(this)
             status("已开启任务完成提醒")
         } else {
             prefs.edit().putBoolean(DshApp.PREF_NOTIF_TURN, false).apply()

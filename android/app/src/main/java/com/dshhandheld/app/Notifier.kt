@@ -57,8 +57,11 @@ object Notifier {
     /** 旧的完成渠道：只在 [ensureChannels] 里删掉它，不再往里发东西。 */
     private const val CHANNEL_TURN_LEGACY = "dsh-turn"
 
-    /** 「在等你选择」渠道：比完成提醒更急（那一轮**卡住**了），走 heads-up。 */
-    const val CHANNEL_ASK = "dsh-ask"
+    /**
+     * 「在等你选择」渠道的**遗留 id**：那条通知的触发源只有页面侧（注入层），随注入层
+     * 一起没了。这里只用来把设备上可能还留着的渠道删掉。
+     */
+    private const val CHANNEL_ASK_LEGACY = "dsh-ask"
 
     /**
      * 用固定 id：连着干完几轮只留最新一条，而不是在通知栏里堆一排。
@@ -66,11 +69,10 @@ object Notifier {
      */
     private const val ID_TURN = 2
 
-    /** 「等你选择」用另一个 id：它和「做完了」可能前后脚出现，不该互相顶掉。 */
-    private const val ID_ASK = 3
 
-    /** 建渠道。可重复调用（已存在就跳过）。 */
-    fun ensureChannels(context: Context, channelId: String) {
+    /** 建渠道。可重复调用（已存在就跳过）。2026-09-25 起只剩「任务完成」一条。 */
+    fun ensureChannels(context: Context) {
+        val channelId = CHANNEL_TURN
         val nm = context.getSystemService(NotificationManager::class.java) ?: return
         // 渠道迁移：旧的 `dsh-turn`（DEFAULT，不弹横幅）删掉。留着只会让设置页多一条
         // 永远不会响的「任务完成」。删除对用户是可见的（那条会从设置里消失），
@@ -79,24 +81,22 @@ object Notifier {
             nm.deleteNotificationChannel(CHANNEL_TURN_LEGACY)
             DiagLog.i(TAG, "已删除旧渠道 $CHANNEL_TURN_LEGACY（换成 $CHANNEL_TURN，任务完成要弹横幅）")
         }
-        if (nm.getNotificationChannel(channelId) != null) return
-        when (channelId) {
-            CHANNEL_ASK -> nm.createNotificationChannel(
-                NotificationChannel(channelId, "在等你选择", NotificationManager.IMPORTANCE_HIGH).apply {
-                    description = "dsh 停下来等你批准或回答（App 在后台时才发）"
-                    setShowBadge(true)
-                }
-            )
-            // HIGH 而不是 DEFAULT：只有 HIGH 及以上才允许**浮到屏幕上**（heads-up）。
-            // 0.1.11 用 DEFAULT，真机上只在通知栏里躺着 —— 用户的原话是
-            // 「有通知但不是弹出横幅通知」。渠道重要性创建后 App 改不动，所以换了 id。
-            else -> nm.createNotificationChannel(
-                NotificationChannel(channelId, "任务完成", NotificationManager.IMPORTANCE_HIGH).apply {
-                    description = "dsh 生成结束时提醒你（App 在后台时才发），会浮到屏幕上"
-                    setShowBadge(true)
-                }
-            )
+        // 「在等你选择」渠道的清理（2026-09-25）：它的触发源随注入层一起移除，
+        // 设备上若创建过就删掉 —— 否则设置页里永远躺着一条不会再响的渠道。
+        if (channelId == CHANNEL_TURN && nm.getNotificationChannel(CHANNEL_ASK_LEGACY) != null) {
+            nm.deleteNotificationChannel(CHANNEL_ASK_LEGACY)
+            DiagLog.i(TAG, "已删除不再使用的渠道 $CHANNEL_ASK_LEGACY")
         }
+        if (nm.getNotificationChannel(channelId) != null) return
+        // HIGH 而不是 DEFAULT：只有 HIGH 及以上才允许**浮到屏幕上**（heads-up）。
+        // 0.1.11 用 DEFAULT，真机上只在通知栏里躺着 —— 用户的原话是
+        // 「有通知但不是弹出横幅通知」。渠道重要性创建后 App 改不动，所以换了 id。
+        nm.createNotificationChannel(
+            NotificationChannel(channelId, "任务完成", NotificationManager.IMPORTANCE_HIGH).apply {
+                description = "dsh 生成结束时提醒你（App 在后台时才发），会浮到屏幕上"
+                setShowBadge(true)
+            }
+        )
     }
 
     /**
@@ -130,44 +130,6 @@ object Notifier {
     }
 
     /**
-     * 发一条「dsh 停下来等你了」。
-     *
-     * 比 [turnDone] 急：那一轮**没有**结束 —— 它在等一次批准或一个回答，而用户往往正在
-     * 等一个不会自己来的结果。所以走 `dsh-ask` 渠道（`IMPORTANCE_HIGH`，会浮到屏幕上）。
-     *
-     * @param title 会话标题（页面给的）。
-     */
-    fun needsInput(context: Context, title: String?) {
-        if (!allowed(context)) {
-            DiagLog.w(TAG, "通知不可用（开关或权限），丢弃这条「等你选择」通知")
-            return
-        }
-        ensureChannels(context, CHANNEL_ASK)
-        val open = PendingIntent.getActivity(
-            context, 0,
-            Intent(context, MainActivity::class.java)
-                .addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_NEW_TASK),
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-        )
-        val text = title?.takeIf { it.isNotBlank() } ?: "回到 App 点一下"
-        val n = Notification.Builder(context, CHANNEL_ASK)
-            .setContentTitle("dsh 在等你选择")
-            .setContentText(text)
-            .setStyle(Notification.BigTextStyle().bigText(text))
-            .setSmallIcon(R.drawable.ic_launcher_foreground)
-            .setContentIntent(open)
-            .setAutoCancel(true)
-            .setWhen(System.currentTimeMillis())
-            .setShowWhen(true)
-            .setCategory(Notification.CATEGORY_REMINDER)
-            .build()
-        runCatching {
-            context.getSystemService(NotificationManager::class.java)?.notify(ID_ASK, n)
-        }.onFailure { DiagLog.w(TAG, "notify 失败：${it.javaClass.simpleName}: ${it.message}") }
-        DiagLog.i(TAG, "已发「等你选择」通知：$text")
-    }
-
-    /**
      * 发一条「这一轮结束了」。
      *
      * @param title 会话标题（页面给的），空则用一句兜底文案 —— 通知里最该出现的是
@@ -178,7 +140,7 @@ object Notifier {
             DiagLog.w(TAG, "通知不可用（开关或权限），丢弃这条任务完成通知")
             return
         }
-        ensureChannels(context, CHANNEL_TURN)
+        ensureChannels(context)
         val open = PendingIntent.getActivity(
             context, 0,
             Intent(context, MainActivity::class.java)
