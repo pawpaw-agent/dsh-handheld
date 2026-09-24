@@ -49,6 +49,9 @@ const SERIAL = opt('--serial', process.env.ADB_SERIAL);
 const SCENARIO = opt('--scenario', 'scroll');
 const SECONDS = Number(opt('--seconds', '30'));
 const REPEATS = Number(opt('--repeats', '3'));
+// 预热轮：第一轮几乎总是被污染（刚装完包/刚关掉面板/页面还在落定）。这条不是猜的 ——
+// 2026-09-24 真机：同一份包连跑 3 轮得到 7.72% / 0.67% / 0.64%，第一轮是离群值。
+const WARMUP = Number(opt('--warmup', '1'));
 const STRICT = flag('--strict');
 
 if (!SERIAL) {
@@ -189,7 +192,7 @@ function summarizePerf(rows) {
 }
 
 // ── 主流程 ───────────────────────────────────────────────────────────────────
-console.log(`设备 ${SERIAL} · 场景 ${SCENARIO} · 每轮 ${SECONDS}s · 重复 ${REPEATS} 次`);
+console.log(`设备 ${SERIAL} · 场景 ${SCENARIO} · 每轮 ${SECONDS}s · 预热 ${WARMUP} 轮（丢弃）+ 测量 ${REPEATS} 轮`);
 console.log('');
 
 const pre = preflight();
@@ -205,7 +208,7 @@ console.log('');
 
 const runs = [];
 const perfRows = [];
-for (let i = 0; i < REPEATS; i++) {
+const runOnce = (label) => {
   sh(`logcat -c`);
   sh(`dumpsys gfxinfo ${PKG} reset`);
   const t0 = Date.now();
@@ -214,12 +217,16 @@ for (let i = 0; i < REPEATS; i++) {
   else sleep(SECONDS * 1000);
   const stats = gfxinfo();
   perfRows.push(...perfLines());
-  runs.push({ ...stats, secs: (Date.now() - t0) / 1000, swipes: drive.swipes });
   process.stdout.write(
-    `  第 ${i + 1}/${REPEATS} 轮: ${stats.total ?? '?'} 帧, janky ${stats.jankyPct ?? '?'}%, `
+    `  ${label}: ${stats.total ?? '?'} 帧, janky ${stats.jankyPct ?? '?'}%, `
     + `99th ${stats.p99 ?? '?'}ms, missed ${stats.missed ?? '?'}\n`,
   );
-}
+  return { ...stats, secs: (Date.now() - t0) / 1000, swipes: drive.swipes };
+};
+
+for (let i = 0; i < WARMUP; i++) runOnce(`预热 ${i + 1}/${WARMUP}（丢弃）`);
+if (WARMUP > 0) console.log('');
+for (let i = 0; i < REPEATS; i++) runs.push(runOnce(`第 ${i + 1}/${REPEATS} 轮`));
 
 // ── 汇总：中位数 + 极差 ──────────────────────────────────────────────────────
 const median = (xs) => {

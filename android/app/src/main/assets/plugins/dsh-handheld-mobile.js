@@ -1879,9 +1879,18 @@ window.__ModuleLoader__.load({
             // 都强制刷一次布局，只换来一句「2 秒内扫过了」。而叫醒源是 setInterval(1s) 加上流式
             // 期间 body 的 class/style 抖动（200ms 防抖）：闲置 1 次/秒、流式 ~5 次/秒的强制布局，
             // 面板还关着的时候就全发生在空处。
-            // 附带修掉一个语义错：`visibility:hidden` 的元素**仍然有盒**，所以面板收起时若
-            // `data-sidebar-right-panel=fullscreen`，旧判据会把它当成「展开」，对着一个用户看不见的
-            // 面板扫遮挡。
+            // ⚠️ 订正（rev 1.0.68，真机取证，推翻 rev 1.0.67 的 commit 说明）：1.0.67 里我写过
+            // 「顺带修掉一个语义错 —— `visibility:hidden` 的元素仍然有盒，所以收起状态的 fullscreen
+            // 面板会被旧判据当成展开」。**这条是错的**：2026-09-24 用本插件自己的 right-probe 拍到
+            // 收起态面板的几何是
+            //   {top:0, left:384, w:384, h:832}   // CSS px，视口 384×832
+            // —— 基础规则 `.P3OORG_panel{transform:translate(100%)}` 把 rect 整个推到视口外，而旧判据
+            // 要求 `left <= 1`，所以它**一直**判的是「没展开」（日志侧同样只有 stage:"init" 一条，
+            // 从来没有收起态的 open:true）。老判据没有语义错，这次改的只是**成本**。
+            //
+            // 因此这道门的收益只有一个（但确凿）：面板关着时省掉一次 `querySelector` 全树遍历
+            // 和一次**可能强制布局**的 rect 读 —— 那是 1 次/秒（定时器）+ 流式期间 ~5 次/秒
+            // （body 抖动 200ms 防抖）的全部内容。
             if (panel === null || !panel.hasAttribute("data-sidebar-right-open")) {
               closed();
               return;
