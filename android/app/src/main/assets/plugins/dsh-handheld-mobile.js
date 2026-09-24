@@ -1457,7 +1457,12 @@ window.__ModuleLoader__.load({
         return function () { window.clearTimeout(t); };
       }, "dsh-handheld-mobile: side symmetry diag");
 
-      ctx.effect(function () {
+      // 2026-09-25：**不再是 ctx.effect** —— 新版加载器会拆掉我们 entry 的 fiber，effect
+      // 随之全灭（真机实测 turnTicks 恒为 0）。轮次监视不依赖 ctx，搬成裸实现就活得下来。
+      // 全局旗标防重复安装（插件若被重新 apply，第二份直接退场）。
+      (function () {
+        if (window.__dshHandheldWatcherOn) return;
+        window.__dshHandheldWatcherOn = 1;
         // ⚠️ 2026-09-25 适配 dsh 0.1.7-rc.2：旧选择器（class 后缀 turnStatus 那条）在新产物里
         // **已经不存在**（契约检查抓到「这条适配规则已经空转」）。新版把那个指示器重做成了
         // 每个回合一个「回合过程」节点：
@@ -1669,13 +1674,14 @@ window.__ModuleLoader__.load({
           });
         }, TICK_MS);
         check();
+        // 不做清理：这条实现就是为了「被拆也活着」而存在的。页面卸载时浏览器自会回收。
         return function () {
           disposed = true;
           observer.disconnect();
           window.clearInterval(tickTimer);
           window.clearInterval(tickPoll);
         };
-      }, "dsh-handheld-mobile: turn watcher");
+      })();
 
       // ── 顶部空间自证（2026-09-24，用户报「左右侧边栏顶部空间比会话页面大」）──────
       // 「外层 padding 同值」不等于「第一行内容同位置」：里面还叠着宿主自己的内边距，而
@@ -2489,6 +2495,34 @@ window.__ModuleLoader__.load({
             document.head.appendChild(__healTag);
             window.__dshHandheldHeals = (window.__dshHandheldHeals || 0) + 1;
           } catch (e) { /* 自愈失败不该影响页面 */ }
+          // 光有样式表不够：整套移动 CSS 都挂在 html.dsh-handheld-mobile 与
+          // [data-handheld="frame"] 两个标记上，而它们是 effect 打的 —— fiber 被拆后
+          // 一个被 disposer 撤掉、另一个被 ShellOverlay 的 cleanup 撤掉（真机实测：
+          // 表补回来了、frameTagged 却是 0）。这里一并补上，三件一起才算真的活着。
+          try {
+            if (!document.documentElement.classList.contains("dsh-handheld-mobile")) {
+              document.documentElement.classList.add("dsh-handheld-mobile");
+            }
+            var col = document.querySelector('[class*="_sidebarCol"]');
+            var fr = col === null ? null : col.parentElement;
+            if (fr !== null && fr.getAttribute("data-handheld") !== "frame") {
+              fr.setAttribute("data-handheld", "frame");
+              window.__dshHandheldReframes = (window.__dshHandheldReframes || 0) + 1;
+            }
+            // 侧栏根节点的内联像素宽度（宿主 layout 的 cols.sidebar）撑满 —— 全屏抽屉
+            // 那条规则压不过内联 style，得直接改。
+            if (fr !== null) {
+              var first = col.firstElementChild;
+              var cands = [first, first && first.firstElementChild];
+              for (var ci = 0; ci < cands.length; ci++) {
+                var ce = cands[ci];
+                if (ce && ce.style && ce.style.width && /px$/.test(ce.style.width)) {
+                  ce.style.width = "100%";
+                  ce.style.maxWidth = "none";
+                }
+              }
+            }
+          } catch (e) { /* 自愈失败不该影响页面 */ }
         };
         window.setTimeout(__healKeep, 300);
         window.setInterval(__healKeep, 2000);
@@ -2543,6 +2577,8 @@ window.__ModuleLoader__.load({
             what: "env-diag",
             stage: stage,
             heals: window.__dshHandheldHeals || 0,
+            reframes: window.__dshHandheldReframes || 0,
+            watcherOn: window.__dshHandheldWatcherOn || 0,
             turnTicks: window.__dshHandheldTurnTicks || 0,
             styleAdds2: window.__dshHandheldStyleAdds || 0,
             aliveCss: aliveCss,
