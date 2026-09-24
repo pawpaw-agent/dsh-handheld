@@ -2564,6 +2564,48 @@ window.__ModuleLoader__.load({
         window.setInterval(__healKeep, 2000);
       } catch (e) { /* 诊断永远不该影响主流程 */ }
 
+      // ── 布局诊断（一次性，2026-09-25）─────────────────────────
+      // 目的：把「头部为什么空、输入区为什么高」变成读数。桌面版看不到手机上的实际结构，
+      // 而这两块是窄屏最贵的两处。只报 tag/类名尾段/矩形/子节点数，深度 ≤2、每层 ≤6 —— 
+      // logcat 单行有上限，报太深会被截断。
+      try {
+        window.setTimeout(function () {
+          var suffix = function (el) {
+            var c = String(el.className || "");
+            var parts = c.split(/\s+/).filter(function (s) { return /_[A-Za-z0-9]+$/.test(s); });
+            return parts.slice(0, 2).join(" ").slice(0, 54);
+          };
+          var dump = function (el, depth) {
+            if (el === null || el === undefined || depth > 2) return null;
+            var r = el.getBoundingClientRect();
+            var o = {
+              t: el.tagName.toLowerCase(),
+              c: suffix(el),
+              y: Math.round(r.top), h: Math.round(r.height), w: Math.round(r.width),
+              n: el.children.length, ch: [],
+            };
+            var dh = el.getAttribute("data-handheld");
+            if (dh) o.dh = dh;
+            if (el.getAttribute("data-composer-card") !== null) o.cc = 1;
+            if (depth < 2) {
+              for (var i = 0; i < el.children.length && i < 6; i++) {
+                var c = dump(el.children[i], depth + 1);
+                if (c !== null) o.ch.push(c);
+              }
+            }
+            return o;
+          };
+          var frame = document.querySelector('[data-handheld="frame"]');
+          postToApp({
+            type: "perf",
+            what: "layout-diag",
+            header: frame === null ? null : dump(frame.querySelector("header"), 0),
+            seat: frame === null ? null : dump(frame.querySelector('[class*="_composerSeat"]'), 0),
+            vh: window.innerHeight,
+          });
+        }, 4000);
+      } catch (e) { /* 诊断永远不该影响主流程 */ }
+
       // ── 环境诊断（一次性，2026-09-25）─────────────────────────
       // 起因：换到 dsh 0.1.7-rc.2 后，手机上整份适配 CSS **一条都没生效**（宿主桌面布局
       // 原样呈现），而 apply 是跑完的（plugin-init 出声）。适配 CSS 整块包在
