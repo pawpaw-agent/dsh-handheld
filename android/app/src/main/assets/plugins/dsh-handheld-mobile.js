@@ -734,8 +734,13 @@ window.__ModuleLoader__.load({
       right: 0 !important;
       z-index: 8 !important;
       margin: 0 !important;
+      /* 高度**写死**：这条带子的高度不能由宿主胶囊的内边距决定 —— 否则它比外壳让出的
+         17px 高时，会把下面的会话头压住（而那正是它上方唯一的东西）。
+         10px 字配 14px 行高，16px 盒子够放；多出来的内边距裁掉（胶囊没有背景色，看不出来）。 */
+      height: 16px !important;
+      line-height: 14px !important;
       padding-top: 1px !important;
-      line-height: 13px !important;
+      overflow: hidden !important;
       background: var(--dsw-alias-bg-base, #151517) !important;
     }
     /* 极端长的计数（4 位以上「轮/步」）也只允许尾部省略，不再换行。 */
@@ -820,9 +825,9 @@ window.__ModuleLoader__.load({
        没 cover 时 env 是 0、宿主也不加，不需要动。
        （本模板里**不能出现反引号** —— 已经踩过四次，会把模板提前结束。）*/
     html[data-dsh-cover] [class*="_frame"]:has([data-phase]) {
-      /* 12 → 17：顶上多了一条常驻的统计带（统计行 fixed 在 y=0，高约 14px），
-         头部要整体让开它，否则标题会被压在带子底下。 */
-      padding-top: 17px !important;
+      /* 12 → 18：顶上多了一条常驻的统计带（fixed 在 y=0..16），头部整体让开它，
+         否则标题会被压在带子底下。18 = 16（带子）+ 2（间隔）。 */
+      padding-top: 18px !important;
     }
     /* 顶部间距交给外壳那一层，这里不再叠加（原来 cover 时给 14px，现在 2px）。 */
     html[data-dsh-cover] [data-handheld="frame"] [data-phase] header:has([class*="_titleRow"]) {
