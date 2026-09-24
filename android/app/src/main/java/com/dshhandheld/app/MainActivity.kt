@@ -179,8 +179,15 @@ class MainActivity : Activity() {
     //
     // 音频模式的尝试已撤掉：无效，且通信模式是全设备的（会把媒体声音改走听筒）。
 
+    private var micSelfTestAt = 0L
+
     private fun micSelfTest(tag: String) {
         val wv = webView ?: return
+        // 防重入：自测自己会触发 onPermissionRequest，若在那里再调一次就是死循环
+        //（真机踩过：日志被 "ok:" 刷屏几百条）。
+        val now = android.os.SystemClock.elapsedRealtime()
+        if (now - micSelfTestAt < 10_000) return
+        micSelfTestAt = now
         val js = "(function(){window.__micTest='pending';" +
             "if(!navigator.mediaDevices||!navigator.mediaDevices.getUserMedia){window.__micTest='no-api';return;}" +
             "navigator.mediaDevices.getUserMedia({audio:true}).then(function(s){" +
@@ -618,7 +625,6 @@ class MainActivity : Activity() {
                         ui.removeCallbacks(audioModeRestore)
                         ui.postDelayed(audioModeRestore, 120_000)
                         request.grant(arrayOf(android.webkit.PermissionRequest.RESOURCE_AUDIO_CAPTURE))
-                        micSelfTest("on-grant")
                         return
                     }
                     // 没授过就先问用户；请求挂在这里等结果（上一次没回话的先作废，
