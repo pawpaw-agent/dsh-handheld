@@ -139,7 +139,9 @@ class MainActivity : Activity() {
                 "（兜底路径/缓存字节, ${bytes.size}B, 累计拦截 ${interceptCalls.get()} 次）")
             return android.webkit.WebResourceResponse(
                 "text/javascript", "utf-8", ByteArrayInputStream(bytes)
-            )
+            ).apply {
+                setResponseHeaders(mapOf("Content-Length" to bytes.size.toString()))
+            }
         }
     }
 
@@ -436,7 +438,7 @@ class MainActivity : Activity() {
         // id 必须与那个 bundle 内的 `id: "dsh-handheld-mobile"` 一致，改不得（CI 有断言）。
         // rev 只是 WebView 侧的缓存键：内容变更必须换 rev，否则可能命中旧缓存。
         const val MOBILE_PLUGIN_ID = "dsh-handheld-mobile"
-        const val MOBILE_PLUGIN_REV = "dsh-handheld-mobile-1.0.69"
+        const val MOBILE_PLUGIN_REV = "dsh-handheld-mobile-1.0.70"
         const val MOBILE_PLUGIN_URL = "/plugins/??$MOBILE_PLUGIN_ID/client.js&rev=$MOBILE_PLUGIN_REV"
 
         /**
@@ -552,16 +554,29 @@ class MainActivity : Activity() {
                     interceptCalls.incrementAndGet()   // 同上：这条路径才是真正天天走的那条
                     val u = request?.url?.toString() ?: return null
                     if (!isPluginBundleUrl(u)) return null
+                    // 2026-09-24 修：这里原先**每次请求都** `assets.open(...).readBytes()` ——
+                    // 实测 123,235 B / 读盘 1~4ms，而缓存好的 `app.pluginBundleBytes`（by lazy）
+                    // 只用在那条几乎不跑的兜底路径上：缓存写在了错的那一边。
+                    // 现在热路径也走缓存；只有缓存取不到（assets 读失败过一次）时才回落到现读。
+                    val cached = app.pluginBundleBytes
                     val t0 = android.os.SystemClock.elapsedRealtime()
-                    val bytes = try {
-                        assets.open("plugins/dsh-handheld-mobile.js").use { it.readBytes() }
-                    } catch (e: Exception) { return null }
+                    val bytes = cached
+                        ?: try {
+                            assets.open("plugins/dsh-handheld-mobile.js").use { it.readBytes() }
+                        } catch (e: Exception) { return null }
                     DiagLog.i(TAG, "适配层 bundle：第 ${bundleServes.incrementAndGet()} 次喂给页面" +
-                        "（热路径/现读 assets, ${bytes.size}B, 读盘 ${android.os.SystemClock.elapsedRealtime() - t0}ms, " +
+                        "（${if (cached != null) "缓存字节" else "现读 assets"}, ${bytes.size}B, " +
+                        "取字节 ${android.os.SystemClock.elapsedRealtime() - t0}ms, " +
                         "累计拦截 ${interceptCalls.get()} 次）")
                     return android.webkit.WebResourceResponse(
                         "text/javascript", "utf-8", ByteArrayInputStream(bytes)
-                    )
+                    ).apply {
+                        // 只补 Content-Length：长度已知，渲染进程不必按未知长度流式处理。
+                        // 刻意**不动**缓存语义（不加 Cache-Control/ETag）—— 拦截发生在 HTTP 缓存
+                        // 之前，加了也省不掉这次回调；而长缓存会把「忘记换 rev」的后果从
+                        // 「重启前一直是旧的」（1.0.53 真出过一次）放大成「清数据前一直是旧的」。
+                        setResponseHeaders(mapOf("Content-Length" to bytes.size.toString()))
+                    }
                 }
                 override fun onPageStarted(view: WebView?, url: String?, favicon: android.graphics.Bitmap?) {
                     // 新导航开始 → 清掉上一次的失败标记（它决定 onPageFinished 要不要隐藏覆盖层）

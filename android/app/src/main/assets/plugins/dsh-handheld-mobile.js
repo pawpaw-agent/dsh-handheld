@@ -31,6 +31,13 @@
  * 把它画成抽屉：网格压成单列 + 侧栏固定定位到左边 + 遮罩。不自己维护开合状态，就不会和
  * 宿主的窄屏逻辑打架；宿主写的 data-sidebar-collapsed 直接当我们的开合信号用。
  */
+// ── 注入时序自证（rev 1.0.70，用户问「webview 的插入逻辑可以优化吗」）────────────
+// 这是本文件**第一条可执行语句**，所以 performance.now() 在这里读到的值 =
+// 「导航起点 → bundle 被取回 → 整段解析完 → 开始执行」的总和。V8 是先解析后执行，
+// 所以解析成本已经含在里面；拿它和 apply 结束的差值，就能把「注入链」与「插件自身执行」分开。
+// ⚠️ 只上报一次（apply 末尾），不进任何循环。
+var __dshHandheldT0 = (window.performance && performance.now) ? performance.now() : 0;
+
 window.__ModuleLoader__.load({
   id: "dsh-handheld-mobile",
   factory: (require) => {
@@ -2192,6 +2199,18 @@ window.__ModuleLoader__.load({
           );
         });
       }, "dsh-handheld-mobile: header toggle");
+
+      // 注入链的一次性时序（见文件顶部注释）：nav = 导航起点到本文件开始执行（含取回+解析），
+      // apply = 本文件开始执行到适配层装配完。这两个数决定「还值不值得为省字节去动构建链」。
+      try {
+        var __dshHandheldT1 = (window.performance && performance.now) ? performance.now() : 0;
+        postToApp({
+          type: "perf",
+          what: "plugin-init",
+          ms: Math.round((__dshHandheldT1 - __dshHandheldT0) * 10) / 10,
+          nav: Math.round(__dshHandheldT0 * 10) / 10,
+        });
+      } catch (e) { /* 诊断永远不该影响主流程 */ }
     };
 
     return module.exports;
