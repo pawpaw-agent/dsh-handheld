@@ -483,6 +483,19 @@ window.__ModuleLoader__.load({
     text-overflow: ellipsis !important;
     white-space: nowrap !important;
   }
+  /* 我们补的会话标题（见看门狗那段）。margin-right:auto 是关键：标题道里它是第一个
+     子元素，自动外边距把它右边的动作/工具道整体推到右端 —— 原来那两个图标浮在中间，
+     就是因为左边什么都没有、右边又没东西可推。 */
+  [data-handheld="frame"] [data-phase] header [data-handheld="title"] {
+    min-width: 0 !important;
+    margin-right: auto !important;
+    overflow: hidden !important;
+    text-overflow: ellipsis !important;
+    white-space: nowrap !important;
+    font-size: 13px !important;
+    line-height: 20px !important;
+    color: var(--dsw-alias-label-primary, inherit) !important;
+  }
   [data-handheld="frame"] [data-phase] header [class*="_headerActions"] {
     flex: 0 0 auto !important;
     min-width: 0 !important;
@@ -809,6 +822,19 @@ window.__ModuleLoader__.load({
     [data-handheld="frame"] [class*="_composerSeat"] [class*="_row"] {
       padding-top: 0 !important;
       padding-bottom: 4px !important;
+    }
+    /* 上下文表（14px 环 + 百分比）：压成细条常驻，而不是独占一行。
+       它的信息有用（上下文压力），所以不删；但原来那行 ~28px 太贵。 */
+    [data-handheld="frame"] [class*="_composerSeat"] [class*="_dock"] [class*="_trigger"] {
+      min-height: 16px !important;
+      height: 16px !important;
+      padding: 0 2px !important;
+      font-size: 10px !important;
+      line-height: 16px !important;
+    }
+    [data-handheld="frame"] [class*="_composerSeat"] [class*="_dock"] svg {
+      width: 12px !important;
+      height: 12px !important;
     }
     [data-handheld="frame"] [data-phase] [class*="_scroll"] {
       padding-left: 12px !important;
@@ -2520,6 +2546,28 @@ window.__ModuleLoader__.load({
               window.__dshHandheldHeals = (window.__dshHandheldHeals || 0) + 1;
             }
           } catch (e) { /* 自愈失败不该影响页面 */ }
+          // 会话标题：新版把标题挪去了侧栏，手机上头部只剩两个图标（实测 titleRow
+          // 288×44 里没有一行文字）—— 于是「我在哪个会话」这条最基本的上下文没了。
+          // 这里在**标题道确实没有文字**时补一个我们自己标题；宿主若哪天又渲染标题，
+          // 这段自动让位（判据是 titleRow 的 textContent，图标没有文字所以不会误判）。
+          try {
+            var hdrEl = document.querySelector('[data-handheld="frame"] header');
+            var rowEl = hdrEl === null ? null : hdrEl.querySelector('[class*="_titleRow"]');
+            if (rowEl !== null) {
+              var own = rowEl.querySelector('[data-handheld="title"]');
+              var hasText = String(rowEl.textContent || "").replace(/\s+/g, "") !== "";
+              if (own === null && !hasText) {
+                own = document.createElement("span");
+                own.setAttribute("data-handheld", "title");
+                rowEl.insertBefore(own, rowEl.firstChild);
+              }
+              if (own !== null) {
+                var label = sessionLabel();
+                if (label !== "" && own.textContent !== label) own.textContent = label;
+              }
+            }
+          } catch (e) { /* 自愈失败不该影响页面 */ }
+
           // 目录入口：插件那颗按钮是注册进宿主槽里的（随 fiber 一起没了），而宿主在
           // 「侧栏还有窄条」的状态下**不挂载**它自己的 HeaderLeadingControls ——
           // 于是抽屉一个入口都没有（真机试点确认：头部只剩 👥 与 ⏱）。这里补一颗裸按钮，
