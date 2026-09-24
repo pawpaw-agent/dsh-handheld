@@ -57,6 +57,14 @@ window.__ModuleLoader__.load({
     // 包装只多两次 performance.now()（~100ns），不影响被量的对象。
     var __cost = { mark: 0, turn: 0, ask: 0 };
     var __costN = { mark: 0, turn: 0, ask: 0 };
+    // 只**数**不做事的 characterData 观察者：流式追加文字改的是文本节点内容
+    // （characterData），而我们那三个观察者都只订阅 childList —— 它们看不见这类变更。
+    // 这个计数器就是为了证明这一点：流式期间它应当猛涨，而 mark/turn/ask 应当接近 0。
+    var __cdN = 0;
+    try {
+      var __cdObs = new MutationObserver(function (recs) { __cdN += recs.length; });
+      __cdObs.observe(document.documentElement, { characterData: true, subtree: true });
+    } catch (e) { /* 诊断永远不该影响主流程 */ }
     var __now = function () {
       return (window.performance && performance.now) ? performance.now() : Date.now();
     };
@@ -1638,9 +1646,9 @@ window.__ModuleLoader__.load({
         var timer = window.setInterval(function () {
           var total = __cost.mark + __cost.turn + __cost.ask;
           // 2026-09-25：取证期间**不设阈值**，连调用次数一起报 —— 否则「一条都没有」
-          // 分不清是「成本低」还是「页面根本没在变」。只在前 15 分钟报（有界），
+          // 分不清是「成本低」还是「页面根本没在变」。只在前 2 分钟报（有界），
           // 之后回到「超过 20ms 才报」，不会长期刷日志。
-          var probing = __now() < 15 * 60 * 1000;
+          var probing = __now() < 2 * 60 * 1000;
           if (probing || total >= 20) {
             postToApp({
               type: "perf",
@@ -1651,10 +1659,12 @@ window.__ModuleLoader__.load({
               ask: Math.round(__cost.ask * 10) / 10, askN: __costN.ask,
               vis: document.visibilityState || "?",
               probing: probing,
+              cdN: __cdN,
             });
           }
           __cost.mark = 0; __cost.turn = 0; __cost.ask = 0;
           __costN.mark = 0; __costN.turn = 0; __costN.ask = 0;
+          __cdN = 0;
         }, 10000);
         return function () { window.clearInterval(timer); };
       }, "dsh-handheld-mobile: js cost probe");
