@@ -145,6 +145,9 @@ class MainActivity : Activity() {
         }
     }
 
+    /** 键盘当前是否可见（由 root 的 insets 监听维护）。 */
+    private var imeVisible = false
+
     private var pendingAuth: HttpAuthHandler? = null
     private var statusView: TextView? = null
     private var sshKeyPathInput: EditText? = null
@@ -1457,6 +1460,10 @@ class MainActivity : Activity() {
         // 行为不一致。这里直接消费 IME inset —— 窗口已经缩过时这个值是 0，不会重复位移，
         // 所以两种行为下都对。
         androidx.core.view.ViewCompat.setOnApplyWindowInsetsListener(root) { v, insets ->
+            // 顺手记下键盘是否可见：onBackPressed 要用它决定「先收键盘」还是走返回阶梯。
+            // 输入法自己吃掉 BACK 的行为在这台机器上**时灵时不灵**（2026-09-25 真机日志：
+            // 同样「键盘弹起 + BACK」，一次被输入法消费、一次直接回连接屏），所以显式判。
+            imeVisible = insets.isVisible(androidx.core.view.WindowInsetsCompat.Type.ime())
             v.setPadding(
                 0, 0, 0,
                 insets.getInsets(androidx.core.view.WindowInsetsCompat.Type.ime()).bottom
@@ -2359,6 +2366,17 @@ class MainActivity : Activity() {
 
     @Deprecated("Deprecated in Java")
     override fun onBackPressed() {
+        // 键盘弹起时，BACK 的第一语义是**收起键盘**（Android 约定）。少了这一级，
+        // 会话页上「想收键盘」的那一下会落到下面的阶梯里，而无网页历史时它直接是
+        // 「回连接屏」—— 用户只是想收键盘，却被切出会话页；流式输出照旧在后台的 WebView
+        // 里跑，屏幕上却什么都看不到（2026-09-25 真机日志：
+        //   BACK: 无历史 → 回连接屏 / screen: WEB → CONNECT），看起来就像「流式不动了」。
+        if (screen == Screen.WEB && imeVisible) {
+            DiagLog.i(TAG, "BACK: 键盘可见 → 只收键盘（不走返回阶梯）")
+            (getSystemService(android.content.Context.INPUT_METHOD_SERVICE) as? android.view.inputmethod.InputMethodManager)
+                ?.hideSoftInputFromWindow(webView?.windowToken, 0)
+            return
+        }
         when {
             // 覆盖层优先关掉：否则连接屏的 BACK 语义（moveTaskToBack）会把 App 退到后台、
             // 而诊断页还盖在上面 —— 回来时仍是一个"按什么都没反应"的页面。
