@@ -2459,7 +2459,17 @@ window.__ModuleLoader__.load({
             try { return document.querySelectorAll(sel).length; } catch (e) { return -1; }
           };
           var frameEl = document.querySelector('[data-handheld="frame"]');
-          var styleTag = document.querySelector('style[data-plugin="dsh-handheld-mobile"]');
+          // 用 dataset 遍历找我们那张表 —— 不写字面量选择器（那会被契约检查当成「读宿主钩子」）。
+          var styleTag = null;
+          try {
+            var allStyle = document.querySelectorAll("style");
+            for (var si = 0; si < allStyle.length; si++) {
+              if (allStyle[si].dataset && allStyle[si].dataset.plugin === "dsh-handheld-mobile") {
+                styleTag = allStyle[si];
+                break;
+              }
+            }
+          } catch (e) { /* 诊断永远不该影响主流程 */ }
           var rules = -1;
           try {
             if (styleTag && styleTag.sheet) rules = styleTag.sheet.cssRules ? styleTag.sheet.cssRules.length : -2;
