@@ -2444,6 +2444,54 @@ window.__ModuleLoader__.load({
 
       // 注入链的一次性时序（见文件顶部注释）：nav = 导航起点到本文件开始执行（含取回+解析），
       // apply = 本文件开始执行到适配层装配完。这两个数决定「还值不值得为省字节去动构建链」。
+      // ── 环境诊断（一次性，2026-09-25）─────────────────────────
+      // 起因：换到 dsh 0.1.7-rc.2 后，手机上整份适配 CSS **一条都没生效**（宿主桌面布局
+      // 原样呈现），而 apply 是跑完的（plugin-init 出声）。适配 CSS 整块包在
+      // MOBILE_QUERY 里，所以嫌疑集中在「媒体查询为什么不再成立」——
+      // 但 innerW=384 已经由引导脚本证明（max-width 那半为真），剩下的必须问页面。
+      // 没有别的求值入口（App 只有内部 evaluateJavascript），所以只能靠这一发取证。
+      try {
+        window.setTimeout(function () {
+          var mq = function (q) {
+            try { return window.matchMedia && window.matchMedia(q).matches ? 1 : 0; } catch (e) { return -1; }
+          };
+          var count = function (sel) {
+            try { return document.querySelectorAll(sel).length; } catch (e) { return -1; }
+          };
+          var frameEl = document.querySelector('[data-handheld="frame"]');
+          var styleTag = document.querySelector('style[data-plugin="dsh-handheld-mobile"]');
+          var rules = -1;
+          try {
+            if (styleTag && styleTag.sheet) rules = styleTag.sheet.cssRules ? styleTag.sheet.cssRules.length : -2;
+          } catch (e) { rules = -3; }
+          postToApp({
+            type: "perf",
+            what: "env-diag",
+            mq: mq(MOBILE_QUERY),
+            mqW: mq("(max-width: 1023px)"),
+            mqP: mq("(pointer: coarse)"),
+            mqAnyP: mq("(any-pointer: coarse)"),
+            mqHover: mq("(hover: none)"),
+            innerW: window.innerWidth,
+            innerH: window.innerHeight,
+            dpr: Math.round((window.devicePixelRatio || 0) * 100) / 100,
+            frame: frameEl !== null,
+            frameCls: frameEl !== null ? String(frameEl.className || "").slice(0, 60) : "",
+            styleTag: styleTag !== null,
+            rules: rules,
+            headKids: document.head ? document.head.children.length : -1,
+            nFrame: count('[class*="_frame"]'),
+            nSidebarCol: count('[class*="_sidebarCol"]'),
+            nLogoRow: count('[class*="_logoRow"]'),
+            nTabStrip: count('[class*="_tabStrip"]'),
+            nTabs: count('[class*="_tabs"]'),
+            nTitleRow: count('[class*="_titleRow"]'),
+            nTurnProcess: count('[data-turn-process]'),
+            nPhase: count('[data-phase]'),
+          });
+        }, 2000);
+      } catch (e) { /* 诊断永远不该影响主流程 */ }
+
       try {
         var __dshHandheldT1 = (window.performance && performance.now) ? performance.now() : 0;
         postToApp({
