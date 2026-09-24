@@ -124,31 +124,21 @@ class MainActivity : Activity() {
     /** 页面那次麦克风请求：等系统权限结果回来再 grant/deny（见 onPermissionRequest）。 */
     private var pendingMicRequest: android.webkit.PermissionRequest? = null
 
-    // ── 语音输入：音频模式与录音监视（2026-09-25）─────────────────────────────
-    /**
-     * WebView 的 `getUserMedia` 会走回声消除，而回声消除要系统处于**通信模式**：
-     * 不切模式时 Chromium 直接报
-     *   `audio_manager_android.cc:883 Unable to select communication device!`
-     * 然后整个请求以 `NotReadableError: Could not start audio source` 失败 ——
-     * 真机上就是「语音识别失败：Could not st…」那条提示。
-     *
-     * 但通信模式是**全设备**的（会把媒体声音改走听筒），所以不能开了不管。恢复策略刻意
-     * 简单：**每次放行都切一次**（日志证明每次 getUserMedia 都会重新走 onPermissionRequest）
-     * + 15 秒后自动恢复 + App 退到后台时恢复。
-     *
-     * 原打算用 AudioRecordingCallback 精确判断「我们的录音停了」，但
-     * `AudioRecordingConfiguration` 没有 `getClientPackageName()`（只有 clientAudioSource/
-     * clientAudioSessionId/format/device）—— 认不出哪条配置是本包的，只好作罢。
-     */
-    private val audioModeRestore = Runnable { setCommAudioMode(false) }
-    private val AUDIO_MODE_HOLD_MS = 15_000L
+    // ── 语音输入（2026-09-25）─────────────────────────────────────────────
+    //
+    // 已确认并修好的：WebView 的权限链（清单 RECORD_AUDIO + 运行时申请 +
+    // onPermissionRequest 放行）。修之前页面直接报「麦克风权限未开启」。
+    //
+    // **仍未解决**：权限放行后 getUserMedia 依然以
+    //   NotReadableError: Could not start audio source
+    // 失败（App 侧自测的原始读数，见 [micSelfTest]）。已排除：权限（appops=foreground）、
+    // 全局传感器隐私（未开）、麦克风被占用（录音活动为空）、音频模式（试过切
+    // MODE_IN_COMMUNICATION，chromium 仍报 Unable to select communication device —— 那条
+    // 是噪音，不是根因）。剩下的嫌疑在 WebView 的音频采集本身（设备 2 的 WebView 是 153，
+    // 这台是 151，值得对照）。
+    //
+    // 音频模式的尝试已撤掉：无效，且通信模式是全设备的（会把媒体声音改走听筒）。
 
-    /**
-     * 语音输入自检：页面报「语音识别失败」时，光看页面那条被截断的提示是查不下去的
-     * （2026-09-25 真机就卡在这里：权限已放行、麦克风空闲、音频模式也切了，仍失败）。
-     * 这里从 App 侧直接跑一次 getUserMedia，把 DOMException 的 **name + message** 读回来 ——
-     * 那才是根因现场。结果落日志，不进 UI。
-     */
     private fun micSelfTest() {
         val wv = webView ?: return
         val js = "(function(){window.__micTest='pending';" +
@@ -591,9 +581,6 @@ class MainActivity : Activity() {
                         android.content.pm.PackageManager.PERMISSION_GRANTED
                     ) {
                         DiagLog.i(TAG, "页面权限请求：放行麦克风（origin=$origin）")
-                        setCommAudioMode(true)
-                        ui.removeCallbacks(audioModeRestore)
-                        ui.postDelayed(audioModeRestore, AUDIO_MODE_HOLD_MS)
                         request.grant(arrayOf(android.webkit.PermissionRequest.RESOURCE_AUDIO_CAPTURE))
                         micSelfTest()
                         return
@@ -2359,9 +2346,6 @@ class MainActivity : Activity() {
         val busy = (application as? DshApp)?.pageBusy == true
         if (busy) DiagLog.i(TAG, "onPause: 页面正在生成，保留定时器（任务完成通知依赖它）")
         else webView?.pauseTimers()
-        // 退到后台就别占着通信模式（它会把全设备的媒体声音改走听筒）。
-        ui.removeCallbacks(audioModeRestore)
-        setCommAudioMode(false)
     }
 
     @Deprecated("Deprecated in Java")
