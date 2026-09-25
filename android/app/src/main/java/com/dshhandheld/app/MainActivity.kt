@@ -1208,7 +1208,6 @@ class MainActivity : Activity() {
         fun enableTurnNotif() {
             prefs.edit().putBoolean(DshApp.PREF_NOTIF_TURN, true).apply()
             Notifier.ensureChannels(this@MainActivity)
-            Notifier.ensureChannels(this@MainActivity, Notifier.CHANNEL_ASK)
             status("已开启提醒")
             refreshNotifHint()
             // 开了就要有权威信号兜底（页面被冻时它才管用）。见 HarnessEventsClient。

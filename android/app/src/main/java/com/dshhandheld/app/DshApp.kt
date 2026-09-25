@@ -295,7 +295,6 @@ class DshApp : Application() {
         // 「第一条通知之前看不到它」会让「为什么没弹横幅」变成一个查不到的空白。
         if (prefs.getBoolean(PREF_NOTIF_TURN, false)) {
             Notifier.ensureChannels(this)
-            Notifier.ensureChannels(this, Notifier.CHANNEL_ASK)
         }
         // 冷启动时隧道可能还没恢复：syncEventsClient 自己会在没有隧道时什么都不做，
         // 等 ensureTunnel 成功那条路径再把它挂上。
