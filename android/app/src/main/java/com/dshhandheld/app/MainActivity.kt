@@ -114,6 +114,28 @@ class MainActivity : Activity() {
             }
         }
     }
+    /**
+     * 用系统浏览器打开一个外链。
+     *
+     * 只放行 http/https：`intent:` / `file:` / `content:` 之类的 URL 一律不处理 ——
+     * 那是本机资源被页面引用，放出去等于把 App 的能力借给任意页面。
+     */
+    private fun openExternally(url: String): Boolean {
+        val uri = runCatching { android.net.Uri.parse(url) }.getOrNull() ?: return false
+        if (uri.scheme != "http" && uri.scheme != "https") {
+            DiagLog.i(TAG, "外链：拒绝非 http(s) —— $url")
+            return false
+        }
+        DiagLog.i(TAG, "外链：交给系统浏览器 —— $url")
+        return runCatching {
+            startActivity(Intent(Intent.ACTION_VIEW, uri).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+            true
+        }.getOrElse {
+            DiagLog.w(TAG, "外链：打不开（${it.javaClass.simpleName}: ${it.message}）")
+            false
+        }
+    }
+
     /** 键盘当前是否可见（由 root 的 insets 监听维护）。 */
     private var imeVisible = false
 
@@ -386,6 +408,9 @@ class MainActivity : Activity() {
          * 被自己的日志抓出来的（「拒绝（origin=http://127.0.0.1:3080/，resources=…AUDIO_CAPTURE）」）。
          * 解析成 scheme/host/port 来比，尾斜杠与大小写都不再是坑。
          */
+        /** 这个 URL 是不是我们自己的隧道页面（整条 URL，不是 origin）。 */
+        fun isTunnelUrl(url: String): Boolean = isTunnelOrigin(url)
+
         fun isTunnelOrigin(origin: String): Boolean {
             val uri = runCatching { android.net.Uri.parse(origin) }.getOrNull() ?: return false
             if (uri.scheme != "http" || uri.host != "127.0.0.1") return false
@@ -463,6 +488,10 @@ class MainActivity : Activity() {
                 setSupportZoom(false)
                 loadWithOverviewMode = true
                 useWideViewPort = true
+                // dsh 用 `window.open(url, "_blank", ...)` 开外链（聊天里的链接、右栏浏览器
+                // 面板的「外部打开」、工具输出里的链接）。默认 false 时这类调用**静默失效**
+                // —— 点了没反应。开多窗口能力后由下面的 onCreateWindow 接住。
+                setSupportMultipleWindows(true)
             }
             webViewClient = object : WebViewClient() {
                 override fun onPageStarted(view: WebView?, url: String?, favicon: android.graphics.Bitmap?) {
@@ -490,6 +519,18 @@ class MainActivity : Activity() {
                     if (!navFailed) hideErrorPage()
                     else DiagLog.i(TAG, "onPageFinished: 这次导航失败过，保留覆盖层")
                 }
+                /**
+                 * 页面里点了个**非隧道**的链接（没有走 `_blank` 的那种）：别把壳导航走 ——
+                 * 那样 dsh 页面就没了，而且回不来。交给系统浏览器。
+                 */
+                override fun shouldOverrideUrlLoading(
+                    view: WebView?, request: WebResourceRequest?
+                ): Boolean {
+                    val url = request?.url?.toString() ?: return false
+                    if (isTunnelUrl(url)) return false          // 隧道内的导航照常
+                    return openExternally(url)
+                }
+
                 override fun onReceivedError(view: WebView?, request: WebResourceRequest?, error: WebResourceError?) {
                     // ERR_ABORTED(-3) = 导航被取消（重载/加载 about:blank 打断上一请求），不算失败
                     if (request?.isForMainFrame == true && error?.errorCode != -3) {
@@ -571,6 +612,34 @@ class MainActivity : Activity() {
                         DiagLog.i(TAG, "页面 console[${msg.messageLevel()}] ${msg.message()} " +
                             "@${msg.sourceId()}:${msg.lineNumber()}")
                     }
+                    return true
+                }
+
+                /**
+                 * `window.open` / `target=_blank` 的落点。
+                 *
+                 * 不真的开新窗口：造一个一次性 WebView 接住 URL，立刻交给系统浏览器并销毁。
+                 * （开了多窗口能力却不实现这个方法，外链会**照样失效** —— 这是 Android
+                 * WebView 的一个坑。）
+                 */
+                override fun onCreateWindow(
+                    view: WebView?, isDialog: Boolean, isUserGesture: Boolean,
+                    resultMsg: android.os.Message?
+                ): Boolean {
+                    val transport = resultMsg?.obj as? WebView.WebViewTransport ?: return false
+                    val probe = WebView(this@MainActivity)
+                    probe.settings.javaScriptEnabled = false
+                    probe.webViewClient = object : WebViewClient() {
+                        override fun shouldOverrideUrlLoading(
+                            v: WebView?, request: WebResourceRequest?
+                        ): Boolean {
+                            request?.url?.toString()?.let { openExternally(it) }
+                            ui.post { runCatching { probe.destroy() } }
+                            return true
+                        }
+                    }
+                    transport.webView = probe
+                    resultMsg.sendToTarget()
                     return true
                 }
 
