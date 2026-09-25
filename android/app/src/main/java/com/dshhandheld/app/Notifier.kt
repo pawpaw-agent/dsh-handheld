@@ -126,7 +126,6 @@ object Notifier {
     fun cancelTurn(context: Context) {
         val nm = context.getSystemService(NotificationManager::class.java) ?: return
         nm.cancel(ID_TURN)
-        nm.cancel(ID_ASK)
     }
 
     /**
