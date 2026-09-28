@@ -1235,7 +1235,9 @@ class MainActivity : Activity() {
                 DiagLog.i(TAG, "多主机：切到 ${picked.label}")
                 // 切主机 = 换一台电脑。旧隧道必须拆掉，否则按钮还停在「打开 dsh 网页」，
                 // 点它只会打开**旧主机**的页面（真机反馈：切换主机并没有连接上）。
-                if (tunneled || pageAlive) {
+                val wasTunneled = (application as DshApp).liveTunnel() != null
+                val wasPageAlive = webView?.url?.startsWith("http") == true
+                if (wasTunneled || wasPageAlive) {
                     DiagLog.i(TAG, "多主机：拆掉旧隧道并自动连到 ${picked.label}")
                     disconnectCurrent()
                     ui.postDelayed({
