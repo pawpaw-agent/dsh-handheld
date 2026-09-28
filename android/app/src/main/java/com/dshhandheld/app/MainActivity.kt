@@ -30,6 +30,7 @@ import android.webkit.WebResourceError
 import android.webkit.WebResourceRequest
 import android.webkit.WebView
 import android.webkit.WebViewClient
+import android.widget.Spinner
 import android.widget.Button
 import android.widget.EditText
 import android.widget.FrameLayout
@@ -1129,6 +1130,108 @@ class MainActivity : Activity() {
         }
         theForm.addView(keyBlock, rowParams(width = ViewGroup.LayoutParams.MATCH_PARENT))
 
+
+        // ── 多主机（2026-09-25）──────────────────────────────────────────
+        // 列表与当前项的分工见 SshHosts 的注释：ssh_json 恒为「当前生效」那条。
+        // 这一行放在表单最上面，切主机不必先展开别的字段。
+        val hostLabels = ArrayList<String>()
+        val hostIds = ArrayList<String>()
+        val hostAdapter = android.widget.ArrayAdapter(
+            this@MainActivity, android.R.layout.simple_spinner_item, hostLabels
+        ).apply { setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item) }
+        val hostPicker = Spinner(this@MainActivity).apply { adapter = hostAdapter }
+        var hostPickSuppressed = false
+
+        /** 表单当前值 → 一条配置（auth 取自表单的密码/私钥选择）。 */
+        fun formConfig(): SshConfig = buildSshConfig(
+            sshHostInput.text.toString().trim(),
+            sshPortInput.text.toString().trim().toIntOrNull()?.coerceIn(1, 65535)
+                ?: SshConfig.DEFAULT_SSH_PORT,
+            sshUserInput.text.toString().trim(),
+            SshConfig.DEFAULT_REMOTE_PORT,
+            if (authKeyBtn.isChecked) {
+                SshTunnel.Auth.KeyPair(
+                    File(keyPathInput.text.toString().trim()),
+                    keyPassInput.text.toString().ifEmpty { null }
+                )
+            } else {
+                SshTunnel.Auth.Password(sshPassInput.text.toString())
+            }
+        )
+
+        /** 把一条配置填进表单（不触发 spinner 回环）。 */
+        fun applyHostToForm(h: SshConfig) {
+            hostPickSuppressed = true
+            sshHostInput.setText(h.host)
+            sshPortInput.setText(h.port.toString())
+            sshUserInput.setText(h.user)
+            if (h.usesKey) {
+                authKeyBtn.isChecked = true
+                keyPathInput.setText(h.keyPath)
+                keyPassInput.setText(h.keyPass)
+            } else {
+                authPassBtn.isChecked = true
+                sshPassInput.setText(h.password)
+            }
+            hostPickSuppressed = false
+        }
+
+        fun reloadHosts(selectId: String? = null) {
+            val hosts = SshHosts.list(prefs)
+            hostLabels.clear(); hostIds.clear()
+            hosts.forEach { hostLabels.add(it.label); hostIds.add(it.id) }
+            hostAdapter.notifyDataSetChanged()
+            val want = selectId ?: SshHosts.activeId(prefs).ifBlank { hosts.firstOrNull()?.id ?: "" }
+            val at = hostIds.indexOf(want)
+            if (at >= 0) {
+                hostPickSuppressed = true
+                hostPicker.setSelection(at, false)
+                hostPickSuppressed = false
+            }
+        }
+
+        hostPicker.onItemSelectedListener = object : android.widget.AdapterView.OnItemSelectedListener {
+            override fun onItemSelected(p: android.widget.AdapterView<*>?, v: View?, pos: Int, id: Long) {
+                if (hostPickSuppressed) return
+                val hosts = SshHosts.list(prefs)
+                val picked = hosts.firstOrNull { it.id == hostIds.getOrNull(pos) } ?: return
+                applyHostToForm(picked)
+                SshHosts.setActive(prefs, picked.id)
+                DiagLog.i(TAG, "多主机：切到 ${picked.label}")
+                syncConnectUi()
+            }
+            override fun onNothingSelected(p: android.widget.AdapterView<*>?) = Unit
+        }
+
+        val saveHostBtn = UiKit.button(this@MainActivity, "存为新主机", UiKit.Style.SECONDARY, textSize = 12f)
+        val delHostBtn = UiKit.button(this@MainActivity, "删除", UiKit.Style.SECONDARY, textSize = 12f)
+        saveHostBtn.setOnClickListener {
+            val cfg = formConfig()
+            if (!cfg.isComplete) { status("先填好电脑地址与登录账号，再存为主机"); return@setOnClickListener }
+            val saved = SshHosts.upsert(prefs, cfg)
+            reloadHosts(saved.id)
+            status("已保存主机「${saved.label}」")
+        }
+        delHostBtn.setOnClickListener {
+            val id = hostIds.getOrNull(hostPicker.selectedItemPosition)
+            if (id == null) { status("还没有可删除的主机"); return@setOnClickListener }
+            val hosts = SshHosts.remove(prefs, id)
+            reloadHosts(hosts.firstOrNull()?.id)
+            hosts.firstOrNull()?.let { applyHostToForm(it) }
+            status("已删除该主机")
+        }
+
+        theForm.addView(LinearLayout(this@MainActivity).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = android.view.Gravity.CENTER_VERTICAL
+            addView(hostPicker, LinearLayout.LayoutParams(0, dp(44), 1f).apply { marginEnd = dp(8) })
+            addView(saveHostBtn, LinearLayout.LayoutParams(dp(96), dp(40)))
+            addView(delHostBtn, LinearLayout.LayoutParams(dp(60), dp(40)).apply { marginStart = dp(6) })
+        }, rowParams(width = ViewGroup.LayoutParams.MATCH_PARENT))
+        theForm.addView(label("主机", hostPicker), rowParams(top = dp(4), width = ViewGroup.LayoutParams.MATCH_PARENT))
+        reloadHosts()
+
+
         fun syncAuthFields() {
             val key = authKeyBtn.isChecked
             passBlock.visibility = if (key) View.GONE else View.VISIBLE
@@ -1902,6 +2005,10 @@ class MainActivity : Activity() {
                 next.copy(keyPath = prev?.keyPath.orEmpty(), keyPass = prev?.keyPass.orEmpty())
             }
             SshConfig.save(prefs, merged)
+            // 多主机：当前这条也要更新进列表，否则切走再切回来还是旧值。
+            // id 为空（列表还没建过）时 upsert 会新建一条，等于顺手完成迁移。
+            val id = SshHosts.activeId(prefs).ifBlank { SshHosts.list(prefs).firstOrNull()?.id ?: "" }
+            SshHosts.upsert(prefs, merged.copy(id = id))
         } catch (e: Exception) {
             // 空 catch 是审计 A4 点过的另一件事：落盘失败必须留痕，否则「配置没了」无从查起。
             DiagLog.w(TAG, "persistSshConfig 失败：${e.javaClass.simpleName}: ${e.message}")
