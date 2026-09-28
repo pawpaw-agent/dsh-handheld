@@ -1,6 +1,7 @@
 package com.dshhandheld.app
 
 import android.content.SharedPreferences
+import com.dshhandheld.diag.DiagLog
 import com.dshhandheld.protocol.SshTunnel
 import org.json.JSONObject
 import java.io.File

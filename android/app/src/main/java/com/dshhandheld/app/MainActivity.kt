@@ -1203,18 +1203,22 @@ class MainActivity : Activity() {
             override fun onNothingSelected(p: android.widget.AdapterView<*>?) = Unit
         }
 
-        val saveHostBtn = UiKit.button(this@MainActivity, "存为新主机", UiKit.Style.SECONDARY, textSize = 12f)
-        val delHostBtn = UiKit.button(this@MainActivity, "删除", UiKit.Style.SECONDARY, textSize = 12f)
-        saveHostBtn.setOnClickListener {
+        val saveHostBtn = UiKit.button(this@MainActivity, "存为新主机", UiKit.Style.SECONDARY, textSize = 12f) {
             val cfg = formConfig()
-            if (!cfg.isComplete) { status("先填好电脑地址与登录账号，再存为主机"); return@setOnClickListener }
+            if (!cfg.isComplete) {
+                status("先填好电脑地址与登录账号，再存为主机")
+                return@button
+            }
             val saved = SshHosts.upsert(prefs, cfg)
             reloadHosts(saved.id)
             status("已保存主机「${saved.label}」")
         }
-        delHostBtn.setOnClickListener {
+        val delHostBtn = UiKit.button(this@MainActivity, "删除", UiKit.Style.SECONDARY, textSize = 12f) {
             val id = hostIds.getOrNull(hostPicker.selectedItemPosition)
-            if (id == null) { status("还没有可删除的主机"); return@setOnClickListener }
+            if (id == null) {
+                status("还没有可删除的主机")
+                return@button
+            }
             val hosts = SshHosts.remove(prefs, id)
             reloadHosts(hosts.firstOrNull()?.id)
             hosts.firstOrNull()?.let { applyHostToForm(it) }
@@ -1228,7 +1232,11 @@ class MainActivity : Activity() {
             addView(saveHostBtn, LinearLayout.LayoutParams(dp(96), dp(40)))
             addView(delHostBtn, LinearLayout.LayoutParams(dp(60), dp(40)).apply { marginStart = dp(6) })
         }, rowParams(width = ViewGroup.LayoutParams.MATCH_PARENT))
-        theForm.addView(label("主机", hostPicker), rowParams(top = dp(4), width = ViewGroup.LayoutParams.MATCH_PARENT))
+        // 标签放在下拉下面一行：label() 只接 EditText（labelFor 用），Spinner 用普通文本即可。
+        theForm.addView(
+            UiKit.text(this@MainActivity, "主机", 11f, COL_DIM, letterSpacing = 0.12f),
+            rowParams(top = dp(2), width = ViewGroup.LayoutParams.MATCH_PARENT)
+        )
         reloadHosts()
 
 
