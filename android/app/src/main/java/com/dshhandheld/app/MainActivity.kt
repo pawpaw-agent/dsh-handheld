@@ -163,6 +163,11 @@ class MainActivity : Activity() {
     private var sshKeyPathInput: EditText? = null
     /** 连接屏是否处于「新主机」态（下拉选中了 `＋ 新建主机…`）。连接落库时据此决定新建还是更新。 */
     private var sshNewHostMode = false
+    /**
+     * 主按钮的动作（连接流程）。存一份是为了「切换主机」能自动重连 ——
+     * 那段流程定义在主机选择行**之后**，局部函数在前面调不到。
+     */
+    private var connectAction: (() -> Unit)? = null
 
     // ── 连接屏（状态优先版）的引用：见 [createConnectView] ────────────────
     /** 贴底动作区那一个主按钮（文案与动作随相位/隧道状态变）。 */
@@ -1185,8 +1190,9 @@ class MainActivity : Activity() {
             hostPickSuppressed = false
         }
 
-        /** 清空表单，进入「新主机」态。 */
+        /** 清空表单，进入「新主机」态（并展开表单 —— 不然没地方填地址）。 */
         fun startNewHost() {
+            showPhase(ConnectPhase.EDIT)
             hostPickSuppressed = true
             sshHostInput.setText("")
             sshPortInput.setText(SshConfig.DEFAULT_SSH_PORT.toString())
@@ -1227,6 +1233,16 @@ class MainActivity : Activity() {
                 applyHostToForm(picked)
                 SshHosts.setActive(prefs, picked.id)
                 DiagLog.i(TAG, "多主机：切到 ${picked.label}")
+                // 切主机 = 换一台电脑。旧隧道必须拆掉，否则按钮还停在「打开 dsh 网页」，
+                // 点它只会打开**旧主机**的页面（真机反馈：切换主机并没有连接上）。
+                if (tunneled || pageAlive) {
+                    DiagLog.i(TAG, "多主机：拆掉旧隧道并自动连到 ${picked.label}")
+                    disconnectCurrent()
+                    ui.postDelayed({
+                        if (picked.isComplete) connectAction?.invoke()
+                        else status("这台主机的地址/账号不全，补齐后再连")
+                    }, 700)
+                }
                 syncConnectUi()
             }
             override fun onNothingSelected(p: android.widget.AdapterView<*>?) = Unit
@@ -1261,18 +1277,22 @@ class MainActivity : Activity() {
             status("已删除该主机")
         }
 
-        theForm.addView(
-            UiKit.text(this@MainActivity, "主机", 11f, COL_DIM, letterSpacing = 0.12f),
-            rowParams(top = dp(2), width = ViewGroup.LayoutParams.MATCH_PARENT)
-        )
-        theForm.addView(hostPicker, rowParams(top = dp(6), width = ViewGroup.LayoutParams.MATCH_PARENT))
-        theForm.addView(LinearLayout(this@MainActivity).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = android.view.Gravity.CENTER_VERTICAL
-            addView(newHostBtn, LinearLayout.LayoutParams(0, dp(40), 1f).apply { marginEnd = dp(6) })
-            addView(saveHostBtn, LinearLayout.LayoutParams(dp(76), dp(40)))
-            addView(delHostBtn, LinearLayout.LayoutParams(dp(64), dp(40)).apply { marginStart = dp(6) })
-        }, rowParams(top = dp(7), width = ViewGroup.LayoutParams.MATCH_PARENT))
+        // 独立卡片、放在「连接设置」**上面**：选择/添加主机不该先点进折叠表单
+        // （用户原话：「我想在连接页面选择主机和添加主机，不要点进去」）。
+        content.addView(LinearLayout(this@MainActivity).apply {
+            orientation = LinearLayout.VERTICAL
+            setBackgroundResource(R.drawable.bg_card)
+            setPadding(dp(16), dp(14), dp(16), dp(14))
+            addView(UiKit.text(this@MainActivity, "主机", 11f, COL_DIM, letterSpacing = 0.12f))
+            addView(hostPicker, rowParams(top = dp(6), width = ViewGroup.LayoutParams.MATCH_PARENT))
+            addView(LinearLayout(this@MainActivity).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = android.view.Gravity.CENTER_VERTICAL
+                addView(newHostBtn, LinearLayout.LayoutParams(0, dp(40), 1f).apply { marginEnd = dp(6) })
+                addView(saveHostBtn, LinearLayout.LayoutParams(dp(76), dp(40)))
+                addView(delHostBtn, LinearLayout.LayoutParams(dp(64), dp(40)).apply { marginStart = dp(6) })
+            }, rowParams(top = dp(8), width = ViewGroup.LayoutParams.MATCH_PARENT))
+        }, rowParams(top = dp(16), width = ViewGroup.LayoutParams.MATCH_PARENT))
         reloadHosts()
 
 
@@ -1567,6 +1587,8 @@ class MainActivity : Activity() {
             onPrimaryAction()
         }
         connectMainBtn = main
+        // 供「切换主机」自动重连复用（见 connectAction 字段）。
+        connectAction = { onPrimaryAction() }
         actionZone.addView(main, rowParams(top = dp(10), height = dp(54),
             width = ViewGroup.LayoutParams.MATCH_PARENT))
 
