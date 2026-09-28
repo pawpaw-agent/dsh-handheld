@@ -161,6 +161,8 @@ class MainActivity : Activity() {
 
     private var statusView: TextView? = null
     private var sshKeyPathInput: EditText? = null
+    /** 连接屏是否处于「新主机」态（下拉选中了 `＋ 新建主机…`）。连接落库时据此决定新建还是更新。 */
+    private var sshNewHostMode = false
 
     // ── 连接屏（状态优先版）的引用：见 [createConnectView] ────────────────
     /** 贴底动作区那一个主按钮（文案与动作随相位/隧道状态变）。 */
@@ -1133,7 +1135,11 @@ class MainActivity : Activity() {
 
         // ── 多主机（2026-09-25）──────────────────────────────────────────
         // 列表与当前项的分工见 SshHosts 的注释：ssh_json 恒为「当前生效」那条。
-        // 这一行放在表单最上面，切主机不必先展开别的字段。
+        //
+        // 交互（用户要求「连接页面可以直接添加」）：
+        //   下拉第一项是 `＋ 新建主机…` —— 选中它表单清空、进入「新主机」态，
+        //   填好地址/账号/密码点【保存】才落库；选已存主机时【保存】是**就地更新**。
+        //   （早先只有「存为新主机」，改一下当前主机的密码就会多出一条副本 —— 那是个毛病。）
         val hostLabels = ArrayList<String>()
         val hostIds = ArrayList<String>()
         val hostAdapter = android.widget.ArrayAdapter(
@@ -1141,6 +1147,8 @@ class MainActivity : Activity() {
         ).apply { setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item) }
         val hostPicker = Spinner(this@MainActivity).apply { adapter = hostAdapter }
         var hostPickSuppressed = false
+        // 镜像到字段：persistSshConfig（连接时）也要知道当前是不是「新主机」态。
+        sshNewHostMode = false
 
         /** 表单当前值 → 一条配置（auth 取自表单的密码/私钥选择）。 */
         fun formConfig(): SshConfig = buildSshConfig(
@@ -1173,26 +1181,47 @@ class MainActivity : Activity() {
                 authPassBtn.isChecked = true
                 sshPassInput.setText(h.password)
             }
+            sshNewHostMode = false
+            hostPickSuppressed = false
+        }
+
+        /** 清空表单，进入「新主机」态。 */
+        fun startNewHost() {
+            hostPickSuppressed = true
+            sshHostInput.setText("")
+            sshPortInput.setText(SshConfig.DEFAULT_SSH_PORT.toString())
+            sshUserInput.setText("")
+            sshPassInput.setText("")
+            keyPathInput.setText("")
+            keyPassInput.setText("")
+            authPassBtn.isChecked = true
+            sshNewHostMode = true
             hostPickSuppressed = false
         }
 
         fun reloadHosts(selectId: String? = null) {
             val hosts = SshHosts.list(prefs)
             hostLabels.clear(); hostIds.clear()
+            // 第 0 项固定是「新建」：这样「直接添加」不用先改当前主机的内容。
+            hostLabels.add("＋ 新建主机…"); hostIds.add("")
             hosts.forEach { hostLabels.add(it.label); hostIds.add(it.id) }
             hostAdapter.notifyDataSetChanged()
             val want = selectId ?: SshHosts.activeId(prefs).ifBlank { hosts.firstOrNull()?.id ?: "" }
-            val at = hostIds.indexOf(want)
-            if (at >= 0) {
-                hostPickSuppressed = true
-                hostPicker.setSelection(at, false)
-                hostPickSuppressed = false
-            }
+            val at = hostIds.indexOf(want).takeIf { it >= 0 } ?: 0
+            hostPickSuppressed = true
+            hostPicker.setSelection(at, false)
+            hostPickSuppressed = false
         }
 
         hostPicker.onItemSelectedListener = object : android.widget.AdapterView.OnItemSelectedListener {
             override fun onItemSelected(p: android.widget.AdapterView<*>?, v: View?, pos: Int, id: Long) {
                 if (hostPickSuppressed) return
+                if (pos == 0) {
+                    startNewHost()
+                    DiagLog.i(TAG, "多主机：进入新建态（表单已清空）")
+                    syncConnectUi()
+                    return
+                }
                 val hosts = SshHosts.list(prefs)
                 val picked = hosts.firstOrNull { it.id == hostIds.getOrNull(pos) } ?: return
                 applyHostToForm(picked)
@@ -1203,20 +1232,27 @@ class MainActivity : Activity() {
             override fun onNothingSelected(p: android.widget.AdapterView<*>?) = Unit
         }
 
-        val saveHostBtn = UiKit.button(this@MainActivity, "存为新主机", UiKit.Style.SECONDARY, textSize = 12f) {
+        val newHostBtn = UiKit.button(this@MainActivity, "＋ 新建主机", UiKit.Style.SECONDARY, textSize = 12f) {
+            reloadHosts("")
+            startNewHost()
+            status("填好电脑地址、账号、密码后点「保存」")
+        }
+        val saveHostBtn = UiKit.button(this@MainActivity, "保存", UiKit.Style.PRIMARY, textSize = 12f) {
             val cfg = formConfig()
             if (!cfg.isComplete) {
-                status("先填好电脑地址与登录账号，再存为主机")
+                status("先填好电脑地址与登录账号")
                 return@button
             }
-            val saved = SshHosts.upsert(prefs, cfg)
+            // 新建态 → 新 id（落库）；否则沿用当前主机的 id（就地更新，不再产生副本）。
+            val keepId = if (sshNewHostMode) "" else SshHosts.activeId(prefs)
+            val saved = SshHosts.upsert(prefs, cfg.copy(id = keepId))
             reloadHosts(saved.id)
-            status("已保存主机「${saved.label}」")
+            status(if (keepId.isBlank()) "已添加主机「${saved.label}」" else "已更新「${saved.label}」")
         }
         val delHostBtn = UiKit.button(this@MainActivity, "删除", UiKit.Style.SECONDARY, textSize = 12f) {
-            val id = hostIds.getOrNull(hostPicker.selectedItemPosition)
-            if (id == null) {
-                status("还没有可删除的主机")
+            val id = if (sshNewHostMode) "" else SshHosts.activeId(prefs)
+            if (id.isBlank()) {
+                status("当前是新建态，没有可删除的主机")
                 return@button
             }
             val hosts = SshHosts.remove(prefs, id)
@@ -1225,18 +1261,18 @@ class MainActivity : Activity() {
             status("已删除该主机")
         }
 
-        theForm.addView(LinearLayout(this@MainActivity).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = android.view.Gravity.CENTER_VERTICAL
-            addView(hostPicker, LinearLayout.LayoutParams(0, dp(44), 1f).apply { marginEnd = dp(8) })
-            addView(saveHostBtn, LinearLayout.LayoutParams(dp(96), dp(40)))
-            addView(delHostBtn, LinearLayout.LayoutParams(dp(60), dp(40)).apply { marginStart = dp(6) })
-        }, rowParams(width = ViewGroup.LayoutParams.MATCH_PARENT))
-        // 标签放在下拉下面一行：label() 只接 EditText（labelFor 用），Spinner 用普通文本即可。
         theForm.addView(
             UiKit.text(this@MainActivity, "主机", 11f, COL_DIM, letterSpacing = 0.12f),
             rowParams(top = dp(2), width = ViewGroup.LayoutParams.MATCH_PARENT)
         )
+        theForm.addView(hostPicker, rowParams(top = dp(6), width = ViewGroup.LayoutParams.MATCH_PARENT))
+        theForm.addView(LinearLayout(this@MainActivity).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = android.view.Gravity.CENTER_VERTICAL
+            addView(newHostBtn, LinearLayout.LayoutParams(0, dp(40), 1f).apply { marginEnd = dp(6) })
+            addView(saveHostBtn, LinearLayout.LayoutParams(dp(76), dp(40)))
+            addView(delHostBtn, LinearLayout.LayoutParams(dp(64), dp(40)).apply { marginStart = dp(6) })
+        }, rowParams(top = dp(7), width = ViewGroup.LayoutParams.MATCH_PARENT))
         reloadHosts()
 
 
@@ -2014,9 +2050,11 @@ class MainActivity : Activity() {
             }
             SshConfig.save(prefs, merged)
             // 多主机：当前这条也要更新进列表，否则切走再切回来还是旧值。
-            // id 为空（列表还没建过）时 upsert 会新建一条，等于顺手完成迁移。
-            val id = SshHosts.activeId(prefs).ifBlank { SshHosts.list(prefs).firstOrNull()?.id ?: "" }
+            // 新建态 → 新 id（顺手完成迁移/新增）；否则沿用当前 id 就地更新。
+            val id = if (sshNewHostMode) ""
+                     else SshHosts.activeId(prefs).ifBlank { SshHosts.list(prefs).firstOrNull()?.id ?: "" }
             SshHosts.upsert(prefs, merged.copy(id = id))
+            sshNewHostMode = false
         } catch (e: Exception) {
             // 空 catch 是审计 A4 点过的另一件事：落盘失败必须留痕，否则「配置没了」无从查起。
             DiagLog.w(TAG, "persistSshConfig 失败：${e.javaClass.simpleName}: ${e.message}")
