@@ -447,18 +447,28 @@ class MainActivity : Activity() {
         const val MODAL_ESCAPE_SETTLE_MS = 240L
 
         /**
-         * BACK 阶梯的第二级：抽屉开着就点它的遮罩关掉。
+         * BACK 阶梯的第二级：窄屏抽屉开着就收起。
          *
-         * 判据是宿主自己写的 `data-sidebar-collapsed`（窄屏下 = !narrowExpanded）——
-         * 浏览器半边只认这一个真相，App 这边也照它判；点遮罩而不是直接改状态，
-         * 是为了让「开合」始终只由页面侧那一份状态决定。
+         * 判据用**宿主自己**的属性 `data-sidebar-collapsed` —— 0.2.0 的 layout 在 frame 上
+         * 直接写它（`"data-sidebar-collapsed": sidebarCollapsed || void 0`，CSS 里按
+         * `[data-sidebar-collapsed=true]` 取值），所以「属性在 = 已收起 = 抽屉没开」。
+         *
+         * ⚠️ 旧版这里找的是 `data-handheld="frame"` / `data-handheld="backdrop"` —— 那是
+         * **注入层自己加的**属性，注入层移除之后这一级就一直是死代码（永远返回 false）。
+         * 2026-10-07 适配 0.2.0-rc.2 时改成宿主自己的选择器。
+         *
+         * 收起动作 = 点宿主自己的侧栏开关（`_toggle`），而不是直接改状态：
+         * 开合始终只由页面那一份状态决定。
          * 返回 true = 抽屉本来是开的、这一下已经按下去了。
          */
         const val JS_CLOSE_DRAWER =
-            "(function(){var f=document.querySelector('[data-handheld=\"frame\"]');" +
-                "if(!f||f.hasAttribute('data-sidebar-collapsed'))return false;" +
-                "var b=document.querySelector('[data-handheld=\"backdrop\"]');" +
-                "if(!b)return false;b.click();return true})()"
+            "(function(){" +
+                "var f=document.querySelector('[data-sidebar-collapsed]');" +
+                "if(f&&f.getAttribute('data-sidebar-collapsed')==='true')return false;" +
+                "var t=document.querySelector('button[class*=\"_toggle\"]');" +
+                "if(!t)return false;" +
+                "t.click();return true" +
+            "})()"
 
         const val PREF_SERVER_TOKEN = "server_token" // dsh 0.1.2+ 一次性启动 token（服务重启后自动更新）
 
