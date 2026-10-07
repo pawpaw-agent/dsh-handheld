@@ -2599,8 +2599,9 @@ class MainActivity : Activity() {
      *     不能像原来那样同步 `when` 一把梭；
      *  2. 页面"吃掉了"不等于"关掉了" —— 有的模态不监听 Escape。所以发完 Esc 等一下
      *     再复查一次，模态还在就照样往下走，绝不把 BACK 变成空操作；
-     *  3. 抽屉那一级直接点页面里我们自己的遮罩（`[data-handheld="backdrop"]`），
+     *  3. 抽屉那一级点的是**宿主自己**的侧栏开关（`_toggle`，判据 `[data-sidebar-collapsed]`），
      *     不去写宿主状态：开合的唯一真相在页面侧，App 只是替用户按了一下它的按钮。
+     *     （旧版这里点的是注入层加的 `[data-handheld="backdrop"]` —— 注入层移除后即死代码。）
      */
     private fun handleWebBack() {
         val wv = webView
