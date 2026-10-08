@@ -1647,6 +1647,11 @@ CI 的 `test` job 现在会装 `@deepseek-ai/dsh@0.2.0-rc.2`（真机同版本�
   其中 V9/V10 正是"未捕获异常"与"信标"这两条新断言 —— 也就是说，那次事故以后
   **既会被 CI 拦住，也会在手机诊断页上显示成 FAILED**；
 - 桌面档：`styles=skipped skipped=non-mobile fixes=0/0`，整层不做事（V8）。
+- **CI 上也跑通了**（`test` job：装 dsh 0.2.0-rc.2 + Playwright chromium → 跑 harness → 上传截图与
+  report.json）：13/13 绿。CI 上信标写的是 `dom=ready-state`（本机是 `dom=early`）——
+  说明"解析期"这个最早时机**并非在所有环境都拿得到**，boot 队列的兜底是必要的；
+  而**手机上信标会自己报出它走的是哪一条**（`cover=early:ok` vs `cover=dcl:ok`），
+  这正是做信标想要的效果：把"不确定"变成"诊断页上读得到"。
 
 ### 仍未解决的
 
