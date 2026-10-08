@@ -74,8 +74,8 @@ android {
         // 另注：36 会把 `windowOptOutEdgeToEdgeEnforcement` 一并废弃并禁用（没有回头路），
         // 所以 35→36 之前必须先确认终端那一半是好的。
         targetSdk = 35
-        versionCode = 41
-        versionName = "0.1.14"
+        versionCode = 42
+        versionName = "0.2.0"
     }
 
     testOptions {
