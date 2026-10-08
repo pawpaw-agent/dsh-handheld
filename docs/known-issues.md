@@ -1567,3 +1567,89 @@ Android 的 `addDocumentStartJavaScript` 时机由版本决定，同样不保证
 - 真实软键盘与 IME（V5 只证明监听与滚动调用被触发）；
 - 真实手指的命中半径（V6 用 `elementFromPoint` 近似）；
 - App 侧与隧道相关的一切（权限/外链/通知/多主机）—— 仍需真机。
+
+---
+
+## 十四、重新设计注入（第二轮）：抢时机 / 两段式 / 自证信标 / 断言进 CI（2026-10-08）
+
+用户：「重新设计注入」。这一轮不是改结构（上一轮已经把层拆成 hooks/styles/fixes/runner/diag ✓），
+而是修**三个实测出来的接缝**，全部有证据。
+
+### 起因：一次静默失效
+
+上一轮的重设计刚落地，`scripts/ui-verify.mjs`（当时还是 http 版）第一次跑就红了 6 条。
+根因在层自己：
+
+```
+TypeError: Cannot read properties of null (reading 'appendChild')
+  at injectStyles
+```
+
+`document-start` 时 `document.head` 与 `document.documentElement` **都还是 null**，
+而 `injectStyles` 顶层直接 append → 抛 → **整个 runner 死掉** → 样式与四条修复全不生效。
+**而真机上只会表现为「适配层没生效」**，与「样式本来就没写好」无法区分。
+
+更糟的是**连一行日志都没有**：层的诊断走 `console.log`，而 App 的 `onConsoleMessage`
+**只收 WARNING 及以上**（`MainActivity` 里写着理由：dsh 页面 console 很密，全记会淹掉有用的
+那几条）→ 连接屏右上「诊断」页里看不到层的一个字。
+
+### 四个接缝
+
+**接缝 1：document-start 只允许"定义"** —— 新增 `boot.js`：
+`window.__dshHandheldBoot(fn)` 注册任务，用 `MutationObserver` 盯 `document`
+（`document` 对象在 document-start 就存在，`documentElement` 才是 null 的那个），
+**`<html>` 一被创建就执行** —— 在解析期、在宿主页面自己的脚本之前；observer 首次成功后
+**立刻断开**（不做常驻观察者，不跟宿主 SPA 的每次 mutation 起舞）。
+`bootstrap.js`（viewport 补丁）也改成这条路：补丁必须赶在宿主那条 meta **之前**，
+而 `DOMContentLoaded` 已经晚了 —— 它现在还带一个只盯到成功为止的短命 observer（`<head>` 比 `<html>` 晚一步）。
+信标里 `dom=early` 就是这条的实测结果。
+
+**接缝 2：呈现型工作统一在 boot 之后** —— `runner.js` 顶层只注册，挂样式/打标记/跑修复/观察
+全部进 boot 任务；`injectStyles` 即使被提前调用也只返回 false、不抛。于是那次事故的形态
+**在结构上不可能再发生**（而不是靠每个调用点自觉判空）。
+
+**接缝 3：自证信标** —— 每次加载产出一行状态，两条通道互补：
+
+| 通道 | 内容 | 谁读 |
+|---|---|---|
+| `console.warn("[handheld] …")` | `ok styles=ok(14.4KB) fixes=4/4 mobile=yes dom=early cover=early:ok cost=61.7ms` | App 的 `onConsoleMessage`（**WARNING 级**才能穿过现有门槛 ✓）→ `DiagLog` → 诊断页 |
+| `<html data-handheld-status="…">`（紧凑 JSON） | 同上，机读 | 诊断页那一行、harness、将来任何脚本 |
+
+失败时写 `FAILED stage=fix:harness-boom err=harness-boom fixes=4/5 pending=[…]`。
+信标只在**签名变化或失败**时发 warn（不淹诊断页），且自身绝不抛。
+
+**接缝 4：断言进 CI** —— harness 从 10 条扩到 **13 条**，新增：
+
+| # | 断言 |
+|---|---|
+| V9 | **注入期间零未捕获异常**（今天那次事故的直接判据） |
+| V10 | 信标合法（`<html>` 属性 + `console.warn` 一行，证明能穿过 App 的 WARNING 门槛） |
+| V11 | **失败负对照**：喂一条必定抛异常的修复 → 信标必须 `FAILED`，且其余修复照常应用 |
+
+CI 的 `test` job 现在会装 `@deepseek-ai/dsh@0.2.0-rc.2`（真机同版本，抽真实 CSS）
++ Playwright chromium，跑 harness，并上传截图与 `report.json` 作为工件。
+
+### App 侧三处小改
+
+1. 注入列表加 `boot.js`（**必须最先**，bootstrap 依赖它拿最早时机）；
+2. `onConsoleMessage`：带 `[handheld]` 前缀的行**无论级别**都收进 `DiagLog`（其余仍只收
+   WARNING+，保持日志干净）—— 只认前缀不认级别，免得哪天层改了级别又静默丢失；
+3. **诊断页顶上多一行「适配层：…」**，读 `<html data-handheld-status>`。这是这次重设计的
+   兑现方式：真机上「层到底跑没跑」从"靠肉眼猜"变成"诊断页第一行写着 `4/4` 或 `FAILED`"。
+
+顺便删掉 `bootstrap.js` 里 `window.dshNative.postMessage` 那段**死桥**（App 早已移除该 JS 接口）。
+
+### 验证
+
+- harness **13 条全绿**（手机档基线/适配 + 桌面档 + 失败负对照四趟运行）：
+  `styles=ok(14.4KB) fixes=4/4 mobile=yes dom=early cover=early:ok`
+- **反向验证**：把 runner 退回原始写法（顶层 append、无兜底）→ **9 条红**，
+  其中 V9/V10 正是"未捕获异常"与"信标"这两条新断言 —— 也就是说，那次事故以后
+  **既会被 CI 拦住，也会在手机诊断页上显示成 FAILED**；
+- 桌面档：`styles=skipped skipped=non-mobile fixes=0/0`，整层不做事（V8）。
+
+### 仍未解决的
+
+`right-panel-obstructions` 那条修复仍是移植来的自制节流（2 秒节流 + 轮转采样 + cursor 约 150 行）。
+行为不动（它编码了真机教训：工具栏带子在 CSS y≈40–68、"面板内内容不能被误关"）——
+先用 harness 量出开销，**量不出问题就不动**。
