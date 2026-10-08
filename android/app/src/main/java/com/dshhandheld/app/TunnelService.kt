@@ -93,7 +93,7 @@ class TunnelService : Service() {
             this, 1,
             Intent(this, MainActivity::class.java)
                 .addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP)
-                .putExtra(MainActivity.EXTRA_OPEN_CONNECT, true),
+                .putExtra(EXTRA_OPEN_CONNECT, true),
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
         return Notification.Builder(this, CHANNEL_ID)
@@ -112,6 +112,14 @@ class TunnelService : Service() {
 
     companion object {
         private const val TAG = "TunnelService"
+
+        /**
+         * 通知上的「打开连接屏」动作带来的 extra。
+         *
+         * 定义在生产者这一侧（本类）而不是 `MainActivity`：后者的伴生对象是 private，
+         * 这里引用不到。
+         */
+        const val EXTRA_OPEN_CONNECT = "open_connect"
         private const val CHANNEL_ID = "dsh-tunnel"
         private const val NOTIFICATION_ID = 1
         private const val EXTRA_TEXT = "text"

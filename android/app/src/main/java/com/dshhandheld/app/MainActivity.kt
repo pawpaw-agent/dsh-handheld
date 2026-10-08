@@ -457,13 +457,8 @@ class MainActivity : Activity() {
                 "t.click();return true" +
             "})()"
 
-        /**
-         * 通知上的「打开连接屏」动作带来的 extra（见 [TunnelService.buildNotification]）。
-         *
-         * 加它的理由：从网页回连接屏此前只有「BACK 且网页无历史」一条路 —— 日常用着页面时
-         * BACK 会先走网页历史/抽屉，回不到连接屏。用户明确要过「能直接到」。
-         */
-        const val EXTRA_OPEN_CONNECT = "open_connect"
+        // 通知动作的 extra 常量定义在 TunnelService（生产者那一侧）—— 本伴生对象是
+        // private，TunnelService 引用不到它。
 
         const val PREF_SERVER_TOKEN = "server_token" // dsh 0.1.2+ 一次性启动 token（服务重启后自动更新）
 
@@ -2544,7 +2539,7 @@ class MainActivity : Activity() {
     }
 
     private fun handleOpenConnectIntent(intent: Intent?) {
-        if (intent?.getBooleanExtra(EXTRA_OPEN_CONNECT, false) != true) return
+        if (intent?.getBooleanExtra(TunnelService.EXTRA_OPEN_CONNECT, false) != true) return
         DiagLog.i(TAG, "intent: 打开连接屏（来自隧道通知）")
         showConnectScreen()
     }
