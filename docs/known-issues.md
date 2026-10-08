@@ -1472,7 +1472,11 @@ token 从 `journalctl --user -u dsh-web.service | grep -oE 'token=[A-Za-z0-9_-]+
 
 ### ⚠️ 本机跑不起来：这个环境限制 chromium 的网络
 
-**实测结论**（2026-10-08）：这个沙箱里 **chromium 的 http 加载根本不启动**。
+**实测结论**（2026-10-08）：**这台机器的运行时里，chromium 的 http 加载不启动**。
+  注意归因：**不是** DSH 的文件策略（`danger-full-access`）—— 那是管文件的，且实测
+  `Seccomp: 0` / 无 `LD_PRELOAD` / AppArmor `enabled: N` / `ulimit -u=64696`（当时只跑着
+  45 个进程 148 个线程）/ 无 cgroup pids 上限；同一环境下 **curl 与 node fetch 到
+  `127.0.0.1:3080` 都通**（401）。限制在 chromium 这一侧，具体机制尚未定位。
 
 | 试过 | 结果 |
 |---|---|

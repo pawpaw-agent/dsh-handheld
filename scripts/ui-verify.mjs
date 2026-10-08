@@ -24,7 +24,7 @@
  *
  * ## 环境限制（本机实测，2026-10-08）
  *
- * 这个环境里 **chromium 连不上任何 http**：连一个平凡的本地 python 服务也卡在建立连接
+ * 这台机器的运行时里 **chromium 连不上任何 http**：连一个平凡的本地 python 服务也卡在建立连接
  * 之前（CDP 只报 `Network.requestWillBeSent`，之后没有任何事件），换过
  * `--no-zygote` / `--single-process` / `--no-proxy-server` / `NetworkServiceSandbox off`
  * / `NetworkServiceInProcess` / `host-resolver-rules` 全部无效；而 Node 与 curl 的网络是通的。
