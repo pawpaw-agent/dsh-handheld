@@ -22,18 +22,35 @@ Android 不允许覆盖安装，必须先卸载旧版（已保存的连接配置
 
 ## 许可
 
-GPL-3.0。**原因是 `java/com/termux/shared/terminal/io/` 下那 7 个 vendored 文件为
-GPLv3-only**（Termux `v0.118.1` 的 `termux-shared` 主许可；其 MIT 例外逐文件列举，不含
-`terminal/io/*`）。Gradle 依赖 `terminal-view` / `terminal-emulator` 本身是 Apache-2.0。
-完整核对见 `docs/terminal-rewrite-plan.md` 附录 B；7 个文件「哪几个被本地改过、
-为什么必须 vendoring」见 `docs/consolidation-audit.md` §4.1。
+**本仓库自身：GPL-3.0**（见 `LICENSE`）。
 
-另打包 Dropbear `dbclient` / `dropbearkey`（MIT 风格）。**2026-09-25 起不再注入手机端适配层**
-（原 `assets/plugins/dsh-handheld-mobile.js` 已删除）。此前 vendored 的
-第三方 dsh-web-mobile 及其许可证已于 2026-09-13 一并删除。
+选它的**历史理由**是当时 vendored 了 7 个 GPLv3-only 的 Termux `terminal/io/*` 文件
+（`termux-shared` 主许可；其 MIT 例外逐文件列举，不含 `terminal/io/*`）。**那些文件已于
+2026-09-25 随原生终端一起删除** —— 也就是说，现在**没有**「必须 GPL」的技术约束了。
+换不换许可由版权人决定，且换许可不追溯已发布的旧版本。历史核对（含那 7 个文件
+「哪几个被本地改过、为什么当时必须 vendoring」）见
+[`docs/archive/terminal-rewrite-plan.md`](archive/terminal-rewrite-plan.md) 附录 B 与
+[`docs/consolidation-audit.md`](consolidation-audit.md) §4.1。
 
-> **发布前待确认**：Apache-2.0 要求随附许可证文本，当前 APK 内没有 —— CI 把 dropbear 的
-> `LICENSE.txt` 拷进 `jniLibs/`，而 AGP 只打包那里的 `.so`，那个 `.txt` 进不了 APK。
+**APK 里实际打包的第三方组件只剩两类**：
+
+| 组件 | 许可 | 来源 |
+|---|---|---|
+| `androidx.core:core-ktx` | Apache-2.0 | Gradle 依赖 |
+| Dropbear `dbclient` / `dropbearkey` | MIT 风格（多组件混合，见其 LICENSE） | `scripts/build-dropbear.sh` 交叉编译 |
+
+dsh 网页本身**不在 APK 里** —— 它跑在电脑上，由 WebView 加载。
+**2026-09-25 起也不再注入手机端适配层**（原 `assets/plugins/dsh-handheld-mobile.js` 已删除）；
+更早 vendored 的第三方 dsh-web-mobile 及其许可证已于 2026-09-13 删除。
+
+### 随附许可证文本（2026-10-07 已解决）
+
+Dropbear 的 `LICENSE.txt` 现在作为**资源文件**打进 APK：
+`android/app/src/main/assets/licenses/dropbear-LICENSE.txt`（仓库内有一份基线副本，
+CI 构建时用 dropbear 产物里的那份覆盖，保证与二进制同源）。
+
+CI 有一条断言：**APK 内必须能列出该条目**，否则构建失败。这条断言防的是「打包方式一改就
+静默丢失」—— 此前它被拷进 `jniLibs/`，而 AGP 只打包那里的 `.so`，`.txt` 根本进不去。
 
 > 各版本附带组件与许可结论一致，版本之间没有差异。
 

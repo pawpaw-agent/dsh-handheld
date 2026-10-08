@@ -178,8 +178,11 @@ jobs:
           mkdir -p android/app/src/main/jniLibs/arm64-v8a
           install -m 0755 dbclient/dbclient android/app/src/main/jniLibs/arm64-v8a/libdbclient.so
           install -m 0755 dbclient/dropbearkey android/app/src/main/jniLibs/arm64-v8a/libdropbearkey.so
-          cp dbclient/LICENSE.txt android/app/src/main/jniLibs/arm64-v8a/LICENSE-dropbear.txt 2>/dev/null || true
-          ls -la android/app/src/main/jniLibs/arm64-v8a/
+          # 许可证进 **assets**（AGP 会打包 assets）。此前拷到 jniLibs/ —— AGP 只打包
+          # 那里的 .so，.txt 根本进不了 APK（见 docs/releasing.md「随附许可证文本」）。
+          mkdir -p android/app/src/main/assets/licenses
+          install -m 0644 dbclient/LICENSE.txt android/app/src/main/assets/licenses/dropbear-LICENSE.txt
+          ls -la android/app/src/main/jniLibs/arm64-v8a/ android/app/src/main/assets/licenses/
 
       # 签名材料只在此步落地，构建后立即删除；绝不写入仓库。
       #
@@ -229,6 +232,20 @@ jobs:
       # 2026-09-17 审计 M11/H3 追加三条：native 库真的进了包、versionCode 与源码一致、
       # 签名者身份与本次 secrets 状态相符 —— 原先只查了「不可调试」这一条，
       # 而它和「这个包能不能用」几乎正交。
+      # 随附许可证文本（Apache-2.0/MIT 类许可都要求随二进制分发）。这条断言防的是
+      # 「打包方式一改就静默丢失」—— 上一版就是这么丢的（拷进 jniLibs，AGP 不打包 .txt）。
+      - name: Verify bundled license text is inside the APK
+        run: |
+          set -euo pipefail
+          apk=$(find android/app/build/outputs/apk -name '*.apk' | head -1)
+          echo "APK: $apk"
+          if ! unzip -l "$apk" | grep -q 'assets/licenses/dropbear-LICENSE.txt'; then
+            echo "::error::APK 内缺少 dropbear 许可证文本（assets/licenses/dropbear-LICENSE.txt）"
+            unzip -l "$apk" | grep -i license || echo "（APK 内没有任何 license 条目）"
+            exit 1
+          fi
+          echo "✓ 许可证文本已随 APK 分发"
+
       - name: Verify release APK identity
         run: |
           APK=android/app/build/outputs/apk/release/app-release.apk

@@ -137,6 +137,12 @@ Activity 而保留进程等），重新打开 App 是一个空白 WebView，既�
 
 ### 更根本的一层：熄屏后整个进程被冻结（2026-09-12 实测）
 
+> ⚠️ **2026-10-07 更正**：下面这段结论**已过时** —— 现在**有**前台服务
+> （`TunnelService`，`foregroundServiceType="specialUse"`，通知渠道 `dsh-tunnel`，
+> 重要性 MIN），它正是为「熄屏/后台不被冻结」而加的。所以「进程被冻住」这条根因
+> **不再成立**，但「同端口重建不触发重载」那一半仍待真机复验（见迭代计划 B9）。
+> 原文保留为 0.1.x 时期的记录。
+
 **这个 App 没有前台服务**（1.11.0 起刻意删掉了后台通知与其前台服务），所以熄屏后它就是一个
 cached 进程，会被 Android 冻结：
 
@@ -746,7 +752,11 @@ Android 的渠道重要性**创建之后 App 改不动**（只有用户能在设
 确定会变、且**已知无害**的一处：`statusBarColor` / `navigationBarColor` 自 35 起 deprecated
 且 no-op —— 但设的值本来就是 `TRANSPARENT`，而 edge-to-edge 下的默认值也是透明，结果相同。
 
-### ⚠️ 真正要盯的是**终端模式**
+### ⚠️ 真正要盯的是**终端模式**（⛔ 本节已作废：原生终端 2026-09-25 已移除）
+
+> 终端已不在 App 里（改用 dsh web 界面自带的终端面板），下面 A1–A6 全部无从复验。
+> 保留原文只为记录「targetSdk 35 强制 edge-to-edge 对**字符网格**类界面意味着什么」。
+> 主界面（WebView 壳）那几条仍然有效 —— 见本节末尾的 F/C/B 组清单。
 
 `TuiActivity` **既不调 `applyImmersive()`，也不消费任何 inset**，此前靠主题的
 `windowFullscreen=true` 全屏。35 起 edge-to-edge 强制生效后，终端字符网格会铺到系统栏底下。

@@ -1,3 +1,13 @@
+> **历史存档（2026-09-25）**：原生终端（`TuiActivity` + Termux `terminal-view` +
+> vendored 的 `com.termux.shared.terminal.*` 7 个文件 + `terminal-conformance` 模块）
+> 已**整体移除** —— dsh 的 web 界面自带终端面板（右栏 → 新建终端，xterm + WebSocket，
+> WebView 直接可用）。随之删除的还有 `androidx.webkit` 之外的 Termux 依赖与 CI 的
+> conformance 任务。
+>
+> 本文的**附录 B（许可证核对）仍有参考价值**：它记录了那 7 个 vendored 文件为
+> GPLv3-only、以及为什么当时的 GPL-3.0 结论成立。文件已不在仓库里，所以
+> `docs/releasing.md` 的许可段已按现状重写。
+
 # 终端自研计划（Termux 替换）
 
 > ## ⛔ 已中止（2026-09-11）

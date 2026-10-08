@@ -114,7 +114,7 @@ metadata 版本 ≤ 编译器可读上限）。
 **2026-09-25 起本仓库不再注入任何东西。** 此前有一层自研的手机端适配（注入进 dsh 页面，
 改布局、补抽屉、报回合状态），它已被整体移除 —— 直接原因是 dsh 0.1.7-rc.2 的加载器会按服务端
 清单 reconcile，把注入的插件 entry 整个拆掉（fiber 销毁 + 按包名删样式）。历史与教训见
-[`docs/mobile-adaptation.md`](docs/mobile-adaptation.md)。现在页面交给 dsh 自己的响应式布局。
+[`docs/archive/mobile-adaptation.md`](docs/archive/mobile-adaptation.md)（**已移除模块的历史记录**）。现在页面交给 dsh 自己的响应式布局。
 
 （以下为已移除的那一层的原始说明，保留作记录）dsh 官方前端是桌面布局，窄屏下侧栏常驻挤占内容。本项目在 **App 侧**注入一个**自研的**客户端插件
 （`android/app/src/main/assets/plugins/dsh-handheld-mobile.js`）：`addDocumentStartJavaScript` 钩住
@@ -128,8 +128,8 @@ metadata 版本 ≤ 编译器可读上限）。
 # （注入层移除后，这两个检查脚本与契约文件已一并删除）
 ```
 
-设计取舍与能力边界见 [`docs/mobile-adaptation.md`](docs/mobile-adaptation.md)，验证方式（本地渲染回环、
-真机取证、A/B 断言）见 [`docs/mobile-ui-verification.md`](docs/mobile-ui-verification.md)。
+设计取舍与能力边界见 [`docs/archive/mobile-adaptation.md`](docs/archive/mobile-adaptation.md)（历史），验证方式（本地渲染回环、
+真机取证、A/B 断言）见 [`docs/archive/mobile-ui-verification.md`](docs/archive/mobile-ui-verification.md)（历史）。
 
 ---
 
@@ -159,7 +159,7 @@ android/
     src/main/jniLibs/arm64-v8a/                     # dbclient / dropbearkey（CI 阶段构建后放入）
   terminal-conformance/        # 纯 JVM 终端行为回归测试台（不进 APK）
 scripts/                       # dropbear 交叉编译、契约金丝雀、渲染回环、API 推送
-docs/                          # 已知问题、适配与验证、发布说明
+docs/                          # 已知问题、发布说明；docs/archive/ 是已移除模块的历史记录
 .github/workflows/ci.yml       # dbclient → 契约与一致性门禁 → 构建并校验 release APK
 ```
 
@@ -177,7 +177,7 @@ GPL-3.0 开源 —— **这是 `java/com/termux/shared/terminal/io/` 下那 7 �
 | Dropbear `dbclient` / `dropbearkey` | MIT 风格（随附文件） | `jniLibs/.../LICENSE-dropbear.txt` |
 
 想改用宽松许可证，唯一合法路径是先用自研实现替掉那 7 个文件；完整的许可证核对（含「为什么 pin 的
-`v0.118.1` 与 `master` 结论相反」）见 [`docs/terminal-rewrite-plan.md`](docs/terminal-rewrite-plan.md) 附录 B。
+`v0.118.1` 与 `master` 结论相反」）见 [`docs/archive/terminal-rewrite-plan.md`](docs/archive/terminal-rewrite-plan.md) 附录 B。
 
 > ⚠️ **待补的合规缺口**：Apache-2.0 要求随附许可证文本，而当前 APK 里没有 —— CI 把 dropbear 的
 > `LICENSE.txt` 拷进 `jniLibs/`，AGP 只打包那里的 `.so`，那个 `.txt` 进不了 APK。
