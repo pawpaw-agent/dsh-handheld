@@ -439,6 +439,8 @@ async function run({ inject, viewport, label, scripts, pageUrl, probeExpr, befor
         hasCss: typeof window.__dshHandheldCss === 'string',
         diagOn: !!(window.__dshHandheldDiag && window.__dshHandheldDiag.on),
         styleTags: [...document.querySelectorAll('style')].filter(s => s.dataset.handheldCss).length,
+        fab: (() => { const f = document.querySelector('[data-handheld="fab"]');
+          return f ? { exists: true, display: getComputedStyle(f).display } : { exists: false, display: null }; })(),
         fixesLen: (window.__dshHandheldFixes || []).length,
         statusRaw: de.getAttribute('data-handheld-status'),
         bootWhen: window.__dshHandheldBootState ? window.__dshHandheldBootState.when : null,
@@ -493,10 +495,23 @@ async function run({ inject, viewport, label, scripts, pageUrl, probeExpr, befor
       ? await evaluate(cdp, probeExpr)
       : null;
 
+    // hero 相位下的浮动入口显隐（CSS 第 6 节的契约：hero/inert 才显示）
+    const heroFab = inject ? await evaluate(cdp, `(() => {
+      const f = document.querySelector('[data-handheld="fab"]');
+      const host = document.querySelector('[data-phase]');
+      if (!f || !host) return { ok: false, why: !f ? '没有 fab' : '没有 [data-phase]' };
+      const before = host.getAttribute('data-phase');
+      host.setAttribute('data-phase', 'hero');
+      const inHero = getComputedStyle(f).display;
+      const drawer = document.querySelector('[data-sidebar-right-panel]');
+      host.setAttribute('data-phase', before);
+      return { ok: true, inHero: inHero, inActive: getComputedStyle(f).display };
+    })()`) : null;
+
     const shot = await cdp.send('Page.captureScreenshot', { format: 'png' });
     const shotPath = path.join(OUT, `${label}.png`);
     writeFileSync(shotPath, Buffer.from(shot.data, 'base64'));
-    return { observed, scroll, panel, shotPath, consoleMsgs, exceptions, auditData };
+    return { observed, scroll, panel, heroFab, shotPath, consoleMsgs, exceptions, auditData };
   } finally {
     try { await Promise.race([cdp.send('Browser.close'), sleep(2000)]); } catch { /* ignore */ }
     cleanup();
@@ -724,6 +739,11 @@ const main = async () => {
   add('V10', '信标合法（<html> 属性 + 能穿过 App 的 WARNING 门槛）',
     st.ok === true && st.styles === 'ok' && st.fixes === `${o.fixesLen}/${o.fixesLen}` && !!warnLine,
     `status=${o.statusRaw}；console.warn=${warnLine ? '✓ ' + warnLine.text.slice(0, 60) : '✗ 没有'}`);
+  add('V12', 'hero/inert 相位的目录浮动入口（新会话页唯一的会话列表入口）',
+    o.fab?.exists === true && adapted.heroFab?.ok === true
+      && adapted.heroFab.inHero !== 'none' && adapted.heroFab.inActive === 'none',
+    `fab=${o.fab?.exists ? '在' : '不在'}；active 相位 display=${adapted.heroFab?.inActive}`
+      + `；hero 相位 display=${adapted.heroFab?.inHero}`);
   add('V11', '失败负对照：一条修复抛错 → 信标 FAILED 且其余仍应用',
     (() => {
       const fs2 = (() => { try { return JSON.parse(failure.observed.statusRaw || '{}'); } catch { return {}; } })();

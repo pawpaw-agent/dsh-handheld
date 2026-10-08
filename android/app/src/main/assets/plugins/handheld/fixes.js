@@ -20,8 +20,11 @@
 (function (root) {
   "use strict";
   var FIXES = [];
-  function def(id, why, needs, body) {
-    FIXES.push({ id: id, why: why, needs: needs, body: body });
+  function def(id, why, needs, body, opts) {
+    var f = { id: id, why: why, needs: needs, body: body };
+    // repeat：每轮 sweep 都跑（幂等且便宜的那些，如"宿主重渲染会把标记冲掉"的兜底）
+    if (opts && opts.repeat) f.repeat = true;
+    FIXES.push(f);
   }
 
   def('frame-tagging', '整套 CSS 都以 [data-handheld="frame"] 为前提（63 处）。框架一出现就打标记，不能把这件事绑在别的东西能不能渲染上。', ['sidebarCol'], function (ctx, __wrap, postToApp) {
@@ -132,6 +135,56 @@
             };
       
   });
+
+  // ── hero / inert 阶段的目录入口（2026-10-08 真机取证）────────────────────
+  //
+  // 空白会话没有会话头，也就没有宿主那颗目录按钮；而层的单列布局把侧栏压成了抽屉，
+  // 于是**新会话页根本打不开会话列表** —— 真机取证：无障碍树里那一页只剩
+  // 「打开右侧边栏」，宿主那颗「打开侧边栏」bounds 是 [0,0][0,0]（被层压成零尺寸）。
+  //
+  // 旧版靠注入层的浮动入口兜底；重设计时浮层随 slots 一起去掉了，CSS 第 6 节却还在
+  // —— 于是成了死规则。这条修复把它接回来：造一颗浮动按钮（标记 data-handheld="fab"，
+  // 由第 6 节的 CSS 按 phase 显隐），点它时对**宿主那颗 0×0 的按钮**派发 click ——
+  // 程序化 click 不受尺寸/可见性限制，处理器照常跑。
+  def('hero-drawer-entry',
+    '空白会话（hero/inert）没有会话头 → 没有宿主那颗目录按钮 → 新会话页打不开会话列表。'
+    + '补一颗浮动入口，点它时把 click 转给宿主那颗被压成 0×0 的按钮。',
+    ['sidebarCol'], function (ctx, __wrap, postToApp) {
+      var MARK = 'data-handheld';
+      // 宿主那颗按钮的找法：类名后缀 + 无障碍标签双路（标签是中文，可能随语言变，故只作兜底）
+      function findHostToggle() {
+        var sels = [
+          'button[class*="_toggle"]',
+          '[class*="_sidebarCol"] button[aria-label*="侧边栏"]',
+          '[class*="_sidebarCol"] button[aria-label*="目录"]',
+          'button[aria-label*="侧边栏"]',
+          'button[aria-label*="目录"]',
+        ];
+        for (var i = 0; i < sels.length; i++) {
+          var el = document.querySelector(sels[i]);
+          if (el) return el;
+        }
+        return null;
+      }
+      function ensure() {
+        var frame = document.querySelector('[' + MARK + '="frame"]');
+        if (!frame) return;
+        if (frame.querySelector('[' + MARK + '="fab"]')) return;   // 幂等
+        var btn = document.createElement('button');
+        btn.setAttribute(MARK, 'fab');
+        btn.setAttribute('type', 'button');
+        btn.setAttribute('aria-label', '打开目录');
+        btn.textContent = '\u2630';                                 // ☰
+        btn.addEventListener('click', function (ev) {
+          ev.preventDefault();
+          ev.stopPropagation();
+          var host = findHostToggle();
+          if (host) { try { host.click(); } catch (e) { /* ignore */ } }
+        });
+        frame.appendChild(btn);
+      }
+      ensure();
+    }, { repeat: true });
 
   def('right-panel-obstructions', '右侧栏展开时，它工具栏上方有其它层级的元素盖着 —— 那一片点不到（用户报「最顶部无法点击」）。按几何关系找出真正盖住它的元素，给它们 pointer-events:none，面板收起时恢复。', ['rightPanel'], function (ctx, __wrap, postToApp) {
             // 自证：这一条**无条件**上报，用来区分「effect 体压根没跑到」与
