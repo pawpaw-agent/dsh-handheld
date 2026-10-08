@@ -123,6 +123,28 @@ class MainActivity : Activity() {
      * 只放行 http/https：`intent:` / `file:` / `content:` 之类的 URL 一律不处理 ——
      * 那是本机资源被页面引用，放出去等于把 App 的能力借给任意页面。
      */
+    /**
+     * D1：拍照用的 Intent —— 输出到 `cacheDir/capture/`，经 FileProvider 授权给相机 App。
+     * 设备没有可用的相机 App 时返回 null（调用方回退到文档选择器）。
+     */
+    private fun captureIntentOrNull(): Intent? {
+        val dir = File(cacheDir, "capture").apply { mkdirs() }
+        val out = File(dir, "shot-${System.currentTimeMillis()}.jpg")
+        val uri = runCatching {
+            androidx.core.content.FileProvider.getUriForFile(this, "$packageName.fileprovider", out)
+        }.getOrElse {
+            DiagLog.w(TAG, "captureIntent: 拿不到 FileProvider URI（${it.message}）")
+            return null
+        }
+        val intent = Intent(android.provider.MediaStore.ACTION_IMAGE_CAPTURE).apply {
+            putExtra(android.provider.MediaStore.EXTRA_OUTPUT, uri)
+            addFlags(Intent.FLAG_GRANT_WRITE_URI_PERMISSION or Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        }
+        val usable = intent.resolveActivity(packageManager) != null
+        if (usable) captureOutput = out else DiagLog.w(TAG, "captureIntent: 没有相机 App")
+        return if (usable) intent else null
+    }
+
     private fun openExternally(url: String): Boolean {
         val uri = runCatching { android.net.Uri.parse(url) }.getOrNull() ?: return false
         if (uri.scheme != "http" && uri.scheme != "https") {
@@ -156,6 +178,13 @@ class MainActivity : Activity() {
      * 由 [refreshTunnelBanner] 统一驱动 —— 判据只有「隧道活不活」这一条事实。
      */
     private var tunnelBanner: View? = null
+    /**
+     * D1：拍照的输出文件。
+     *
+     * `ACTION_IMAGE_CAPTURE` + `EXTRA_OUTPUT` 的结果 `data` 里**没有** URI（照片已写到
+     * 我们给的位置），所以必须自己记住它，才能在 `onActivityResult` 里回给页面。
+     */
+    private var captureOutput: File? = null
     /** 页面那次麦克风请求：等系统权限结果回来再 grant/deny（见 onPermissionRequest）。 */
     private var pendingMicRequest: android.webkit.PermissionRequest? = null
 
@@ -751,6 +780,25 @@ class MainActivity : Activity() {
                     webFileCallback = filePathCallback
                     val accepts = fileChooserParams?.acceptTypes
                         ?.map { it.trim() }?.filter { it.isNotEmpty() } ?: emptyList()
+                    // D1：页面要**拍照**（`<input capture>` + image/*）时打开相机 ——
+                    // 文档选择器在手机上拍不了照。没有可用相机 App 就回退到下面那条路。
+                    // （当前 dsh 的附件按钮不带 capture，这是潜在缺口的补齐。）
+                    val wantsCamera = fileChooserParams?.isCaptureEnabled == true &&
+                        (accepts.isEmpty() || accepts.any { it.startsWith("image/") || it == "*/*" })
+                    if (wantsCamera) {
+                        val shot = captureIntentOrNull()
+                        if (shot != null) {
+                            DiagLog.i(TAG, "onShowFileChooser: capture=on → 打开相机")
+                            val launched = runCatching {
+                                startActivityForResult(shot, REQ_WEB_FILE)
+                            }.isSuccess
+                            if (launched) return true
+                            DiagLog.w(TAG, "onShowFileChooser: 相机起不来，回退文档选择器")
+                            captureOutput = null
+                        } else {
+                            DiagLog.w(TAG, "onShowFileChooser: 要拍照但设备没有可用相机 App，回退文档选择器")
+                        }
+                    }
                     val intent = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
                         addCategory(Intent.CATEGORY_OPENABLE)
                         if (accepts.size == 1 && !accepts[0].contains(",")) {
@@ -1806,7 +1854,24 @@ class MainActivity : Activity() {
         if (requestCode == REQ_WEB_FILE) {
             val cb = webFileCallback
             webFileCallback = null
-            val uris = WebChromeClient.FileChooserParams.parseResult(resultCode, data)
+            // D1：拍照那条路的结果 data 里没有 URI（照片写在 captureOutput 里）——
+            // 必须先判它，否则 parseResult 会返回 null，页面拿不到刚拍的照片。
+            val shot = captureOutput
+            captureOutput = null
+            val uris = if (shot != null && resultCode == RESULT_OK && shot.length() > 0) {
+                runCatching {
+                    arrayOf(
+                        androidx.core.content.FileProvider.getUriForFile(
+                            this, "$packageName.fileprovider", shot
+                        )
+                    )
+                }.getOrElse {
+                    DiagLog.w(TAG, "拍照结果授权失败：${it.message}")
+                    null
+                }
+            } else {
+                WebChromeClient.FileChooserParams.parseResult(resultCode, data)
+            }
             DiagLog.i(TAG, "onShowFileChooser 返回：${uris?.size ?: 0} 个文件（resultCode=$resultCode）")
             cb?.onReceiveValue(uris)
             return

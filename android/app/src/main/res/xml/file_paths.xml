@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  FileProvider 的授权范围（D1：`<input capture>` 拍照）。
+
+  只暴露 cache 下的 capture/ 子目录：相机 App 往里写一张 jpg，页面读回这一张。
+  不暴露 filesDir —— 那里有 SSH 私钥（ssh_private_key）与连接配置。
+-->
+<paths>
+    <cache-path name="capture" path="capture/" />
+</paths>

@@ -51,6 +51,18 @@
 
         <!-- 隧道保活。specialUse：端口转发不属预置类型（dataSync 在 Android 15+ 还有
              每日时长上限，不适合长会话），故走 catch-all 并写明用途。 -->
+        <!-- D1：拍照用。页面里 <input type="file" capture> 时打开相机，照片经它授权给页面。
+             只暴露 cache/capture/（见 res/xml/file_paths.xml）—— filesDir 里有 SSH 私钥。 -->
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.fileprovider"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/file_paths" />
+        </provider>
+
         <service
             android:name=".TunnelService"
             android:exported="false"
