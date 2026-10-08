@@ -31,6 +31,8 @@ import android.webkit.WebResourceRequest
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import android.widget.Spinner
+import androidx.webkit.WebViewCompat
+import androidx.webkit.WebViewFeature
 import android.widget.Button
 import android.widget.EditText
 import android.widget.FrameLayout
@@ -602,6 +604,48 @@ class MainActivity : Activity() {
                 // 面板的「外部打开」、工具输出里的链接）。默认 false 时这类调用**静默失效**
                 // —— 点了没反应。开多窗口能力后由下面的 onCreateWindow 接住。
                 setSupportMultipleWindows(true)
+            }
+
+            // ── 手机端页面适配层：纯注入，**不注册 dsh 插件**（2026-10-08）──────
+            //
+            // 为什么注入：dsh 的 Web UI 是给桌面鼠标设计的，手机上有一批纯排版问题
+            // （留白、命中区、头部/输入区高度、hover-only 控件）—— 逐条见
+            // assets/plugins/dsh-handheld-mobile.js 的文件头。
+            //
+            // ⚠️ 与 1.0.89 及更早版本的关键差别：**不再往 `window.__DSH_BOOT__` 补插件条目**。
+            // dsh 0.1.7-rc.2 起，客户端加载器会按服务端清单回收这类条目
+            // （`tearDownEntryFiber` + `removeOwnedStyles`），旧做法在真机上被拆掉、
+            // 只能靠看门狗一轮轮自愈（日志里的 `heals:`）。现在由 App 在 document-start
+            // 直接注入，加载器**没有任何东西可以回收**。
+            //
+            // origin 收窄到隧道页面：注入只在 `127.0.0.1:<候选端口>` 上生效。
+            if (WebViewFeature.isFeatureSupported(WebViewFeature.DOCUMENT_START_SCRIPT)) {
+                val app = application as DshApp
+                // 顺序有意义：引导脚本先跑（document-start 补 viewport-fit=cover，
+                // Chromium 只认第一条 viewport meta），适配层随后。
+                val scripts = listOf(
+                    "plugins/mobile-bootstrap.js",
+                    "plugins/dsh-handheld-mobile.js",
+                ).mapNotNull { path ->
+                    runCatching {
+                        assets.open(path).use { it.readBytes() }.toString(Charsets.UTF_8)
+                    }.getOrElse {
+                        DiagLog.e(TAG, "读取 $path 失败，手机端适配将不生效：${it.message}")
+                        null
+                    }
+                }
+                if (scripts.isNotEmpty()) {
+                    // 先撤上一次的句柄：WebView 是保活的，重建 Activity 时不移除会累积 N 份。
+                    runCatching { app.injectionRemover?.invoke() }
+                    val handlers = scripts.map {
+                        WebViewCompat.addDocumentStartJavaScript(this, it, tunnelOrigins())
+                    }
+                    app.injectionRemover = { handlers.forEach { h -> runCatching { h.remove() } } }
+                    DiagLog.i(
+                        TAG,
+                        "适配层：已注入 ${scripts.size} 段（共 ${scripts.sumOf { it.length }} 字符）"
+                    )
+                }
             }
             webViewClient = object : WebViewClient() {
                 override fun onPageStarted(view: WebView?, url: String?, favicon: android.graphics.Bitmap?) {

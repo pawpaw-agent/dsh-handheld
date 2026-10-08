@@ -157,7 +157,9 @@ dependencies {
     // 单测里的 android.jar 只是抛异常的桩，不引真实实现则 JSON 往返测试全红。
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.json:json:20240303")
-    // （2026-09-25：androidx.webkit 随注入层移除 —— document-start 脚本不再需要）
+    // document-start 注入（`WebViewCompat.addDocumentStartJavaScript`）——
+    // 手机端页面适配层靠它进页面。2026-10-08 恢复注入时一并恢复该依赖。
+    implementation("androidx.webkit:webkit:1.17.0")
     // 2026-09-25：原生终端（TUI 模式）已移除 —— dsh 的 web 界面自带终端面板
     // （右栏 → 新建终端），WebView 里的 xterm + WebSocket 足够用。
     // 随之去掉的还有 Termux terminal-view（GPL-3.0）与 vendored 的 com.termux.* 源码。
