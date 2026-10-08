@@ -1470,25 +1470,47 @@ assets/plugins/handheld/
 用法：`node scripts/ui-verify.mjs --base http://127.0.0.1:3080 --token <t>`，
 token 从 `journalctl --user -u dsh-web.service | grep -oE 'token=[A-Za-z0-9_-]+'` 取。
 
-### ⚠️ 本机跑不起来：这个环境限制 chromium 的网络
+### ⚠️ 本机跑不起来：chromium 无法渲染 http 页面（2026-10-08 实测到底）
 
-**实测结论**（2026-10-08）：**这台机器的运行时里，chromium 的 http 加载不启动**。
-  注意归因：**不是** DSH 的文件策略（`danger-full-access`）—— 那是管文件的，且实测
-  `Seccomp: 0` / 无 `LD_PRELOAD` / AppArmor `enabled: N` / `ulimit -u=64696`（当时只跑着
-  45 个进程 148 个线程）/ 无 cgroup pids 上限；同一环境下 **curl 与 node fetch 到
-  `127.0.0.1:3080` 都通**（401）。限制在 chromium 这一侧，具体机制尚未定位。
+**归因先排除干净**（都不是原因）：
 
-| 试过 | 结果 |
-|---|---|
-| `about:blank` / `data:text/html,...` | ✓ 正常渲染 |
-| `http://127.0.0.1:18099/`（平凡的本地 python 服务） | ✗ `Page.navigate` 超时，CDP 只报 `Network.requestWillBeSent`，之后无任何事件 |
-| `http://127.0.0.1:3080/`（真实 dsh） | ✗ 同上 |
-| `--no-zygote` / `--single-process` / `--no-proxy-server` / `NetworkServiceSandbox off` / `NetworkServiceInProcess` / `host-resolver-rules` | ✗ 全部无效 |
-| 用 CDP **Fetch 域**把请求接过来、由 Node 代取（`shouldInterceptRequest` 的手法） | ✗ **代理 0 次** —— 导航压根没开始 |
-| 4 种模拟组合（模拟/单进程 各开关） | ✗ 全部 0 次代理 |
+| 假设 | 实测 | 结论 |
+|---|---|---|
+| DSH 文件策略 / 沙箱 | `Seccomp: 0`、无 `LD_PRELOAD`、AppArmor `enabled: N`、`ulimit -u=64696`（当时仅 45 进程）、无 cgroup pids 上限 | ✗ 排除 |
+| 地址 / 解析 | `curl` 与 `node fetch` 到 `127.0.0.1:3080` 均 401；`getaddrinfo` 正常；`ss` 确认 dsh 监听 `127.0.0.1:3080` | ✗ 排除 |
+| **16K 页内核**（Pi 5 默认 `PAGESIZE=16384`，chromium 沙箱假定 4K） | 装了**树莓派基金会自己**的构建 `chromium 1:154.0.8037.92-1~deb13u1+rpt1`（就是为这颗内核编的），**症状完全相同** | ✗ **推翻** |
+| headless 专属问题 | `xvfb-run` + 有头模式 → 同样卡死 | ✗ 排除 |
+| 共享内存路径 | 去掉 `--disable-dev-shm-usage`（改用 /dev/shm）→ 同样卡死 | ✗ 排除 |
+| 渲染进程能力 | `data:`/`about:blank` 正常渲染、`Runtime.evaluate` 正常 | 渲染器本身没问题 |
 
-Node 与 curl 的网络是通的（本地服务 HTTP 200 ✓）—— 限制在 chromium 这一侧。
-**因此这套验证要在沙箱外跑**（用户自己的 shell 里一条命令即可，脚本零依赖）。
+**精确症状（netlog 地面真相）**：请求**网络层是成功的** ——
+
+```
+TCP_CONNECT {"address_list": ["127.0.0.1:18099"]}   ← 连上了
+SOCKET_BYTES_SENT 27 次 / SOCKET_BYTES_RECEIVED 70 次   ← 数据交换了
+URL_REQUEST_DELEGATE_RESPONSE_STARTED / URL_REQUEST_JOB_BYTES_READ   ← 响应到了
+```
+
+**但渲染进程在「导航提交」处卡死**：一旦发起 http 导航，`Page.navigate` 不返回，
+随后**所有** `Runtime.evaluate` 都超时（整个渲染进程无响应）。所以卡点不在 socket，
+而在**响应交付给渲染进程之后的提交环节**。
+
+**试过并全部无效**：两个 chromium 二进制（Playwright 版 / 树莓派 `+rpt1` 版）×
+`--no-zygote`、`--single-process`、`--no-proxy-server`、`--proxy-server=direct://`、
+`NetworkServiceSandbox off`、`NetworkServiceInProcess`、`host-resolver-rules`、
+`--disable-ipv6`、`--disable-component-update`、`--disable-seccomp-filter-sandbox`、
+`--disable-features=AsyncDns,HappyEyeballsV3,UseDnsHttpsSvcb`、抬高 ulimit、
+去掉 `--disable-dev-shm-usage`、`xvfb-run` 有头模式 —— 症状一字不差。
+
+**旁证**：卡住时**网络服务进程活着但完全空闲**（所有线程 `epoll_wait`/futex）、
+浏览器进程也空闲、**全机 0 条 TCP 连接**；CDP 的 `Fetch` 域代理**一次都没触发**。
+
+**结论**：这台机器上 chromium（两个构建、headless 与有头）都无法把 http 响应提交给
+渲染进程 —— 具体机制**未定位**（不是页大小、不是沙箱策略、不是地址）。要做这套验证，
+需要换一台机器，或用下面的路线 C。
+
+**副作用（已安装的系统包，可回滚）**：`chromium 1:154.0.8037.92-1~deb13u1+rpt1`
+与 `xvfb`（诊断用）。不需要的话 `sudo apt-get remove chromium xvfb` 即可。
 
 ### 仍然做了的（不依赖浏览器，已进 CI）
 

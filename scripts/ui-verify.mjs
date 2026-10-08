@@ -24,7 +24,10 @@
  *
  * ## 环境限制（本机实测，2026-10-08）
  *
- * 这台机器的运行时里 **chromium 连不上任何 http**：连一个平凡的本地 python 服务也卡在建立连接
+ * 这台机器上 **chromium 无法渲染 http 页面**（两个构建、headless 与有头都一样）：netlog 证明
+ * 网络层成功（TCP 连上、收发过数据），但渲染进程在**导航提交**处卡死。详见
+ * docs/known-issues.md 第十三节的完整证据链（含被推翻的 16K 页假设）。原始记录：
+ * 「连不上任何 http」：连一个平凡的本地 python 服务也卡在建立连接
  * 之前（CDP 只报 `Network.requestWillBeSent`，之后没有任何事件），换过
  * `--no-zygote` / `--single-process` / `--no-proxy-server` / `NetworkServiceSandbox off`
  * / `NetworkServiceInProcess` / `host-resolver-rules` 全部无效；而 Node 与 curl 的网络是通的。
