@@ -1,11 +1,13 @@
 /*
- * 运行器（2026-10-08 重新设计）。
+ * 运行器（2026-10-08 重新设计·接缝 2+3）。
  *
- * 职责只有四件：
- *   1. 挂样式表（`window.__dshHandheldCss` 由 App 从 styles.css 读入后注入）；
- *   2. 观察 DOM，某条修复依赖的钩子齐了就调用它一次；
- *   3. 单条修复抛异常时**隔离**它自己（记日志、其余照跑、页面不受影响）；
- *   4. 轻量自愈：样式或 `[data-handheld="frame"]` 标记被冲掉时补回来。
+ * 职责：
+ *   1. **顶层只注册**：所有 DOM 读写在 `__dshHandheldBoot` 之后（DOM 一出现就跑，
+ *      见 boot.js）。document-start 阶段绝不碰 DOM —— 那正是 2026-10-08 那次静默失效的根因；
+ *   2. 挂样式表（`window.__dshHandheldCss` 由 App 从 styles.css 读入后注入）；
+ *   3. 观察 DOM，某条修复依赖的钩子齐了就调用它一次；
+ *   4. 单条修复抛异常时**隔离**它自己（记日志、其余照跑、页面不受影响），并把失败写进信标；
+ *   5. 轻量自愈：样式或 `[data-handheld="frame"]` 标记被冲掉时补回来。
  *
  * 与旧层最大的差别：这里**没有**「跟加载器斗」的逻辑。旧层是注册成 dsh 插件的，
  * 0.1.7-rc.2 起加载器会按服务端清单回收条目（`tearDownEntryFiber` + `removeOwnedStyles`），
@@ -16,17 +18,20 @@
   "use strict";
 
   var diag = root.__dshHandheldDiag || {
-    on: false, t0: 0,
+    on: false, t0: 0, status: {},
     wrap: function (n, f) { return f; },
     log: function () {}, post: function () {}, report: function () {},
+    beacon: function () {}, fail: function () {},
   };
   var H = root.__dshHandheldHooks || {};
+  var FIXES = root.__dshHandheldFixes || [];
+  var STYLE_MARK = "dsh-handheld-mobile/mobile.css";
 
-  // ── 手机档门 ──────────────────────────────────────────────────
+  // ── 手机档门 ──────────────────────────────────────────────────────────────
   //
   // 层只服务手机：整张样式表本来就只在 `(max-width:1023px) and (pointer:coarse)` 下生效
-  // （见 styles.css 顶部），所以 JS 侧（打标记、写 --vh、跑四条修复）也该用同一条件——
-  // 否则在桌面浏览器上会做一堆**没有样式配合**的徒劳改动（V8 就是断言这件事）。
+  // （见 styles.css 顶部），所以 JS 侧（打标记、写 --vh、跑四条修复）也用同一条件 ——
+  // 否则在桌面浏览器上会做一堆**没有样式配合**的徒劳改动。
   // 取不到 matchMedia 时按手机处理：App 里永远是手机，宁可多做事也不要静默不做事。
   var MOBILE_QUERY = "(max-width: 1023px) and (pointer: coarse)";
   function isMobile() {
@@ -35,23 +40,23 @@
       return !!root.matchMedia(MOBILE_QUERY).matches;
     } catch (e) { return true; }
   }
-  var loggedOff = false;
-  var FIXES = root.__dshHandheldFixes || [];
-  var STYLE_MARK = "dsh-handheld-mobile/mobile.css";
 
-  // ── 1. 样式表 ────────────────────────────────────────────────
   var styleTag = null;
+  var applied = Object.create(null);
+  var observing = false;
+  var loggedOff = false;
+  var finalized = false;
+
+  // ── 样式表 ────────────────────────────────────────────────────────────────
   function injectStyles() {
-    if (!isMobile()) return false;
+    if (!isMobile()) {
+      if (diag.status) diag.status.styles = "skipped";
+      return false;      // 桌面档：整层不做事（样式表本来也只在手机档生效）
+    }
     var css = root.__dshHandheldCss;
     if (!css) { diag.log("样式：__dshHandheldCss 未提供，跳过"); return false; }
-    // ⚠️ document-start 时 `document.head` 与 `document.documentElement` **都可能还是 null**
-    //    （Chromium 的 addScriptToEvaluateOnNewDocument 早于解析器建 <html>）。
-    //    早期版本直接 `(head || documentElement).appendChild(...)` → 抛 TypeError →
-    //    **整个 runner 死掉**（样式与四条修复全部静默失效）。真机与本地 fixture 都会踩，
-    //    所以这里返回 false、由下一次 sweep 重试。
     var host = document.head || document.documentElement;
-    if (!host) { diag.log("样式：DOM 尚未就绪，等下一轮"); return false; }
+    if (!host) return false;      // 正常路径下 boot 保证了它存在；保险起见不抛
     var tag = document.createElement("style");
     // ⚠️ 绝不能带 data-plugin：宿主 0.1.7-rc.2 的 removeOwnedStyles(id) 删的就是
     // `style[data-plugin="<id>"]`。换成宿主不认识的标记，那条删除路径就够不着。
@@ -64,18 +69,16 @@
       if (tag.isConnected && document.head) document.head.appendChild(tag);
     }, 0);
     styleTag = tag;
+    if (diag.status) { diag.status.styles = "ok"; diag.status.stylesBytes = css.length; }
     diag.log("样式：已挂载 " + css.length + " 字符");
     return true;
   }
 
-  // ── 2. 修复的应用与隔离 ──────────────────────────────────────
-  var applied = Object.create(null);
-  var observing = false;
-
+  // ── 修复的应用与隔离 ──────────────────────────────────────────────────────
   function hooksReady(needs) {
     for (var i = 0; i < needs.length; i++) {
       var sel = H[needs[i]];
-      if (!sel) { diag.log("修复依赖了未登记的钩子：" + needs[i]); return false; }
+      if (!sel) { diag.fail("hook:" + needs[i], new Error("未登记的钩子")); return false; }
       if (!document.querySelector(sel)) return false;
     }
     return true;
@@ -92,17 +95,37 @@
     } catch (e) {
       // 隔离：只影响这一条。下轮还会再试（applied 置回 false）。
       applied[f.id] = false;
+      diag.fail("fix:" + f.id, e);
       diag.log("修复抛异常（已隔离）：" + f.id + " — " + e);
     }
   }
 
+  function countApplied() {
+    var n = 0;
+    for (var i = 0; i < FIXES.length; i++) if (applied[FIXES[i].id]) n++;
+    return n;
+  }
+
+  function pendingIds() {
+    var out = [];
+    for (var i = 0; i < FIXES.length; i++) if (!applied[FIXES[i].id]) out.push(FIXES[i].id);
+    return out;
+  }
+
+  function observe() {
+    if (!root.MutationObserver) return false;
+    if (!document.documentElement) return false;
+    try {
+      new root.MutationObserver(schedule).observe(document.documentElement, {
+        childList: true, subtree: true,
+      });
+      return true;
+    } catch (e) { diag.log("MutationObserver 挂不上：" + e); return false; }
+  }
+
   function sweep() {
-    if (!isMobile()) {
-      if (!loggedOff) { loggedOff = true; diag.log("非手机档：整层不生效（" + MOBILE_QUERY + "）"); }
-      return;
-    }
     for (var i = 0; i < FIXES.length; i++) applyFix(FIXES[i]);
-    // 4. 轻量自愈：整套 CSS 以 [data-handheld="frame"] 为前提，标记没了就补。
+    // 轻量自愈：整套 CSS 以 [data-handheld="frame"] 为前提，标记没了就补。
     if (H.frame && !document.querySelector(H.frame)) {
       applied["frame-tagging"] = false;
       for (var j = 0; j < FIXES.length; j++) {
@@ -113,40 +136,62 @@
       diag.log("样式：被移除了，重新挂载");
       injectStyles();
     } else if (!styleTag) {
-      injectStyles();          // 第一轮 DOM 未就绪时挂不上，这里重试
+      injectStyles();
     }
     if (!observing) observing = observe();
   }
 
-  // ── 3. 触发：初始一次 + mutation 去抖（rAF）──────────────────
   var scheduled = false;
   function schedule() {
     if (scheduled) return;
     scheduled = true;
-    var run = function () { scheduled = false; sweep(); };
+    var run = function () {
+      scheduled = false;
+      if (!isMobile()) {
+        if (!loggedOff) {
+          loggedOff = true;
+          diag.log("非手机档：整层不生效（" + MOBILE_QUERY + "）");
+          finalize("skipped");
+        }
+        return;
+      }
+      sweep();
+      finalize("sweep");
+    };
     if (root.requestAnimationFrame) root.requestAnimationFrame(run);
     else root.setTimeout(run, 16);
   }
 
-  observing = observe();
-  injectStyles();
-  schedule();
-  function observe() {
-    if (!root.MutationObserver) return false;
-    if (!document.documentElement) return false;   // 同上：document-start 时可能还没建
-    try {
-      new root.MutationObserver(schedule).observe(document.documentElement, {
-        childList: true, subtree: true,
-      });
-      return true;
-    } catch (e) { diag.log("MutationObserver 挂不上：" + e); return false; }
+  /** 汇总状态并写信标（只发一次，之后只有失败才再发）。 */
+  function finalize(why) {
+    if (!diag.status) return;
+    if (!isMobile()) {
+      diag.status.skipped = "non-mobile";
+      diag.status.mobile = false;
+      diag.beacon(!finalized);
+      finalized = true;
+      return;
+    }
+    diag.status.mobile = true;
+    diag.status.styles = styleTag ? "ok" : (diag.status.styles || "missing");
+    diag.status.fixesTotal = FIXES.length;
+    diag.status.fixes = countApplied();
+    diag.status.pending = pendingIds();
+    diag.report("注入完成");
+    diag.beacon(!finalized);
+    finalized = true;
   }
-  // 页面加载完成后再兜一次（有些结构是 load 之后才挂的）
-  if (document.readyState !== "complete") {
-    root.addEventListener("load", schedule, { once: true });
-    document.addEventListener("DOMContentLoaded", schedule, { once: true });
-  }
-  // 转屏 / 改窗口大小可能让手机档条件翻转，重新评估一次
+
+  // ── 顶层只注册（接缝 2）──────────────────────────────────────────────────
+  // window 级监听不碰 DOM，放这里没问题；DOM 相关的全部进 boot。
   if (root.addEventListener) root.addEventListener("resize", schedule);
-  root.setTimeout(function () { diag.report("注入完成"); }, 0);
+
+  function boot() {
+    observing = observe();
+    injectStyles();
+    schedule();
+  }
+
+  if (root.__dshHandheldBoot) root.__dshHandheldBoot(boot);
+  else boot();   // 退化路径（boot.js 缺失；不该发生，一致性检查守着注入顺序）
 })(window);
