@@ -51,6 +51,8 @@ import { mkdirSync, writeFileSync, readFileSync, existsSync, openSync, readdirSy
 import { setTimeout as sleep } from 'node:timers/promises';
 import path from 'node:path';
 import os from 'node:os';
+import { CDP } from './lib/cdp.mjs';
+import { AUDIT_PROBE, fmtAudit } from './lib/audit-probe.mjs';
 
 const argv = process.argv.slice(2);
 const arg = (name, dflt) => {
@@ -127,65 +129,6 @@ function extractHostCss(modules) {
     for (const m of src.matchAll(/const css\$\d+ = "((?:[^"\\]|\\.)*)"/g)) { all += m[1] + '\n'; chunks++; }
   }
   return { css: all, pkgs, chunks };
-}
-
-// ── 极简 CDP 客户端（零依赖）────────────────────────────────────────────────
-class CDP {
-  constructor(ws) {
-    this.ws = ws;
-    this.id = 0;
-    this.pending = new Map();
-    this.handlers = new Map();
-    this.closed = null;      // 关闭原因（null = 仍开着）
-    ws.addEventListener('message', (ev) => {
-      let msg;
-      try { msg = JSON.parse(ev.data); } catch { return; }
-      if (msg.id != null && this.pending.has(msg.id)) {
-        const { resolve, reject } = this.pending.get(msg.id);
-        this.pending.delete(msg.id);
-        msg.error ? reject(new Error(`${msg.error.message} (${JSON.stringify(msg.error.data ?? '')})`)) : resolve(msg.result);
-      } else if (msg.method) {
-        for (const h of this.handlers.get(msg.method) ?? []) h(msg.params);
-      }
-    });
-    // chrome 崩溃/退出时必须让所有在等的 promise 立刻失败。
-    // 否则 send() 永远不返回，表现为整条流水线静默挂死（本 harness 踩过）。
-    const die = (why) => {
-      this.closed = why;
-      for (const [, { reject }] of this.pending) reject(new Error(`CDP 连接已断开：${why}`));
-      this.pending.clear();
-    };
-    ws.addEventListener('close', () => die('socket closed'), { once: true });
-    ws.addEventListener('error', () => die('socket error'), { once: true });
-  }
-  send(method, params = {}, timeoutMs = 30000) {
-    if (this.closed) return Promise.reject(new Error(`CDP 连接已断开：${this.closed}`));
-    const id = ++this.id;
-    return new Promise((resolve, reject) => {
-      // 注册在前、发送在后：即便响应极快也不会漏
-      const timer = setTimeout(() => {
-        if (this.pending.delete(id)) reject(new Error(`CDP ${method} 超时（${timeoutMs}ms）`));
-      }, timeoutMs);
-      this.pending.set(id, {
-        resolve: (v) => { clearTimeout(timer); resolve(v); },
-        reject: (e) => { clearTimeout(timer); reject(e); },
-      });
-      try { this.ws.send(JSON.stringify({ id, method, params })); }
-      catch (e) { this.pending.delete(id); clearTimeout(timer); reject(e); }
-    });
-  }
-  on(method, fn) {
-    if (!this.handlers.has(method)) this.handlers.set(method, []);
-    this.handlers.get(method).push(fn);
-  }
-  static async connect(wsUrl) {
-    const ws = new WebSocket(wsUrl);
-    await new Promise((res, rej) => {
-      ws.addEventListener('open', res, { once: true });
-      ws.addEventListener('error', () => rej(new Error('CDP WebSocket 连接失败')), { once: true });
-    });
-    return new CDP(ws);
-  }
 }
 
 // ── 浏览器 ──────────────────────────────────────────────────────────────────
@@ -523,75 +466,6 @@ async function run({ inject, viewport, label, scripts, pageUrl, probeExpr, befor
 // 数字怎么读：**宿主 CSS 决定的量**（标题行、统计行、正文留白…）是真机量级；
 // fixture 脚手架自己给的尺寸（消息卡高度之类）不是。所以这张表主要用于
 // ① 前后对比（delta 永远可信）② 找"明显不对"的项（如命中区 < 44px、文本被截断）。
-const AUDIT_PROBE = `(() => {
-  const R = (el) => { const r = el.getBoundingClientRect();
-    return { x: Math.round(r.left), y: Math.round(r.top), w: Math.round(r.width), h: Math.round(r.height) }; };
-  const q = (sel) => document.querySelector(sel);
-  const vw = window.innerWidth, vh = window.innerHeight;
-  const header = q('header'), msg = q('#msgArea');
-  const seat = q('[class*="_composerSeat"]'), card = q('.fixture_card');
-  const code = q('.fixture_code'), cc = q('.fixture_composerCard');
-  const innerW = (el) => { if (!el) return null; const cs = getComputedStyle(el);
-    return Math.round(el.getBoundingClientRect().width - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight)); };
-  const S = '[class*="_"]';
-  // 有效命中区 = 元素盒子 ∪ 它的 ::after/::before（层就是用 ::after 扩命中区的，
-  // 只看盒子会**低估**）。伪元素测不了，但它的 computed width/height/left/top 可读。
-  const effBox = (el) => {
-    const r = el.getBoundingClientRect();
-    let x1 = r.left, y1 = r.top, x2 = r.right, y2 = r.bottom;
-    for (const pe of ['::after', '::before']) {
-      const cs = getComputedStyle(el, pe);
-      if (!cs || cs.content === 'none' || cs.display === 'none') continue;
-      const w = parseFloat(cs.width), h = parseFloat(cs.height);
-      if (!w || !h) continue;
-      const l = parseFloat(cs.left), t = parseFloat(cs.top);
-      const px = r.left + (isNaN(l) ? 0 : l), py = r.top + (isNaN(t) ? 0 : t);
-      x1 = Math.min(x1, px); y1 = Math.min(y1, py);
-      x2 = Math.max(x2, px + w); y2 = Math.max(y2, py + h);
-    }
-    // ∩ 视口：屏外的东西不可点（收起态抽屉就在屏外）
-    x1 = Math.max(x1, 0); y1 = Math.max(y1, 0);
-    x2 = Math.min(x2, window.innerWidth); y2 = Math.min(y2, window.innerHeight);
-    const w = Math.max(0, Math.round(x2 - x1)), h = Math.max(0, Math.round(y2 - y1));
-    return { w: w, h: h, bx: Math.round(x1), by: Math.round(y1),
-      bx2: Math.round(x1 + w), by2: Math.round(y1 + h) };
-  };
-  const interactive = [...document.querySelectorAll('button,a[href],[role="button"],[role="tab"],[tabindex]:not([tabindex="-1"])')]
-    .filter((e) => { const cs = getComputedStyle(e); const r = e.getBoundingClientRect();
-      if (cs.display === 'none' || cs.visibility === 'hidden' || r.width <= 0 || r.height <= 0) return false;
-      // 完全在屏幕外的不算可点（收起态抽屉里的行就是这种）
-      return r.right > 0 && r.bottom > 0 && r.left < window.innerWidth && r.top < window.innerHeight; })
-    .map((e) => { const r = e.getBoundingClientRect(); const ef = effBox(e);
-      return { el: e.tagName + '.' + String(e.className || '').slice(0, 22),
-        w: Math.round(r.width), h: Math.round(r.height),
-        vx: Math.round(r.left), vy: Math.round(r.top),
-        ew: ef.w, eh: ef.h,
-        bx: ef.bx, by: ef.by, bx2: ef.bx2, by2: ef.by2,
-        label: (e.getAttribute('aria-label') || e.textContent || '').trim().slice(0, 14) }; });
-  const small = interactive.filter((i) => i.ew < 44 || i.eh < 44);
-  // 有效盒子（含伪元素扩展）留给 Node 侧做重叠/越界判定 —— 扩命中区不能变成制造误触
-  const boxes = interactive.map((i, k) => ({ k: k, el: i.el, label: i.label,
-    x: i.bx, y: i.by, w: i.ew, h: i.eh,
-    vx: i.vx, vy: i.vy, vw: i.w, vh: i.h }));
-  const truncated = [...document.querySelectorAll('*')]
-    .filter((e) => e.children.length === 0 && e.clientWidth > 0 && e.scrollWidth > e.clientWidth + 1)
-    .slice(0, 12)
-    .map((e) => ({ el: e.tagName + '.' + String(e.className || '').slice(0, 20),
-      sl: e.scrollWidth, cl: e.clientWidth, text: (e.textContent || '').trim().slice(0, 18) }));
-  return {
-    vw: vw, vh: vh,
-    header: header ? R(header) : null,
-    tabsShown: !!document.querySelector('[class*="_tabs"]')
-      && getComputedStyle(document.querySelector('[class*="_tabs"]')).display !== 'none',
-    msg: msg ? R(msg) : null, msgInnerW: innerW(msg),
-    composer: seat ? R(seat) : null,
-    textCardW: card ? R(card).w : null, textGapL: card ? R(card).x : null,
-    codeW: code ? R(code).w : null, composerCardW: cc ? R(cc).w : null,
-    statsH: (() => { const s = document.querySelector('[data-composer-stats]'); return s ? R(s).h : null; })(),
-    taps: { total: interactive.length, small: small, boxes: boxes },
-    truncated: truncated,
-  };
-})()`;
 
 async function audit(width, { scripts, pageUrl, label, openDrawer }) {
   const viewport = { width, height: width <= 400 ? 800 : 915, dsf: 3, mobile: true };
@@ -603,52 +477,7 @@ async function audit(width, { scripts, pageUrl, label, openDrawer }) {
   return { width, viewport, data: r.auditData, openDrawer: !!openDrawer };
 }
 
-function fmtAudit(res) {
-  const d = res.data;
-  const lines = [];
-  lines.push(`视口 ${d.vw}x${d.vh}（${res.width} CSS px 档${res.openDrawer ? '，**抽屉展开**' : '，抽屉收起'}）`);
-  const chromeH = (d.header ? d.header.h : 0) + (d.composer ? d.composer.h : 0);
-  lines.push(`  竖向  头部 ${d.header ? d.header.h : '?'} + 消息区 ${d.msg ? d.msg.h : '?'}`
-    + ` + 输入区 ${d.composer ? d.composer.h : '?'} = ${chromeH + (d.msg ? d.msg.h : 0)}`
-    + `（固定占 ${(100 * chromeH / d.vh).toFixed(1)}%）`);
-  lines.push(`         头部明细：页签${d.tabsShown ? '显示' : '**被层隐藏**'}；统计行 ${d.statsH}px`);
-  lines.push(`  横向  视口 ${d.vw} → 正文卡 ${d.textCardW}（左边距 ${d.textGapL}）`
-    + ` ｜ 代码块 ${d.codeW} ｜ 输入卡 ${d.composerCardW} ｜ 消息区内容宽 ${d.msgInnerW}`);
-  lines.push(`  命中区 可点 ${d.taps.total} 个，其中**有效命中区 <44px 的 ${d.taps.small.length} 个**`
-    + `（视觉 → 有效）`);
-  for (const t of d.taps.small.slice(0, 10)) {
-    lines.push(`           ${String(t.w + 'x' + t.h).padEnd(9)} → ${String(t.ew + 'x' + t.eh).padEnd(9)}`
-      + ` ${t.el.padEnd(24)} ${t.label}`);
-  }
-  // 负对照：**扩展出来的命中区盖住了邻居的可见盒子** = 真误触。
-  // （两个命中区在控件之间的空隙里相接**不算问题** —— 那只是把死区变成可点。）
-  const hits = (A, b) => !(A.x + A.w <= b.x || b.x + b.w <= A.x || A.y + A.h <= b.y || b.y + b.h <= A.y);
-  const stolen = [];
-  const B = d.taps.boxes || [];
-  for (let i = 0; i < B.length; i++) {
-    for (let j = 0; j < B.length; j++) {
-      if (i === j) continue;
-      const a = B[i], b = B[j];
-      // a 的扩展区是否咬到 b 自己的可见盒子（b 是 a 的祖先/后代则不算）
-      if (a.x <= b.x && a.y <= b.y && a.x + a.w >= b.vx + b.vw && a.y + a.h >= b.vy + b.vh) continue;
-      if (b.x <= a.x && b.y <= a.y && b.x + b.w >= a.vx + a.vw && b.y + b.h >= a.vy + a.vh) continue;
-      if (hits(a, { x: b.vx, y: b.vy, w: b.vw, h: b.vh })) {
-        stolen.push(`${a.el}(${a.label}) 咬到 ${b.el}(${b.label}) 的可见区`);
-      }
-    }
-  }
-  const overlap = stolen;
-  // 负对照②：有效区跑到视口外（顶部/两侧超界）
-  const oob = B.filter((b) => b.x < 0 || b.y < 0 || b.x + b.w > d.vw + 1 || b.y + b.h > d.vh + 1)
-    .map((b) => `${b.el}(${b.label}) ${b.x},${b.y} ${b.w}x${b.h}`);
-  lines.push(`  负对照 **扩展区咬到邻居可见区 ${overlap.length} 处**${overlap.length ? '：' + overlap.slice(0, 3).join(' ｜ ') : ''}`
-    + `；**越界 ${oob.length} 个**${oob.length ? '：' + oob.slice(0, 3).join(' ｜ ') : ''}`);
-  lines.push(`  截断  ${d.truncated.length} 处`);
-  for (const t of d.truncated.slice(0, 6)) {
-    lines.push(`           ${t.el.padEnd(26)} ${t.sl}>${t.cl}  「${t.text}」`);
-  }
-  return lines.join('\n');
-}
+
 
 // ── 主流程 ──────────────────────────────────────────────────────────────────
 const main = async () => {
