@@ -112,6 +112,8 @@ class MainActivity : Activity() {
             onUi {
                 if (!alive) status("连接断了，请重新连接")
                 refreshConnectState()
+                // A3：网页态下也要有反馈 —— 状态条画在连接屏上，用户此刻看不到。
+                refreshTunnelBanner()
             }
         }
     }
@@ -133,6 +135,13 @@ class MainActivity : Activity() {
             true
         }.getOrElse {
             DiagLog.w(TAG, "外链：打不开（${it.javaClass.simpleName}: ${it.message}）")
+            // C2：失败此前只写日志，用户点了没反应也不知道为什么。
+            // 用 Toast 而不是状态条：状态条画在连接屏上，而点链接时用户多半在网页上。
+            runCatching {
+                android.widget.Toast.makeText(
+                    this, "打不开这个链接（没有可用的浏览器？）", android.widget.Toast.LENGTH_SHORT
+                ).show()
+            }
             false
         }
     }
@@ -141,6 +150,12 @@ class MainActivity : Activity() {
     private var imeVisible = false
 
     private var pendingAuth: HttpAuthHandler? = null
+    /**
+     * A3：网页态下的断线横幅（隧道不可用时在页面顶部出现，可点回连接屏）。
+     *
+     * 由 [refreshTunnelBanner] 统一驱动 —— 判据只有「隧道活不活」这一条事实。
+     */
+    private var tunnelBanner: View? = null
     /** 页面那次麦克风请求：等系统权限结果回来再 grant/deny（见 onPermissionRequest）。 */
     private var pendingMicRequest: android.webkit.PermissionRequest? = null
 
@@ -297,7 +312,29 @@ class MainActivity : Activity() {
         if (screen != target) DiagLog.i(TAG, "screen: $screen → $target")
         screen = target
         connectView?.visibility = if (target == Screen.CONNECT) View.VISIBLE else View.GONE
+        refreshTunnelBanner()
     }
+
+    /**
+     * A3：断线横幅的唯一开关。
+     *
+     * 为什么需要它：隧道死掉时 App 内此前**零提示** —— `onTunnelAliveChanged` 只更新
+     * 连接屏上的控件（标题/按钮/状态条），而用户此刻在**网页**上，那些都看不见；
+     * 唯一的信号是通知栏少了一条常驻通知。现在网页态会浮出一条可点的横幅。
+     *
+     * 判据只有一条事实：隧道活不活 + 当前在不在网页上。
+     */
+    private fun refreshTunnelBanner() {
+        val alive = (application as DshApp).liveTunnel() != null
+        val show = !alive && screen == Screen.WEB
+        val v = tunnelBanner ?: return
+        val was = v.visibility == View.VISIBLE
+        v.visibility = if (show) View.VISIBLE else View.GONE
+        if (show && !was) DiagLog.i(TAG, "断线横幅：显示（隧道不可用且在网页上）")
+        if (!show && was) DiagLog.i(TAG, "断线横幅：隐藏（隧道恢复或已离开网页）")
+    }
+
+    private fun hideTunnelBanner() { tunnelBanner?.visibility = View.GONE }
 
     /**
      * 切相位。**唯一**改动「表单展开/收起、进度行显示与否」的地方。
@@ -740,6 +777,26 @@ class MainActivity : Activity() {
         // ── 连接屏 ───────────────────────────────────────────────
         connectView = createConnectView()
         root.addView(connectView)
+
+        // A3：网页态断线横幅。放在连接屏**之后**、覆盖层**之前** —— 这样它盖在页面上，
+        // 又不会压住错误页/诊断页；高度只有一行，不遮挡页面交互。
+        tunnelBanner = UiKit.text(this, ConnectDecisions.TUNNEL_LOST_HINT, 13f, COL_TEXT).apply {
+            gravity = Gravity.CENTER
+            setPadding(dp(14), dp(12), dp(14), dp(12))
+            setBackgroundColor(COL_ERROR)
+            isClickable = true
+            isFocusable = true
+            visibility = View.GONE
+            contentDescription = "连接已断开，点这里回到连接屏"
+            setOnClickListener {
+                DiagLog.i(TAG, "断线横幅：点击 → 回连接屏")
+                hideTunnelBanner()
+                showConnectScreen()
+            }
+        }
+        root.addView(tunnelBanner, FrameLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
+        ).apply { gravity = Gravity.TOP })
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
             window.attributes.layoutInDisplayCutoutMode =
