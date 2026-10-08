@@ -621,19 +621,31 @@ class MainActivity : Activity() {
             // origin 收窄到隧道页面：注入只在 `127.0.0.1:<候选端口>` 上生效。
             if (WebViewFeature.isFeatureSupported(WebViewFeature.DOCUMENT_START_SCRIPT)) {
                 val app = application as DshApp
-                // 顺序有意义：引导脚本先跑（document-start 补 viewport-fit=cover，
-                // Chromium 只认第一条 viewport meta），适配层随后。
-                val scripts = listOf(
-                    "plugins/mobile-bootstrap.js",
-                    "plugins/dsh-handheld-mobile.js",
-                ).mapNotNull { path ->
-                    runCatching {
-                        assets.open(path).use { it.readBytes() }.toString(Charsets.UTF_8)
-                    }.getOrElse {
-                        DiagLog.e(TAG, "读取 $path 失败，手机端适配将不生效：${it.message}")
-                        null
-                    }
+                // 顺序有意义（2026-10-08 重新设计后的结构，见 assets/plugins/handheld/）：
+                //   ① 引导脚本：document-start 补 viewport-fit=cover（Chromium 只认第一条
+                //      viewport meta，必须最早）；
+                //   ② hooks.js：宿主 DOM 钩子的唯一出处；
+                //   ③ diag.js：自证与开销，**默认关闭**（零成本替身）；
+                //   ④ fixes.js：修复集（每条声明自己依赖哪些钩子）；
+                //   ⑤ 样式：styles.css 读进来包成一行赋值 —— 注释只在仓库里给人看，
+                //      注入前剥掉（34 KB 注释不进手机）；
+                //   ⑥ runner.js：挂样式、观察 DOM、按需应用修复、隔离异常。
+                fun readAsset(path: String): String? = runCatching {
+                    assets.open(path).use { it.readBytes() }.toString(Charsets.UTF_8)
+                }.getOrElse {
+                    DiagLog.e(TAG, "读取 $path 失败，手机端适配将不生效：${it.message}")
+                    null
                 }
+                val cssScript = readAsset("plugins/handheld/styles.css")?.let { css ->
+                    val stripped = css.replace(Regex("/\\*[\\s\\S]*?\\*/"), "")
+                    "window.__dshHandheldCss = " + org.json.JSONObject.quote(stripped) + ";"
+                }
+                val scripts = listOf(
+                    "plugins/handheld/bootstrap.js",
+                    "plugins/handheld/hooks.js",
+                    "plugins/handheld/diag.js",
+                    "plugins/handheld/fixes.js",
+                ).mapNotNull { readAsset(it) } + listOfNotNull(cssScript, readAsset("plugins/handheld/runner.js"))
                 if (scripts.isNotEmpty()) {
                     // 先撤上一次的句柄：WebView 是保活的，重建 Activity 时不移除会累积 N 份。
                     runCatching { app.injectionRemover?.invoke() }

@@ -38,8 +38,23 @@ import { execSync } from 'node:child_process';
 import path from 'node:path';
 
 const REPO = path.resolve(path.dirname(new URL(import.meta.url).pathname), '..');
-const BUNDLE = path.join(REPO, 'android/app/src/main/assets/plugins/dsh-handheld-mobile.js');
-const BOOTSTRAP = path.join(REPO, 'android/app/src/main/assets/plugins/mobile-bootstrap.js');
+// 2026-10-08 重新设计后的结构：适配层拆成 handheld/ 下的一组文件。
+// 扫描**全部**这些文件（不只是 hooks.js）—— 修复体里也有内联选择器，
+// 它们同样是「对宿主 DOM 的依赖」，一样要进契约。
+const HANDHELD_DIR = path.join(REPO, 'android/app/src/main/assets/plugins/handheld');
+const BUNDLE_FILES = ['bootstrap.js', 'hooks.js', 'diag.js', 'fixes.js', 'runner.js']
+  .map((f) => path.join(HANDHELD_DIR, f));
+const BUNDLE = BUNDLE_FILES.join(','); // 仅用于日志/报错里显示来源
+// 提取钩子时**先剥注释**：新层的注释里会解释「为什么不能用 data-plugin」「示例
+// [class*="_xxx"]」这类字面量，它们不是对宿主 DOM 的依赖，不该进契约。
+// （静态不变量那几条也各自剥一次，重复剥无害。）
+const stripComments = (t) => t
+  .replace(/\/\*[\s\S]*?\*\//g, '')
+  .replace(/(^|[^:])\/\/[^\n]*/g, '$1');
+const readBundle = () => stripComments(BUNDLE_FILES
+  .map((f) => { try { return readFileSync(f, 'utf8'); } catch { return ''; } })
+  .join('\n'));
+const BOOTSTRAP = path.join(HANDHELD_DIR, 'bootstrap.js');
 const MAIN_ACTIVITY = path.join(
   REPO, 'android/app/src/main/java/com/dshhandheld/app/MainActivity.kt');
 /**
@@ -166,7 +181,7 @@ function findDshModules() {
 // 意义：重新 vendoring 插件会改变依赖集合，那必须是显式动作（更新契约），
 // 而不是悄悄多依赖几个没人验证过的钩子。
 if (process.argv.includes('--contract')) {
-  const b = readFileSync(BUNDLE, 'utf8');
+  const b = readBundle();
   const read = readHostHooks(b);
   const otherPrefixes = OTHER_HOST_PREFIXES;
   const actual = [...read]
@@ -259,7 +274,7 @@ function collectFrontendText(root, scope = 'core') {
 }
 
 // ── 从插件 bundle 提取「读取的钩子」────────────────────────────────────────
-const bundle = readFileSync(BUNDLE, 'utf8');
+const bundle = readBundle();
 const readHooks = readHostHooks(bundle);
 
 const isOtherHost = (h) => OTHER_HOST_PREFIXES.some((p) => h.startsWith(p));
@@ -402,8 +417,17 @@ console.log('');
 const failures = missing.length + classMissing.length + classPluginOnlyWrong.length
   + staleContractClasses.length + valueMissing.length
   + (noPlugin ? 0 : 1) + (setsDataPlugin ? 1 : 0) + (noPlaceholders ? 0 : 1);
-if (failures === 0) {
-  if (process.argv.includes('--update-contract')) {
+// 再生成契约的门槛：默认要求 0 失败（防「层坏了却把契约改小」这种自欺）。
+// 但**结构性重写**（适配层拆分/删功能）天然会让旧契约偏大 —— 那 38 条「声明了但
+// 不再使用」不是失效，是过时。这种场合用 `--force-update-contract` 显式说明意图。
+const force = process.argv.includes('--force-update-contract');
+if (failures === 0 || force) {
+  if (process.argv.includes('--update-contract') || force) {
+    if (force && failures !== 0) {
+      console.log('');
+      console.log(`⚠️  --force-update-contract：在 ${failures} 项不通过的情况下重写契约。`);
+      console.log('    仅用于「层被有意重写/删功能」—— 逐条确认过那些失败都是「不再使用」。');
+    }
     let dshVersion = 'unknown';
     try {
       dshVersion = execSync('dsh --version', { encoding: 'utf8' }).trim();
