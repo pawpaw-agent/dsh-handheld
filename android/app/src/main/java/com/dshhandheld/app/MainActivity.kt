@@ -487,6 +487,14 @@ class MainActivity : Activity() {
 
     private companion object {
         const val TAG = "DshHandheld"
+
+        /** 适配层信标前缀（见 assets/plugins/handheld/diag.js）；命中就进诊断日志。 */
+        const val HANDHELD_MARK = "[handheld]"
+
+        /** 读页面侧适配层状态：层写在 <html data-handheld-status>（紧凑 JSON）。 */
+        const val JS_HANDHELD_STATUS = "(function(){try{var d=document.documentElement;" +
+            "return d?(d.getAttribute('data-handheld-status')||'（无）'):'（无 documentElement）';}" +
+            "catch(e){return '（读取失败：'+e+'）';}})()"
         // 配色与尺寸基元集中在 UiKit（此前 MainActivity / TuiActivity 各定义一份）。
         // 保留这些别名是为了让 60 余处调用点不必改动；定义只有一处。
         const val COL_BG = UiKit.BG
@@ -622,7 +630,8 @@ class MainActivity : Activity() {
             if (WebViewFeature.isFeatureSupported(WebViewFeature.DOCUMENT_START_SCRIPT)) {
                 val app = application as DshApp
                 // 顺序有意义（2026-10-08 重新设计后的结构，见 assets/plugins/handheld/）：
-                //   ① 引导脚本：document-start 补 viewport-fit=cover（Chromium 只认第一条
+                //   ⓪ boot.js：引导队列（document-start 只定义，DOM 一出现就跑任务）；
+                //   ① 引导脚本：**解析期**补 viewport-fit=cover（Chromium 只认第一条
                 //      viewport meta，必须最早）；
                 //   ② hooks.js：宿主 DOM 钩子的唯一出处；
                 //   ③ diag.js：自证与开销，**默认关闭**（零成本替身）；
@@ -641,6 +650,9 @@ class MainActivity : Activity() {
                     "window.__dshHandheldCss = " + org.json.JSONObject.quote(stripped) + ";"
                 }
                 val scripts = listOf(
+                    // boot.js 必须最先：document-start 段只允许"定义"，呈现型工作注册进它，
+                    // DOM 一出现就执行（bootstrap 依赖它拿最早时机）。
+                    "plugins/handheld/boot.js",
                     "plugins/handheld/bootstrap.js",
                     "plugins/handheld/hooks.js",
                     "plugins/handheld/diag.js",
@@ -772,7 +784,14 @@ class MainActivity : Activity() {
                  */
                 override fun onConsoleMessage(msg: android.webkit.ConsoleMessage?): Boolean {
                     msg ?: return false
-                    // 只记 warning/error：dsh 页面平时的 console 输出很密，全记会把真正
+                    // 适配层的信标：**无论级别**都收。层刻意用 console.warn 发信标（见 diag.js），
+                    // 但这里只认前缀、不依赖级别 —— 免得哪天层改了级别又静默丢失。这正是
+                    // 2026-10-08 那次事故的教训：整层没生效，诊断页里却一行字都没有。
+                    if (msg.message().contains(HANDHELD_MARK)) {
+                        DiagLog.i(TAG, msg.message())
+                        return true
+                    }
+                    // 其余只记 warning/error：dsh 页面平时的 console 输出很密，全记会把真正
                     // 有用的那几条淹掉（语音输入这次的失败现场就是一条 console error）。
                     if (msg.messageLevel() >= android.webkit.ConsoleMessage.MessageLevel.WARNING) {
                         DiagLog.i(TAG, "页面 console[${msg.messageLevel()}] ${msg.message()} " +
@@ -2440,6 +2459,25 @@ class MainActivity : Activity() {
         }
         box.removeAllViews()
         box.addView(UiKit.text(this, "诊断信息", 20f, COL_TITLE, bold = true))
+
+        // 适配层状态：层写在 <html data-handheld-status>（见 diag.js 的信标），异步读回。
+        // 放在最上面一行 —— 「层有没有生效」是手机上最先要回答的问题：2026-10-08 那次整层
+        // 静默失效，诊断页里一行字都没有，只能靠肉眼猜「是没生效还是样式本来就这样」。
+        val adapterLine = UiKit.text(this, "适配层：读取中…", 11f, COL_MUTED)
+        box.addView(
+            adapterLine,
+            LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
+            ).apply { topMargin = dp(6) }
+        )
+        runCatching {
+            webView?.evaluateJavascript(JS_HANDHELD_STATUS) { raw ->
+                val v = runCatching {
+                    org.json.JSONTokener(raw ?: "").nextValue() as? String
+                }.getOrNull()
+                adapterLine.text = "适配层：" + (v ?: "（读不到）")
+            }
+        }.onFailure { adapterLine.text = "适配层：（读取失败 " + it.message + "）" }
 
         val body = TextView(this).apply {
             textSize = 10f
