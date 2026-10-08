@@ -488,6 +488,9 @@ class MainActivity : Activity() {
     private companion object {
         const val TAG = "DshHandheld"
 
+        /** 诊断页里的「WebView 远程调试」开关（真机取证用；默认关）。 */
+        const val PREF_WEBVIEW_DEBUG = "webview_debug"
+
         /** 适配层信标前缀（见 assets/plugins/handheld/diag.js）；命中就进诊断日志。 */
         const val HANDHELD_MARK = "[handheld]"
 
@@ -580,10 +583,18 @@ class MainActivity : Activity() {
         super.onCreate(savedInstanceState)
         prefs = getSharedPreferences(DshApp.PREFS, Context.MODE_PRIVATE)
 
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.KITKAT &&
-            (applicationInfo.flags and android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE) != 0) {
-            // 仅 debug 包开启 WebView 远程调试，方便真机调试；release 不暴露。
-            WebView.setWebContentsDebuggingEnabled(true)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.KITKAT) {
+            // WebView 远程调试：debug 包始终开；release 包按**诊断页里的开关**（默认关）。
+            //
+            // 为什么 release 也要能开：真机取证（量命中区、截断、留白…）要在真实 DOM 上跑探针，
+            // 那需要 CDP。原先把开关绑死在 FLAG_DEBUGGABLE 上，唯一的路是装 debug 变体 ——
+            // 但 CI 的 release 用 release keystore 签，签名不匹配，只能卸载（**丢 SSH 主机与密码**）。
+            // 改成诊断页开关后：release 签名不变、`adb install -r` 直接覆盖；默认仍是关的。
+            val debuggable = (applicationInfo.flags and
+                android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE) != 0
+            if (debuggable || prefs.getBoolean(PREF_WEBVIEW_DEBUG, false)) {
+                WebView.setWebContentsDebuggingEnabled(true)
+            }
         }
 
         val root = FrameLayout(this).apply { setBackgroundColor(COL_BG) }
@@ -2503,6 +2514,25 @@ class MainActivity : Activity() {
                 getSystemService(ClipboardManager::class.java)
                     ?.setPrimaryClip(ClipData.newPlainText("dsh-handheld 诊断信息", text))
                 Toast.makeText(this, "已复制 ${text.length} 字", Toast.LENGTH_SHORT).show()
+            },
+            LinearLayout.LayoutParams(0, dp(44), 1f).apply { marginEnd = dp(8) }
+        )
+        // 真机取证开关：开着才能 adb forward tcp:9222 localabstract:webview_devtools_remote
+        // 拿到真实 DOM（量命中区/截断/留白）。默认关；改完重启 App 生效。
+        val wvDebugOn = prefs.getBoolean(PREF_WEBVIEW_DEBUG, false)
+        row.addView(
+            UiKit.button(
+                this,
+                if (wvDebugOn) "关掉调试口" else "开调试口",
+                UiKit.Style.SECONDARY
+            ) {
+                prefs.edit().putBoolean(PREF_WEBVIEW_DEBUG, !wvDebugOn).apply()
+                Toast.makeText(
+                    this,
+                    if (wvDebugOn) "已关闭（重启 App 生效）" else "已开启（重启 App 生效）",
+                    Toast.LENGTH_SHORT
+                ).show()
+                showDiagPage()
             },
             LinearLayout.LayoutParams(0, dp(44), 1f).apply { marginEnd = dp(8) }
         )
