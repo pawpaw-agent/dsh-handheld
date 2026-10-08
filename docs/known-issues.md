@@ -1449,112 +1449,121 @@ assets/plugins/handheld/
 
 ---
 
-## 十三、用虚拟环境验证交互（headless Chromium + CDP，2026-10-08）
+## 十三、用虚拟环境验证交互（headless Chromium + **file:// fixture**，2026-10-08）
 
 ### 是什么
 
-`scripts/ui-verify.mjs`（零依赖）在**真实 dsh 页面**上、用**手机档视口 + 触屏**、
-按**与 App 完全相同的顺序**注入 `assets/plugins/handheld/` 那 6 段，然后断言**交互**：
+`scripts/ui-verify.mjs`（零依赖：自带极简 CDP 客户端）在**真实宿主 CSS** 上跑一份
+**fixture 页面**，按**与 App 完全相同的顺序**注入 `assets/plugins/handheld/` 那 6 段，
+然后断言**交互**而不只是"看起来对"。10 条断言：
 
 | # | 断言 |
 |---|---|
 | V1 | 注入确实发生（hooks/fixes/css 都在，且生产路径不带诊断） |
+| V1b | 生产路径不带诊断 |
 | V2 | `[data-handheld="frame"]` + `<html class="dsh-handheld-mobile">` |
-| V3 | 样式生效（与不注入的基线 A/B 比 `_titleRow`/`_composerSeat`/`[data-composer-stats]` 的几何） |
+| V3 | 样式生效（与不注入的基线 A/B 比几何） |
 | V4 | `--dsh-handheld-vh` 与 `visualViewport.height` 一致 |
-| V5 | 键盘弹起时 `scrollIntoView` 被调用（页面侧装 spy） |
-| V6 | 右侧栏工具栏**真的点得到**（`elementFromPoint` 命中面板自身，而非盖在它上面的元素） |
+| V5 | 键盘弹起 → `scrollIntoView` 被调用（页面侧 spy） |
+| V6 | 右侧栏工具栏**真的点得到**（`elementFromPoint` 命中面板自身） |
+| **V6b** | **负对照**：不注入时同一条带子**点不到** —— 否则 V6 是自证 |
 | V7 | 无横向溢出 |
-| V8 | **桌面档下整层不生效**（CSS 媒体查询是 `(max-width:1023px) and (pointer:coarse)`） |
+| V8 | 桌面档下**整层不生效** |
 
-用法：`node scripts/ui-verify.mjs --base http://127.0.0.1:3080 --token <t>`，
-token 从 `journalctl --user -u dsh-web.service | grep -oE 'token=[A-Za-z0-9_-]+'` 取。
+用法（不需要 dsh 在跑、不需要 token、不需要网络）：
 
-### ⚠️ 本机跑不起来：chromium 无法渲染 http 页面（2026-10-08 实测到底）
+```sh
+node scripts/ui-verify.mjs            # 产出截图 + report.json 到 ~/dsh-verify/ui-verify-<时间>
+```
 
-**归因先排除干净**（都不是原因）：
+**fixture 的真实性从哪来**：class 名与宿主 CSS **从已安装的 dsh 产物里读**
+（`node_modules/@deepseek-ai/dsh-client-…/lib/client.js`，与 `check-mobile-hooks.mjs` 同一套定位），
+当前抽出 51 个包 / 97 段 / 265 KB CSS；DOM 按适配层钩子需要的最小嵌套手工搭。
+**fixture 是模型**：几何、层叠、命中测试可信，**视觉不可信**（最终判据仍是真机截图）。
+
+### 为什么是 `file://` 而不是真实 dsh 页面
+
+这台机器上 **chromium 无法渲染 http 页面**：`Page.navigate` 到任何 `http://`
+（哪怕一个平凡的本地 python 服务）都卡在**创建渲染进程之前**，而 `file://` 与 `data:` 正常。
+这不是新发现 —— 仓库里被归档的两个实验脚本（`css-lab.mjs` / `composer-stats-lab.mjs`）
+的注释里写着同一件事，它们当年也是用 **file:// fixture** 跑的：
+
+> 沙箱里 Chromium 发不出 HTTP，所以页面是 file:// 的 fixture（真实 class 名 + 真实 CSS）。
+
+**排除过的假设**（都不是原因）：
 
 | 假设 | 实测 | 结论 |
 |---|---|---|
-| DSH 文件策略 / 沙箱 | `Seccomp: 0`、无 `LD_PRELOAD`、AppArmor `enabled: N`、`ulimit -u=64696`（当时仅 45 进程）、无 cgroup pids 上限 | ✗ 排除 |
-| 地址 / 解析 | `curl` 与 `node fetch` 到 `127.0.0.1:3080` 均 401；`getaddrinfo` 正常；`ss` 确认 dsh 监听 `127.0.0.1:3080` | ✗ 排除 |
-| **16K 页内核**（Pi 5 默认 `PAGESIZE=16384`，chromium 沙箱假定 4K） | 装了**树莓派基金会自己**的构建 `chromium 1:154.0.8037.92-1~deb13u1+rpt1`（就是为这颗内核编的），**症状完全相同** | ✗ **推翻** |
-| headless 专属问题 | `xvfb-run` + 有头模式 → 同样卡死 | ✗ 排除 |
-| 共享内存路径 | 去掉 `--disable-dev-shm-usage`（改用 /dev/shm）→ 同样卡死 | ✗ 排除 |
-| 渲染进程能力 | `data:`/`about:blank` 正常渲染、`Runtime.evaluate` 正常 | 渲染器本身没问题 |
+| DSH 文件策略 / 沙箱 | `Seccomp: 0`、无 `LD_PRELOAD`、AppArmor `enabled: N`、`ulimit -u=64696`、无 cgroup pids 上限 | ✗ 排除 |
+| 地址 / 解析 | `curl` 与 `node fetch` 到 `127.0.0.1:3080` 均 401；`ss` 确认监听 | ✗ 排除 |
+| 16K 页内核（Pi 5 默认 `PAGESIZE=16384`） | 装了**树莓派基金会自己**的 `chromium 1:154.0.8037.92-1~deb13u1+rpt1` → 症状一字不差 | ✗ 推翻 |
+| **内核版本回归**（09-27 由 6.18.39 升到 6.18.50） | **真回退到 6.18.39 重启验证** → 仍然卡死 | ✗ **排除** |
+| headless 专属 / 共享内存路径 | `xvfb-run` 有头模式、去掉 `--disable-dev-shm-usage` → 同样卡死 | ✗ 排除 |
+| 渲染器本身 | `data:`/`about:blank` 正常渲染、`Runtime.evaluate` 正常 | 渲染器没问题 |
 
-**精确症状（netlog 地面真相）**：请求**网络层是成功的** ——
+**精确症状**（netlog 地面真相）：网络层是**成功**的 ——
 
 ```
-TCP_CONNECT {"address_list": ["127.0.0.1:18099"]}   ← 连上了
-SOCKET_BYTES_SENT 27 次 / SOCKET_BYTES_RECEIVED 70 次   ← 数据交换了
-URL_REQUEST_DELEGATE_RESPONSE_STARTED / URL_REQUEST_JOB_BYTES_READ   ← 响应到了
+TCP_CONNECT {"address_list": ["127.0.0.1:18099"]}
+SOCKET_BYTES_SENT 27 次 / SOCKET_BYTES_RECEIVED 70 次
+URL_REQUEST_DELEGATE_RESPONSE_STARTED / URL_REQUEST_JOB_BYTES_READ
 ```
 
-**但渲染进程在「导航提交」处卡死**：一旦发起 http 导航，`Page.navigate` 不返回，
-随后**所有** `Runtime.evaluate` 都超时（整个渲染进程无响应）。所以卡点不在 socket，
-而在**响应交付给渲染进程之后的提交环节**。
+但发起 http 导航后**渲染进程根本没被创建**（12 秒采样 6 次 `renderer=0`），
+浏览器进程与网络服务进程**双双空闲** → 卡点在「导航请求 → 创建渲染进程」之间。
+两个 chromium 构建 × 约 16 组开关 × headless/有头，症状一字不差；**机制未定位**。
 
-**试过并全部无效**：两个 chromium 二进制（Playwright 版 / 树莓派 `+rpt1` 版）×
-`--no-zygote`、`--single-process`、`--no-proxy-server`、`--proxy-server=direct://`、
-`NetworkServiceSandbox off`、`NetworkServiceInProcess`、`host-resolver-rules`、
-`--disable-ipv6`、`--disable-component-update`、`--disable-seccomp-filter-sandbox`、
-`--disable-features=AsyncDns,HappyEyeballsV3,UseDnsHttpsSvcb`、抬高 ulimit、
-去掉 `--disable-dev-shm-usage`、`xvfb-run` 有头模式 —— 症状一字不差。
+> 副作用：诊断时装了系统包 `chromium`（`+rpt1`）与 `xvfb`，不需要可
+> `sudo apt-get remove chromium xvfb`。内核回退**配置已还原**（`config.txt` 里的
+> `kernel=kernel_61839.img` 已删除，下次重启回到默认内核），备份
+> `config.txt.bak-20261008` 与 `kernel_2712.img.61850.bak` 仍在 `/boot/firmware/`。
 
-**旁证**：卡住时**网络服务进程活着但完全空闲**（所有线程 `epoll_wait`/futex）、
-浏览器进程也空闲、**全机 0 条 TCP 连接**；CDP 的 `Fetch` 域代理**一次都没触发**。
+### 它当场抓到的一个真缺陷（这就是它的价值）
 
-**结论**：这台机器上 chromium（两个构建、headless 与有头）都无法把 http 响应提交给
-渲染进程 —— 具体机制**未定位**（不是页大小、不是沙箱策略、不是地址）。要做这套验证，
-需要换一台机器，或用下面的路线 C。
+第一次跑，10 条里红了 6 条。根因在**层自己**：
 
-**副作用（已安装的系统包，可回滚）**：`chromium 1:154.0.8037.92-1~deb13u1+rpt1`
-与 `xvfb`（诊断用）。不需要的话 `sudo apt-get remove chromium xvfb` 即可。
+```
+TypeError: Cannot read properties of null (reading 'appendChild')
+  at injectStyles (<anonymous>:37:49)
+```
 
-### 🎯 为什么「之前能跑、现在不能」—— 系统在 2026-09-27 升级过
+`runner.js` 在 **document-start** 执行时，`document.head` 与 `document.documentElement`
+**都还是 null**（Chromium 的 `addScriptToEvaluateOnNewDocument` 早于解析器建 `<html>`；
+Android 的 `addDocumentStartJavaScript` 时机由版本决定，同样不保证）。旧写法
+`(document.head || document.documentElement).appendChild(...)` 直接抛异常 →
+**整个 runner 死掉** → 样式与四条修复**全部静默失效**，而且因为诊断默认关闭，
+真机上只会表现为"适配层没生效"，没有任何报错。
 
-用户问「之前不是可以调试吗」—— **对** ✓。旧 harness 在 **2026-09-24/25** 跑出过实测数据
-（见归档 `mobile-ui-verification.md`），用的就是现在这份 `chromium-1243`
-（下载于 **2026-09-11**，之后没变）与同一套启动参数。
+修法：DOM 未就绪时**不抛**、返回 false 由下一轮 sweep 重试；`MutationObserver` 同样延后到
+`documentElement` 可用时再挂；并补 `DOMContentLoaded` 兜底。诊断日志现在能看到这条自愈路径：
 
-`dpkg` 日志显示 **2026-09-27 20:38** 发生了一次大升级：
+```
+[handheld] 样式：DOM 尚未就绪，等下一轮
+…
+[handheld] 样式：已挂载 14718 字符
+```
 
-| 升级项 | 变化 |
-|---|---|
-| **内核** | `6.18.39` → **`6.18.50`**（镜像日期 09-27，就是现在跑的这个） |
-| **`raspi-firmware`** | → `1:1.20260915-1`（引导固件，决定内存布局） |
-| `nodejs` | → `22.23.3-1nodesource1` |
-| 其它 | gstreamer / wpasupplicant / 一批 Pi 桌面包 |
+**反向验证**（证明 harness 有回归价值）：把上面的修法**故意还原**成 bug 版 → 10 条里
+**6 条红**（V1/V2/V3/V4/V5/V6）；改回修复版 → **10 条全绿**。
 
-**内核配置差异已比对**：6.18.39 → 6.18.50 只差 53 行，**全是外设驱动**
-（CAN / Type-C / TLS / 触摸屏 / 音频），**没有**任何内存、IPC、安全相关项；
-两版页大小**都是 16K**（`CONFIG_ARM64_16K_PAGES=y`）。
+### 顺手补的一条设计缺口：手机档门（V8）
 
-**所以：变的是系统环境，不是 harness** —— 09-24 能跑、10-08 不能，中间只有这次升级。
-
-### 卡点的精确位置
-
-发起 http 导航后**渲染进程根本没被创建**（`renderer=0`，12 秒内采样 6 次全是 0），
-而网络层是成功的（netlog 证明 TCP 连上、收发过数据），浏览器进程与网络服务进程
-**双双空闲** —— 卡点在**「导航请求 → 创建渲染进程」之间**，比"渲染进程卡死"更靠前一步。
-
-### 回退旧内核（未执行，需重启）
-
-- 旧镜像还在：`/boot/vmlinuz-6.18.39+rpt-rpi-2712` ✓（模块 `/lib/modules/6.18.39+rpt-rpi-2712` ✓）
-- 步骤（**可逆**）：备份现在的 `kernel_2712.img` → 把 6.18.39 的镜像复制成
-  `/boot/firmware/kernel_61839.img` → `config.txt` 加一行 `kernel=kernel_61839.img` → 重启
-- 若回退后能跑 ✓ → 确认是内核/固件回归；若仍不能 ✗ → 查 `raspi-firmware`
+层的样式表本来就只在 `(max-width:1023px) and (pointer:coarse)` 下生效，但 **JS 侧**
+（打标记、写 `--vh`、跑修复）原先没有同样的条件 —— 在桌面浏览器上会做一堆
+**没有样式配合**的徒劳改动。现在 `runner.js` 用同一个媒体查询做门，
+`matchMedia` 取不到时按手机处理（App 里永远是手机，宁可多做事也不要静默不做事），
+并在 `resize` 时重新评估（转屏）。
 
 ### 仍然做了的（不依赖浏览器，已进 CI）
 
 `scripts/check-injection-parity.mjs`：比对 **App 的 Kotlin 注入列表** ↔ **harness 的
-`SEGMENTS`**（顺序 + 内容 + 文件存在 + 样式那一环两边都读）。反向验证过：故意改一处 →
-退出码 1；还原 → 0。
+`SEGMENTS`**（顺序 + 内容 + 文件存在 + 样式两边都读）。harness 自己**不进 CI**
+（需要本机装 dsh 才有真实 CSS 可抽）。
 
 ### 这套验证**不能**替代的
 
-- 真实 Android WebView 的渲染差异（本机是 Playwright chromium，手机上 WebView 151/153）；
-- 真实软键盘/IME（V5 只证明监听与滚动调用被触发）；
+- 真实 Android WebView 的渲染差异（本机是 Debian chromium 154 / Playwright chromium）；
+- 真实 dsh 页面的完整 DOM（fixture 是模型）；
+- 真实软键盘与 IME（V5 只证明监听与滚动调用被触发）；
 - 真实手指的命中半径（V6 用 `elementFromPoint` 近似）；
 - App 侧与隧道相关的一切（权限/外链/通知/多主机）—— 仍需真机。
