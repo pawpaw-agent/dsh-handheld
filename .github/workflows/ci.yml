@@ -121,6 +121,12 @@ jobs:
       # 断言「适配层用到的钩子」与「契约文件里记的」一致 —— 谁加了钩子没登记、
       # 或把插件注册机制写回来（那正是旧版被拆掉的原因），这里就红。
       # 完整检查（断言钩子确实存在于 dsh 前端产物里）需要本机装 dsh，CI 里跑 --contract。
+      # harness 验的必须是「手机上跑的那一份」。App 的注入列表在 Kotlin 里，
+      # harness 的在 ui-verify.mjs —— 两份漂移过就会变成在验一个不存在的东西。
+      # 这条不需要浏览器，所以能进 CI（harness 本身要 dsh + chromium，只能本机跑）。
+      - name: Check injection list parity (App ↔ ui-verify harness)
+        run: node scripts/check-injection-parity.mjs
+
       - name: Check mobile adaptation contract
         run: node scripts/check-mobile-hooks.mjs --contract
 

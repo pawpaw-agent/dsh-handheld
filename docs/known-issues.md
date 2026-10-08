@@ -1446,3 +1446,55 @@ assets/plugins/handheld/
   防「层坏了却把契约改小」这种自欺）。
 
 对着本机 dsh **0.2.0-rc.2**：`适配契约完好：4 个 dsh 钩子 + 9 个类名后缀全部存在 ✓`
+
+---
+
+## 十三、用虚拟环境验证交互（headless Chromium + CDP，2026-10-08）
+
+### 是什么
+
+`scripts/ui-verify.mjs`（零依赖）在**真实 dsh 页面**上、用**手机档视口 + 触屏**、
+按**与 App 完全相同的顺序**注入 `assets/plugins/handheld/` 那 6 段，然后断言**交互**：
+
+| # | 断言 |
+|---|---|
+| V1 | 注入确实发生（hooks/fixes/css 都在，且生产路径不带诊断） |
+| V2 | `[data-handheld="frame"]` + `<html class="dsh-handheld-mobile">` |
+| V3 | 样式生效（与不注入的基线 A/B 比 `_titleRow`/`_composerSeat`/`[data-composer-stats]` 的几何） |
+| V4 | `--dsh-handheld-vh` 与 `visualViewport.height` 一致 |
+| V5 | 键盘弹起时 `scrollIntoView` 被调用（页面侧装 spy） |
+| V6 | 右侧栏工具栏**真的点得到**（`elementFromPoint` 命中面板自身，而非盖在它上面的元素） |
+| V7 | 无横向溢出 |
+| V8 | **桌面档下整层不生效**（CSS 媒体查询是 `(max-width:1023px) and (pointer:coarse)`） |
+
+用法：`node scripts/ui-verify.mjs --base http://127.0.0.1:3080 --token <t>`，
+token 从 `journalctl --user -u dsh-web.service | grep -oE 'token=[A-Za-z0-9_-]+'` 取。
+
+### ⚠️ 本机跑不起来：这个环境限制 chromium 的网络
+
+**实测结论**（2026-10-08）：这个沙箱里 **chromium 的 http 加载根本不启动**。
+
+| 试过 | 结果 |
+|---|---|
+| `about:blank` / `data:text/html,...` | ✓ 正常渲染 |
+| `http://127.0.0.1:18099/`（平凡的本地 python 服务） | ✗ `Page.navigate` 超时，CDP 只报 `Network.requestWillBeSent`，之后无任何事件 |
+| `http://127.0.0.1:3080/`（真实 dsh） | ✗ 同上 |
+| `--no-zygote` / `--single-process` / `--no-proxy-server` / `NetworkServiceSandbox off` / `NetworkServiceInProcess` / `host-resolver-rules` | ✗ 全部无效 |
+| 用 CDP **Fetch 域**把请求接过来、由 Node 代取（`shouldInterceptRequest` 的手法） | ✗ **代理 0 次** —— 导航压根没开始 |
+| 4 种模拟组合（模拟/单进程 各开关） | ✗ 全部 0 次代理 |
+
+Node 与 curl 的网络是通的（本地服务 HTTP 200 ✓）—— 限制在 chromium 这一侧。
+**因此这套验证要在沙箱外跑**（用户自己的 shell 里一条命令即可，脚本零依赖）。
+
+### 仍然做了的（不依赖浏览器，已进 CI）
+
+`scripts/check-injection-parity.mjs`：比对 **App 的 Kotlin 注入列表** ↔ **harness 的
+`SEGMENTS`**（顺序 + 内容 + 文件存在 + 样式那一环两边都读）。反向验证过：故意改一处 →
+退出码 1；还原 → 0。
+
+### 这套验证**不能**替代的
+
+- 真实 Android WebView 的渲染差异（本机是 Playwright chromium，手机上 WebView 151/153）；
+- 真实软键盘/IME（V5 只证明监听与滚动调用被触发）；
+- 真实手指的命中半径（V6 用 `elementFromPoint` 近似）；
+- App 侧与隧道相关的一切（权限/外链/通知/多主机）—— 仍需真机。
