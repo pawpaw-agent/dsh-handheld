@@ -42,7 +42,7 @@ const REPO = path.resolve(path.dirname(new URL(import.meta.url).pathname), '..')
 // 扫描**全部**这些文件（不只是 hooks.js）—— 修复体里也有内联选择器，
 // 它们同样是「对宿主 DOM 的依赖」，一样要进契约。
 const HANDHELD_DIR = path.join(REPO, 'android/app/src/main/assets/plugins/handheld');
-const BUNDLE_FILES = ['bootstrap.js', 'hooks.js', 'diag.js', 'fixes.js', 'runner.js']
+const BUNDLE_FILES = ['boot.js', 'bootstrap.js', 'hooks.js', 'diag.js', 'fixes.js', 'runner.js']
   .map((f) => path.join(HANDHELD_DIR, f));
 const BUNDLE = BUNDLE_FILES.join(','); // 仅用于日志/报错里显示来源
 // 提取钩子时**先剥注释**：新层的注释里会解释「为什么不能用 data-plugin」「示例

@@ -72,7 +72,8 @@ const DESKTOP = { width: 1280, height: 800, dsf: 1, mobile: false };
 /** 注入的 6 段，**顺序与 App 完全一致**（MainActivity 的注入块）。CI 的
  *  `check-injection-parity.mjs` 比对这两份列表。 */
 const SEGMENTS = [
-  'bootstrap.js',   // ① document-start 补 viewport-fit=cover
+  'boot.js',        // ⓪ 引导队列：document-start 只定义，呈现型工作等 DOM（必须最先）
+  'bootstrap.js',   // ① 解析期补 viewport-fit=cover
   'hooks.js',       // ② 宿主 DOM 钩子唯一出处
   'diag.js',        // ③ 自证与开销（默认关）
   'fixes.js',       // ④ 修复集
@@ -307,6 +308,20 @@ async function run({ inject, viewport, label, scripts, pageUrl }) {
   try {
     await cdp.send('Page.enable');
     await cdp.send('Runtime.enable');
+    // 层的信标走 console.warn（App 的 onConsoleMessage 只收 WARNING+）；未捕获异常
+    // 必须为 0 —— 2026-10-08 那次整层静默失效就是一条被吞掉的 TypeError。
+    const consoleMsgs = [];
+    const exceptions = [];
+    cdp.on('Runtime.consoleAPICalled', (p) => {
+      consoleMsgs.push({
+        level: p.type,
+        text: (p.args || []).map((a) => a.value ?? a.description ?? '').join(' '),
+      });
+    });
+    cdp.on('Runtime.exceptionThrown', (p) => {
+      const d = p.exceptionDetails || {};
+      exceptions.push(String((d.exception && d.exception.description) || d.text || '').split('\n')[0]);
+    });
     await cdp.send('Emulation.setDeviceMetricsOverride', {
       width: viewport.width, height: viewport.height,
       deviceScaleFactor: viewport.dsf, mobile: viewport.mobile,
@@ -338,6 +353,10 @@ async function run({ inject, viewport, label, scripts, pageUrl }) {
         hasCss: typeof window.__dshHandheldCss === 'string',
         diagOn: !!(window.__dshHandheldDiag && window.__dshHandheldDiag.on),
         styleTags: [...document.querySelectorAll('style')].filter(s => s.dataset.handheldCss).length,
+        fixesLen: (window.__dshHandheldFixes || []).length,
+        statusRaw: de.getAttribute('data-handheld-status'),
+        bootWhen: window.__dshHandheldBootState ? window.__dshHandheldBootState.when : null,
+        bootErrors: window.__dshHandheldBootState ? window.__dshHandheldBootState.errors.length : null,
         frameTagged: q('[data-handheld="frame"]'),
         htmlClass: de.classList.contains('dsh-handheld-mobile'),
         vhVar: de.style.getPropertyValue('--dsh-handheld-vh') || null,
@@ -386,7 +405,7 @@ async function run({ inject, viewport, label, scripts, pageUrl }) {
     const shot = await cdp.send('Page.captureScreenshot', { format: 'png' });
     const shotPath = path.join(OUT, `${label}.png`);
     writeFileSync(shotPath, Buffer.from(shot.data, 'base64'));
-    return { observed, scroll, panel, shotPath };
+    return { observed, scroll, panel, shotPath, consoleMsgs, exceptions };
   } finally {
     try { await Promise.race([cdp.send('Browser.close'), sleep(2000)]); } catch { /* ignore */ }
     cleanup();
@@ -423,6 +442,13 @@ const main = async () => {
   console.log('[B 适配·注入]   完成');
   const desktop = await run({ inject: true, viewport: DESKTOP, label: 'c-desktop', scripts, pageUrl });
   console.log('[C 桌面档]      完成（V8：层不该生效）');
+  // 失败负对照：喂一条**必定抛异常**的修复（runner 会隔离它）。信标必须写 FAILED，
+  // 且其余修复照常应用 —— 否则"静默失效"这个问题并没有真正被解决。
+  const boom = 'window.__dshHandheldFixes.push({ id: "harness-boom", why: "负对照", needs: [],'
+    + ' body: function () { throw new Error("harness-boom"); } });';
+  const boomScripts = scripts.slice(0, -1).concat([boom, scripts[scripts.length - 1]]);
+  const failure = await run({ inject: true, viewport: MOBILE, label: 'd-failure', scripts: boomScripts, pageUrl });
+  console.log('[D 失败负对照]  完成（V11：信标必须 FAILED，其余修复仍应用）');
   console.log('');
 
   const o = adapted.observed, b = baseline.observed, d = desktop.observed;
@@ -457,9 +483,27 @@ const main = async () => {
       ? `命中 ${baseline.panel.hitTag}.${baseline.panel.hitClass}（面板内=${baseline.panel.inside}）`
       : `面板没打开：${baseline.panel?.why}`);
   add('V7', '无横向溢出', o.overflowX <= 1, `overflowX=${o.overflowX}`);
-  add('V8', '桌面档下整层不生效',
-    d.frameTagged === 0 && d.styleTags === 0 && !d.vhVar,
-    `frame=${d.frameTagged} styleTags=${d.styleTags} vh=${d.vhVar}`);
+  add('V8', '桌面档下整层不生效（信标写 skipped）',
+    d.frameTagged === 0 && d.styleTags === 0 && !d.vhVar
+      && (() => { try { return JSON.parse(d.statusRaw || '{}').skipped === 'non-mobile'; } catch { return false; } })(),
+    `frame=${d.frameTagged} styleTags=${d.styleTags} vh=${d.vhVar} status=${d.statusRaw}`);
+
+  // ── 信标（接缝 3）：把静默失效变成诊断页上的一行 ──
+  const st = (() => { try { return JSON.parse(o.statusRaw || '{}'); } catch { return {}; } })();
+  const warnLine = adapted.consoleMsgs.find((m) => m.level === 'warning' && m.text.includes('[handheld]'));
+  add('V9', '注入期间零未捕获异常（今天那次事故的直接判据）',
+    adapted.exceptions.length === 0 && (o.bootErrors === 0),
+    `未捕获异常=${adapted.exceptions.length}${adapted.exceptions.length ? '：' + adapted.exceptions[0].slice(0, 90) : ''}；boot 任务异常=${o.bootErrors}`);
+  add('V10', '信标合法（<html> 属性 + 能穿过 App 的 WARNING 门槛）',
+    st.ok === true && st.styles === 'ok' && st.fixes === `${o.fixesLen}/${o.fixesLen}` && !!warnLine,
+    `status=${o.statusRaw}；console.warn=${warnLine ? '✓ ' + warnLine.text.slice(0, 60) : '✗ 没有'}`);
+  add('V11', '失败负对照：一条修复抛错 → 信标 FAILED 且其余仍应用',
+    (() => {
+      const fs2 = (() => { try { return JSON.parse(failure.observed.statusRaw || '{}'); } catch { return {}; } })();
+      return fs2.ok === false && String(fs2.stage || '').includes('harness-boom')
+        && failure.observed.frameTagged > 0;
+    })(),
+    `status=${failure.observed.statusRaw}；frame=${failure.observed.frameTagged}（其余修复是否仍应用）`);
 
   console.log('── 断言 ──');
   let failed = 0;
@@ -472,7 +516,7 @@ const main = async () => {
   writeFileSync(path.join(OUT, 'report.json'), JSON.stringify({
     chrome: CHROME, mobile: MOBILE, desktop: DESKTOP, injectedBytes: bytes,
     hostCss: { pkgs: host.pkgs, chunks: host.chunks, bytes: host.css.length },
-    baseline, adapted, desktop, checks,
+    baseline, adapted, desktop, failure, checks,
   }, null, 2));
   console.log(`截图   ${adapted.shotPath}`);
   console.log(`       ${baseline.shotPath}`);

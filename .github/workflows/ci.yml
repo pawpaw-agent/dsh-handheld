@@ -130,6 +130,35 @@ jobs:
       - name: Check mobile adaptation contract
         run: node scripts/check-mobile-hooks.mjs --contract
 
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      # 适配层 harness（scripts/ui-verify.mjs）需要两样东西：
+      #   ① 真实宿主 CSS —— 从 dsh 安装产物里抽（固定成真机同版本；不把 dsh 的 CSS 抄进仓库）；
+      #   ② 一个 chromium —— 用 Playwright 的构建，与本地跑的是同一种。
+      # 它跑 13 条断言（注入/标记/几何/视口变量/键盘滚动/右侧栏命中/负对照/信标/失败负对照）。
+      - name: Install dsh + chromium (for the fixture harness)
+        run: |
+          npm i -g @deepseek-ai/dsh@0.2.0-rc.2 --no-audit --no-fund
+          npm i -g playwright --no-audit --no-fund
+          npx --yes playwright install --with-deps chromium
+
+      - name: Verify mobile adaptation layer (fixture harness, 13 assertions)
+        run: |
+          CHROME=$(node -e "console.log(require('$(npm root -g)/playwright').chromium.executablePath())")
+          echo "chromium: $CHROME"
+          node scripts/ui-verify.mjs --chrome "$CHROME" --out "$RUNNER_TEMP/ui-verify"
+
+      - name: Upload harness screenshots + report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ui-verify
+          path: ${{ runner.temp }}/ui-verify
+          if-no-files-found: warn
+
       - name: Run unit tests
         run: |
           cd android
