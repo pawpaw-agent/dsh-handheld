@@ -337,6 +337,32 @@ class MainActivity : Activity() {
     private fun hideTunnelBanner() { tunnelBanner?.visibility = View.GONE }
 
     /**
+     * 等隧道真的释放（`liveTunnel() == null`）再执行 [then]，上限 [timeoutMs]。
+     *
+     * 为什么要等：切主机 = 换一台电脑，必须先等旧隧道拆干净才能建新的 —— 否则可能
+     * 新旧并存，或新拨号被旧连接挡掉。此前这里是个固定 700ms 的魔法延时。
+     *
+     * 轮询读的是内存里的一个字段（`liveTunnel()`），10ms 一次，开销可忽略；
+     * 超时**也**执行 [then]（不能把用户卡住），但会把「等了多久/是否超时」写进日志。
+     */
+    private fun waitTunnelReleasedThen(timeoutMs: Long, then: () -> Unit) {
+        val start = android.os.SystemClock.elapsedRealtime()
+        fun poll() {
+            val waited = android.os.SystemClock.elapsedRealtime() - start
+            if ((application as DshApp).liveTunnel() == null) {
+                DiagLog.i(TAG, "等待隧道释放：用了 ${waited}ms（已释放）")
+                then(); return
+            }
+            if (waited >= timeoutMs) {
+                DiagLog.w(TAG, "等待隧道释放：超时 ${waited}ms，仍继续（隧道可能仍在）")
+                then(); return
+            }
+            ui.postDelayed({ poll() }, 10)
+        }
+        poll()
+    }
+
+    /**
      * 切相位。**唯一**改动「表单展开/收起、进度行显示与否」的地方。
      *
      * @param resetGuide 是否把 ①②③ 进度行复位。只有「主动回到连接屏」（[showConnectScreen]）
@@ -1321,10 +1347,12 @@ class MainActivity : Activity() {
                 if (wasTunneled || wasPageAlive) {
                     DiagLog.i(TAG, "多主机：拆掉旧隧道并自动连到 ${picked.label}")
                     disconnectCurrent()
-                    ui.postDelayed({
+                    // B2：等**事实**（隧道真的释放）而不是固定 700ms —— 慢机器会撞上
+                    // （新旧隧道并存/新拨号被旧连接挡掉），快机器又是白等。
+                    waitTunnelReleasedThen(2000) {
                         if (picked.isComplete) connectAction?.invoke()
                         else status("这台主机的地址/账号不全，补齐后再连")
-                    }, 700)
+                    }
                 }
                 syncConnectUi()
             }
