@@ -87,11 +87,25 @@ class TunnelService : Service() {
             Intent(this, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP),
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
+        // 「打开连接屏」：不注入页面、也不靠 BACK 碰运气 —— 从网页回连接屏此前只有
+        // 「BACK 且网页无历史」一条路，日常用着页面时 BACK 会先走网页历史/抽屉。
+        val openConnect = PendingIntent.getActivity(
+            this, 1,
+            Intent(this, MainActivity::class.java)
+                .addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP)
+                .putExtra(MainActivity.EXTRA_OPEN_CONNECT, true),
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
         return Notification.Builder(this, CHANNEL_ID)
             .setContentTitle(text ?: "已连接到电脑")
             .setContentText("dsh 隧道保持中")
             .setSmallIcon(R.drawable.ic_launcher_foreground)
             .setContentIntent(open)
+            .addAction(
+                Notification.Action.Builder(
+                    null, "打开连接屏", openConnect
+                ).build()
+            )
             .setOngoing(true)
             .build()
     }

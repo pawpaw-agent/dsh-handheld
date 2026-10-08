@@ -457,6 +457,14 @@ class MainActivity : Activity() {
                 "t.click();return true" +
             "})()"
 
+        /**
+         * 通知上的「打开连接屏」动作带来的 extra（见 [TunnelService.buildNotification]）。
+         *
+         * 加它的理由：从网页回连接屏此前只有「BACK 且网页无历史」一条路 —— 日常用着页面时
+         * BACK 会先走网页历史/抽屉，回不到连接屏。用户明确要过「能直接到」。
+         */
+        const val EXTRA_OPEN_CONNECT = "open_connect"
+
         const val PREF_SERVER_TOKEN = "server_token" // dsh 0.1.2+ 一次性启动 token（服务重启后自动更新）
 
     }
@@ -770,6 +778,10 @@ class MainActivity : Activity() {
         } else {
             DiagLog.i(TAG, "onCreate: 分支3 停留连接屏（无保存 url 且 WebView 非正式页面：$currentUrl）")
         }
+
+        // 通知上的「打开连接屏」动作：冷启动也走同一个处理函数。放在三分支**之后** ——
+        // 上面的分支可能已经选了 WEB，而用户点的就是「打开连接屏」，以它为准。
+        handleOpenConnectIntent(intent)
     }
 
     /** 启动时从保存的 SSH 配置恢复隧道，成功后把 WebView 指向新的本地端口 URL。 */
@@ -2517,6 +2529,24 @@ class MainActivity : Activity() {
             DiagLog.i(TAG, "onDestroy: 已把 WebView 的三个 client 换成不持 Activity 的兜底实现")
         }
         super.onDestroy()
+    }
+
+    /**
+     * 通知动作「打开连接屏」的落点。
+     *
+     * MainActivity 是 `singleTop`：从通知进来时不会再建一个实例，而是走这里。
+     * 冷启动那一路在 [onCreate] 里也调了同一个处理函数。
+     */
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        handleOpenConnectIntent(intent)
+    }
+
+    private fun handleOpenConnectIntent(intent: Intent?) {
+        if (intent?.getBooleanExtra(EXTRA_OPEN_CONNECT, false) != true) return
+        DiagLog.i(TAG, "intent: 打开连接屏（来自隧道通知）")
+        showConnectScreen()
     }
 
     override fun onPause() {
