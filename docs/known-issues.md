@@ -1512,6 +1512,40 @@ URL_REQUEST_DELEGATE_RESPONSE_STARTED / URL_REQUEST_JOB_BYTES_READ   ← 响应�
 **副作用（已安装的系统包，可回滚）**：`chromium 1:154.0.8037.92-1~deb13u1+rpt1`
 与 `xvfb`（诊断用）。不需要的话 `sudo apt-get remove chromium xvfb` 即可。
 
+### 🎯 为什么「之前能跑、现在不能」—— 系统在 2026-09-27 升级过
+
+用户问「之前不是可以调试吗」—— **对** ✓。旧 harness 在 **2026-09-24/25** 跑出过实测数据
+（见归档 `mobile-ui-verification.md`），用的就是现在这份 `chromium-1243`
+（下载于 **2026-09-11**，之后没变）与同一套启动参数。
+
+`dpkg` 日志显示 **2026-09-27 20:38** 发生了一次大升级：
+
+| 升级项 | 变化 |
+|---|---|
+| **内核** | `6.18.39` → **`6.18.50`**（镜像日期 09-27，就是现在跑的这个） |
+| **`raspi-firmware`** | → `1:1.20260915-1`（引导固件，决定内存布局） |
+| `nodejs` | → `22.23.3-1nodesource1` |
+| 其它 | gstreamer / wpasupplicant / 一批 Pi 桌面包 |
+
+**内核配置差异已比对**：6.18.39 → 6.18.50 只差 53 行，**全是外设驱动**
+（CAN / Type-C / TLS / 触摸屏 / 音频），**没有**任何内存、IPC、安全相关项；
+两版页大小**都是 16K**（`CONFIG_ARM64_16K_PAGES=y`）。
+
+**所以：变的是系统环境，不是 harness** —— 09-24 能跑、10-08 不能，中间只有这次升级。
+
+### 卡点的精确位置
+
+发起 http 导航后**渲染进程根本没被创建**（`renderer=0`，12 秒内采样 6 次全是 0），
+而网络层是成功的（netlog 证明 TCP 连上、收发过数据），浏览器进程与网络服务进程
+**双双空闲** —— 卡点在**「导航请求 → 创建渲染进程」之间**，比"渲染进程卡死"更靠前一步。
+
+### 回退旧内核（未执行，需重启）
+
+- 旧镜像还在：`/boot/vmlinuz-6.18.39+rpt-rpi-2712` ✓（模块 `/lib/modules/6.18.39+rpt-rpi-2712` ✓）
+- 步骤（**可逆**）：备份现在的 `kernel_2712.img` → 把 6.18.39 的镜像复制成
+  `/boot/firmware/kernel_61839.img` → `config.txt` 加一行 `kernel=kernel_61839.img` → 重启
+- 若回退后能跑 ✓ → 确认是内核/固件回归；若仍不能 ✗ → 查 `raspi-firmware`
+
 ### 仍然做了的（不依赖浏览器，已进 CI）
 
 `scripts/check-injection-parity.mjs`：比对 **App 的 Kotlin 注入列表** ↔ **harness 的
