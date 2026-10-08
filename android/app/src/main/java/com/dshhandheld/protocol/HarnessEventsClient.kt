@@ -52,6 +52,14 @@ class HarnessEventsClient(
     private val baseUrl: String,
     /** 收到 `api-session/status` 时回调：`(sessionId, running)`。在客户端线程上调用。 */
     private val onStatus: (String, Boolean) -> Unit,
+    /**
+     * 收到 `api-session/added` 且能从中取到**会话名**时回调：`(sessionId, name)`。
+     *
+     * C1：会话名原先由注入层在 turn-start 时带给 App，注入层移除后通知只能写通用文案。
+     * 宿主其实会 emit `api-session/added`（`summary: SessionSummary`）—— 这里订阅它，
+     * 名字取不到就不回调（调用方退回「id 后 6 位」），绝不编造。
+     */
+    private val onSessionNamed: (String, String) -> Unit = { _, _ -> },
 ) {
     private val stopped = AtomicBoolean(false)
     private var thread: Thread? = null
@@ -199,15 +207,35 @@ class HarnessEventsClient(
                 clientId = value.optString("clientId")
                 DiagLog.i(TAG, "事件流就绪：clientId=$clientId")
             }
-            "emit" -> {
-                if (value.optString("event") != STATUS_EVENT) return
-                val args = value.optJSONArray("args") ?: return
-                if (args.length() < 2) return
-                val sessionId = args.optString(0)
-                val running = args.optBoolean(1, false)
-                DiagLog.i(TAG, "Host 报告回合状态：session=$sessionId running=$running")
-                runCatching { onStatus(sessionId, running) }
-                    .onFailure { DiagLog.w(TAG, "onStatus 回调抛异常：${it.message}") }
+            "emit" -> when (value.optString("event")) {
+                STATUS_EVENT -> {
+                    val args = value.optJSONArray("args") ?: return
+                    if (args.length() < 2) return
+                    val sessionId = args.optString(0)
+                    val running = args.optBoolean(1, false)
+                    DiagLog.i(TAG, "Host 报告回合状态：session=$sessionId running=$running")
+                    runCatching { onStatus(sessionId, running) }
+                        .onFailure { DiagLog.w(TAG, "onStatus 回调抛异常：${it.message}") }
+                }
+                // C1：会话摘要。**原样打进日志**（截断）—— 接口签名只列了
+                // sessionId/running/updatedAt/blank/cwd/...，名字到底在不在、在哪个字段，
+                // 上机看一眼日志就知道；取到名字才回调。
+                SESSION_ADDED_EVENT -> {
+                    val summary = value.optJSONArray("args")?.optJSONObject(0)
+                    if (summary == null) {
+                        DiagLog.w(TAG, "api-session/added 没有 summary 对象")
+                        return
+                    }
+                    DiagLog.i(TAG, "会话摘要：${summary.toString().take(500)}")
+                    val id = summary.optString("sessionId")
+                    val name = pickSessionName(summary)
+                    if (id.isNotBlank() && name.isNotBlank()) {
+                        DiagLog.i(TAG, "会话名：$id → $name")
+                        runCatching { onSessionNamed(id, name) }
+                            .onFailure { DiagLog.w(TAG, "onSessionNamed 回调抛异常：${it.message}") }
+                    }
+                }
+                else -> Unit
             }
             // waterfall 事件（approval/request、user-questions/request）**必须回话**：
             // Host 会等这个客户端的 result 才继续（`forwardWaterfall` 等 dispatch 结算）。
@@ -329,6 +357,34 @@ class HarnessEventsClient(
         private const val muxPath = "/api/remote.mux"
         private const val eventsEndpoint = "\$events"
         private const val STATUS_EVENT = "api-session/status"
+        private const val SESSION_ADDED_EVENT = "api-session/added"
+
+        /**
+         * 从 `SessionSummary` 里挑一个能给人看的名字。
+         *
+         * 按「常见字段名」逐个试（含 `projections` 里的一层嵌套），全空就返回空串 ——
+         * 调用方据此退回「id 后 6 位」，**不编造**一个假名字。
+         */
+        private fun pickSessionName(o: JSONObject): String {
+            for (k in arrayOf("name", "title", "label", "displayName")) {
+                val v = o.optString(k)
+                if (v.isNotBlank()) return v
+            }
+            val proj = o.optJSONObject("projections") ?: return ""
+            for (k in arrayOf("name", "title", "label")) {
+                val v = proj.optString(k)
+                if (v.isNotBlank()) return v
+            }
+            val keys = proj.keys()
+            while (keys.hasNext()) {
+                val inner = proj.optJSONObject(keys.next()) ?: continue
+                for (kk in arrayOf("text", "value", "title", "name")) {
+                    val v = inner.optString(kk)
+                    if (v.isNotBlank()) return v
+                }
+            }
+            return ""
+        }
         private const val OP_TEXT = 0x1
         private const val OP_CLOSE = 0x8
         private const val OP_PING = 0x9

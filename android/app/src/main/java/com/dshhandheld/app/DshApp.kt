@@ -236,9 +236,13 @@ class DshApp : Application() {
         if (eventsClient != null && eventsBase == base) return
         stopEventsClient()
         eventsBase = base
-        eventsClient = HarnessEventsClient(base) { sessionId, running ->
-            onHostTurnStatus(sessionId, running)
-        }.also { it.start() }
+        // 具名参数（不能用尾随 lambda）：新增的 onSessionNamed 是最后一个参数，
+        // 尾随写法会把它当成 onStatus，编译能过但语义完全错位。
+        eventsClient = HarnessEventsClient(
+            baseUrl = base,
+            onStatus = { sessionId, running -> onHostTurnStatus(sessionId, running) },
+            onSessionNamed = { id, name -> sessionNames[id] = name },
+        ).also { it.start() }
         DiagLog.i(TAG, "事件流：订阅 $base（权威回合状态）")
     }
 
@@ -251,6 +255,12 @@ class DshApp : Application() {
     /**
      * Host 报告的权威回合状态 —— 注入层移除后它自己就是完整的一路。
      */
+    /**
+     * C1：会话 id → 名字。由事件流的 `api-session/added` 填（见 [HarnessEventsClient]）。
+     * 拿不到就不放进来 —— 通知侧退回「id 后 6 位」，不编造名字。
+     */
+    private val sessionNames = java.util.concurrent.ConcurrentHashMap<String, String>()
+
     private fun onHostTurnStatus(sessionId: String, running: Boolean) {
         if (running) {
             if (runningSession == sessionId) return
@@ -266,9 +276,13 @@ class DshApp : Application() {
         DiagLog.i(TAG, "事件流报告回合结束（session=$sessionId，前台=$foreground）")
         if (!turnNotifyEnabled()) return
         if (foreground) { DiagLog.i(TAG, "App 在前台，不发通知"); return }
-        // 标题拿不到了：它原先由页面在 turn-start 时带过来（注入层已移除）。
-        // 通知退回通用文案 —— 为一条标题保留「页面带标题」的通道不值得。
-        Notifier.turnDone(this, null)
+        // C1：会话名现在由事件流的 `api-session/added` 提供（注入层移除后 App 自己订）。
+        // 取不到就退回「会话 …后6位」—— 多会话时至少能区分是哪一条跑完了，
+        // 比恒定的「回到 App 看结果」有用；也绝不显示空名。
+        val label = sessionNames[sessionId]?.takeIf { it.isNotBlank() }
+            ?: "会话 …${sessionId.takeLast(6)}"
+        DiagLog.i(TAG, "回合完成通知：会话=$sessionId 标签=$label（有名字=${sessionNames.containsKey(sessionId)}）")
+        Notifier.turnDone(this, label)
     }
 
     private fun notifyTunnelAlive(alive: Boolean) {
