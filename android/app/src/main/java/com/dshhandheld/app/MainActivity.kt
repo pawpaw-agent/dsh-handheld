@@ -323,36 +323,46 @@ class MainActivity : Activity() {
      * 于是出现了「连接中却显示回到网页」（那一下会切到上一轮的页面，而隧道正在重建）。
      * 现在所有分支都只读事实（相位、失败标志、隧道、页面），不记忆上一次画了什么。
      */
+    /**
+     * 连接屏交互决策的输入事实 —— **唯一取法**。
+     *
+     * `syncConnectUi`（画）、`onBackPressed`（BACK 语义）、主机下拉（能否切换）三处共用它，
+     * 判据写在 [ConnectDecisions] 里并有单测。此前这三处各自内联，于是「切主机」漏了
+     * 连接中守卫（见 ConnectDecisions.hostSwitchAllowed 的注释）。
+     */
+    private fun connectFacts() = ConnectFacts.of(
+        tunneled = (application as DshApp).liveTunnel() != null,
+        pageAlive = webView?.url?.startsWith("http") == true,
+        connecting = connectPhase == ConnectPhase.CONNECTING && !connectFailed,
+        failed = connectFailed,
+        formOpen = connectPhase == ConnectPhase.EDIT,
+    )
+
     private fun syncConnectUi() {
-        val tunneled = (application as DshApp).liveTunnel() != null
-        val pageAlive = webView?.url?.startsWith("http") == true
-        val connecting = connectPhase == ConnectPhase.CONNECTING && !connectFailed
+        val f = connectFacts()
 
         formBody?.visibility = if (connectPhase == ConnectPhase.EDIT) View.VISIBLE else View.GONE
         settingsSummary?.visibility = if (connectPhase == ConnectPhase.EDIT) View.GONE else View.VISIBLE
         settingsAction?.text = if (connectPhase == ConnectPhase.EDIT) "收起" else "修改 ›"
         progressBlock?.visibility =
-            if (connectPhase == ConnectPhase.CONNECTING || connectFailed) View.VISIBLE else View.GONE
+            if (ConnectDecisions.showProgress(f)) View.VISIBLE else View.GONE
 
-        val (title, dotColor) = when {
-            connecting -> "连接中…" to UiKit.WARN
-            connectFailed -> "连不上你的电脑" to COL_ERROR
-            tunneled -> "已连上电脑" to UiKit.OK
-            else -> "未连接" to COL_DIM
+        // A1：标题按**隧道事实优先**（ConnectDecisions.hero 的注释里记了那次矛盾屏）。
+        val (title, dotColor) = when (ConnectDecisions.hero(f)) {
+            HeroState.CONNECTING -> "连接中…" to UiKit.WARN
+            HeroState.TUNNELED -> "已连上电脑" to UiKit.OK
+            HeroState.FAILED -> "连不上你的电脑" to COL_ERROR
+            HeroState.IDLE -> "未连接" to COL_DIM
         }
         heroTitle?.text = title
         heroDot?.background = GradientDrawable().apply {
             shape = GradientDrawable.OVAL
             setColor(dotColor)
         }
-        heroSub?.text = heroSubtitle(tunneled)
+        heroSub?.text = heroSubtitle(f.tunneled)
 
-        connectMainBtn?.text = when {
-            connecting -> "取消连接"
-            tunneled && pageAlive -> "打开 dsh 网页"
-            else -> "连上并打开 dsh 网页"
-        }
-        disconnectLink?.visibility = if (tunneled) View.VISIBLE else View.GONE
+        connectMainBtn?.text = ConnectDecisions.primaryLabel(f)
+        disconnectLink?.visibility = if (f.tunneled) View.VISIBLE else View.GONE
     }
 
     /**
@@ -1230,6 +1240,16 @@ class MainActivity : Activity() {
                     startNewHost()
                     DiagLog.i(TAG, "多主机：进入新建态（表单已清空）")
                     syncConnectUi()
+                    return
+                }
+                // B1：连接中禁止切换 —— 与「连接设置折叠」「主按钮」**同一判据**。
+                // 不拦的话会 disconnectCurrent() 作废在飞的那次拨号再自动重连，
+                // 用户看到状态条与引导行来回跳。
+                if (!ConnectDecisions.hostSwitchAllowed(connectFacts())) {
+                    val now = SshHosts.activeId(prefs)
+                    DiagLog.i(TAG, "多主机：连接进行中，忽略切换到 ${hostLabels.getOrNull(pos)}")
+                    status("正在连接，请先取消或等待")
+                    reloadHosts(now)          // 下拉视觉回退到当前主机
                     return
                 }
                 val hosts = SshHosts.list(prefs)
@@ -2587,9 +2607,17 @@ class MainActivity : Activity() {
                 DiagLog.i(TAG, "BACK: 关闭诊断页")
                 diagView?.visibility = View.GONE
             }
-            screen == Screen.CONNECT -> {
-                DiagLog.i(TAG, "BACK: 连接屏 → 退到后台（隧道保持）")
-                moveTaskToBack(true)
+            screen == Screen.CONNECT -> when (ConnectDecisions.backOnConnectScreen(connectFacts())) {
+                // A2：表单展开时先收表单（Android 惯例：BACK 先退一层 UI），再按才退后台。
+                ConnectBack.COLLAPSE_FORM -> {
+                    DiagLog.i(TAG, "BACK: 连接屏 → 收起连接设置")
+                    showPhase(ConnectPhase.IDLE)
+                    updateSummary()
+                }
+                ConnectBack.TO_BACKGROUND -> {
+                    DiagLog.i(TAG, "BACK: 连接屏 → 退到后台（隧道保持）")
+                    moveTaskToBack(true)
+                }
             }
             else -> handleWebBack()
         }
