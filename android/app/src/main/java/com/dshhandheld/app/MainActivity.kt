@@ -2611,8 +2611,10 @@ class MainActivity : Activity() {
                 // A2：表单展开时先收表单（Android 惯例：BACK 先退一层 UI），再按才退后台。
                 ConnectBack.COLLAPSE_FORM -> {
                     DiagLog.i(TAG, "BACK: 连接屏 → 收起连接设置")
-                    showPhase(ConnectPhase.IDLE)
-                    updateSummary()
+                    // 复用「收起」那一下的完整路径（含它自己的连接中守卫与摘要刷新）——
+                    // `updateSummary` 是构建函数里的局部函数，这里够不到；
+                    // 也避免把「收起」这件事写成两份。
+                    settingsAction?.performClick()
                 }
                 ConnectBack.TO_BACKGROUND -> {
                     DiagLog.i(TAG, "BACK: 连接屏 → 退到后台（隧道保持）")
