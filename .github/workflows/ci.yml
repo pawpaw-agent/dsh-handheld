@@ -117,6 +117,13 @@ jobs:
         with:
           cache-provider: basic
 
+      # 适配层依赖一组**没有版本契约**的宿主 DOM 钩子（dsh 独立演进）。这个金丝雀
+      # 断言「适配层用到的钩子」与「契约文件里记的」一致 —— 谁加了钩子没登记、
+      # 或把插件注册机制写回来（那正是旧版被拆掉的原因），这里就红。
+      # 完整检查（断言钩子确实存在于 dsh 前端产物里）需要本机装 dsh，CI 里跑 --contract。
+      - name: Check mobile adaptation contract
+        run: node scripts/check-mobile-hooks.mjs --contract
+
       - name: Run unit tests
         run: |
           cd android
