@@ -1730,3 +1730,38 @@ fixture 脚手架自己给的尺寸不是。所以这张表主要用于 ① 前�
 为省 29px 竖向空间，`[class*="_tabs"]`（对话 / 轨迹）被整条隐藏 —— 代价是
 **「轨迹」在本 App 里没有入口**（详细背景见本文件第十二节与归档的 1.0.73 段）。
 三个选项：保持隐藏 / 恢复页签（+29px）/ 折中（页签压成一行，或把「轨迹」放进头部弹层）。
+
+---
+
+## 十六、设备 1 真机验证（2026-10-08，0.1.14 → 0.2.0）
+
+设备：`100.112.49.59:38359`（Tailscale）＝ **SM-S9280** / Android 16 / API 36 / 1440×3120 @600。
+装的是 **CI 产物**（run `37756032036`，headSha `575fefd` ＝ 当时本地 HEAD），
+`adb install -r` 直接覆盖 ✓（debug 与 release 都签 debug 密钥，**配置未丢** ✓），
+版本 0.1.14(41) → **0.2.0(42)** ✓。
+
+### 通过项（都有硬证据）
+
+| 项 | 证据 |
+|---|---|
+| **层自证信标**（本次重设计的核心） | logcat `DshHandheld`：`[handheld] ok styles=ok(14.4KB) fixes=4/4 mobile=yes dom=injected cover=early:ok cost=865.1ms` —— 证明**信标穿过了 App 的 WARNING 门槛**、样式挂载、四条修复全应用 |
+| **viewport 补丁抢到时机** | 同一行的 `cover=early:ok` —— 这是此前标注"需真机确认"的那一点 |
+| **统计行搬到最顶部** | 无障碍树里 `64 轮 1894 步 · 140 tok/s` 在 **[30,0][562,60]**（屏幕最顶），宿主默认在输入框上方 |
+| **键盘弹出时标题钉住** | 键盘弹出后（`mInputShown=true`）无障碍树里标题仍在 **[165,75][667,187]** |
+| **返回阶梯第一级** | BACK 后 `mInputShown=false`，焦点仍在 App（只收键盘，不离开页面） |
+| **右侧栏工具栏点得到**（层最大的那条修复） | 点「收起右侧边栏」（`[1308,105][1421,213]`）→ 面板真的收起（0.22s 动画后树里该项消失） |
+| 冷启动链路 | `autoConnectSsh: 冷启动恢复 xsj@192.168.0.135:22` → `autoFetchToken: SUCCESS len=43` → `screen: CONNECT → WEB` ✓ |
+
+### 本次新增的两条**真机事实**（与桌面 chromium 不同）
+
+1. **`dom=injected`**：Android WebView 的 `addDocumentStartJavaScript` 执行时，
+   `document.documentElement` **已经存在**（桌面 Chromium 的 `addScriptToEvaluateOnNewDocument`
+   则是 `dom=early`）→ 也就是说那个 `appendChild of null` 的原始 bug **在真机上未必会触发**；
+   但 boot 队列与兜底仍然是对的（CI 上是 `ready-state`，三种时机都覆盖了）。
+2. **信标一次加载会发 2–3 行**（`2/4 → 3/4 → 4/4`，因为签名随修复落地而变）。
+   诊断页会看到三条而不是一条 —— **可接受但偏啰嗦**，后续可只发最终态。
+
+### 尚未验的（下次上机）
+
+命中区手感（会话行 ⋯ / 目录开关 / 头部按钮）、抽屉开合与遮罩、切换主机的重连、
+外链外跳、附件选择、语音输入；以及 native-feel 基线取证（白闪 / 边界辉光 / 长按选择菜单）。
