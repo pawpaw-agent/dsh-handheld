@@ -78,6 +78,14 @@ android {
         versionName = "0.1.14"
     }
 
+    testOptions {
+        unitTests {
+            // 只测纯逻辑（SshConfig / SshHosts / TunnelOrigin）。碰到 android.* 桩就抛异常 ——
+            // 这是**有意的**：一旦哪个测试需要框架行为，说明逻辑该往外拆，而不是开这个开关糊过去。
+            isReturnDefaultValues = false
+        }
+    }
+
     buildTypes {
         debug {
             signingConfig = signingConfigs.getByName("debug")
@@ -145,6 +153,10 @@ dependencies {
     // 因此当前上限是 core-ktx 1.18.0 + webkit 1.17.0。再往上走 core-ktx 1.19.0 需要
     // compileSdk 37（连带 build-tools 37 与 `platforms;android-37.0`）—— 单列一步。
     implementation("androidx.core:core-ktx:1.18.0")
+    // 单测（JVM，不进 APK）。org.json 是**必须**的：它在 Android 上是框架提供的类，
+    // 单测里的 android.jar 只是抛异常的桩，不引真实实现则 JSON 往返测试全红。
+    testImplementation("junit:junit:4.13.2")
+    testImplementation("org.json:json:20240303")
     // （2026-09-25：androidx.webkit 随注入层移除 —— document-start 脚本不再需要）
     // 2026-09-25：原生终端（TUI 模式）已移除 —— dsh 的 web 界面自带终端面板
     // （右栏 → 新建终端），WebView 里的 xterm + WebSocket 足够用。

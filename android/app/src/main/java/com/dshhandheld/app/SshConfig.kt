@@ -166,19 +166,54 @@ object SshHosts {
 
     fun newId(): String = java.util.UUID.randomUUID().toString().replace("-", "").take(8)
 
+    // ── 纯逻辑：不碰 SharedPreferences，JVM 单测直接跑（见 app/src/test/.../SshHostsTest.kt）
+    // 拆出来的理由：迁移/合并/删除这三条规则是「配置会不会丢」的关键，但它们此前和
+    // SharedPreferences I/O 缠在一起，单测里跑不了（android.* 在 JVM 单测里是抛异常的桩）。
+
+    /** JSON 数组 → 列表。空/非法 → 空列表；**逐条容错**（坏的那条跳过，其余照收）。 */
+    fun parseList(raw: String?): List<SshConfig> {
+        if (raw.isNullOrBlank()) return emptyList()
+        val arr = runCatching { org.json.JSONArray(raw) }.getOrNull() ?: return emptyList()
+        val out = ArrayList<SshConfig>(arr.length())
+        for (i in 0 until arr.length()) {
+            runCatching { SshConfig.fromJson(arr.getJSONObject(i)) }.getOrNull()?.let { out.add(it) }
+        }
+        return out
+    }
+
+    /** 列表 → JSON 数组字符串。 */
+    fun encodeList(hosts: List<SshConfig>): String {
+        val arr = org.json.JSONArray()
+        hosts.forEach { arr.put(it.toJson()) }
+        return arr.toString()
+    }
+
+    /**
+     * 新增或就地更新（按 id）。
+     *
+     * `config.id` 为空 = 新增，用 `newId` 生成；否则按 id 覆盖那一条。
+     * 早先的交互只有「存为新主机」（**总是**新增）—— 改一下当前主机的密码就会多出
+     * 一条副本。现在「保存」在非新建态下走的就是这里的覆盖分支。
+     */
+    fun merge(hosts: List<SshConfig>, config: SshConfig, newId: String): List<SshConfig> {
+        val id = config.id.ifBlank { newId }
+        val next = config.copy(id = id)
+        val out = hosts.toMutableList()
+        val at = out.indexOfFirst { it.id == id }
+        if (at >= 0) out[at] = next else out.add(next)
+        return out
+    }
+
+    /** 删掉一条之后，当前项该是谁：删的不是当前项就不动；是当前项则接上第一条；没有了就置空。 */
+    fun activeAfterRemove(hosts: List<SshConfig>, removedId: String, activeId: String): String =
+        if (activeId == removedId) (hosts.firstOrNull()?.id ?: "") else activeId
+
+    // ── 带 I/O 的薄封装 ──
+
     /** 全部主机。空列表 = 还没配过任何主机。 */
     fun list(prefs: SharedPreferences): List<SshConfig> {
-        val raw = SecurePrefs.getString(prefs, LIST_KEY)
-        if (!raw.isNullOrBlank()) {
-            val arr = runCatching { org.json.JSONArray(raw) }.getOrNull()
-            if (arr != null) {
-                val out = ArrayList<SshConfig>(arr.length())
-                for (i in 0 until arr.length()) {
-                    runCatching { SshConfig.fromJson(arr.getJSONObject(i)) }.getOrNull()?.let { out.add(it) }
-                }
-                if (out.isNotEmpty()) return out
-            }
-        }
+        val stored = parseList(SecurePrefs.getString(prefs, LIST_KEY))
+        if (stored.isNotEmpty()) return stored
         // 迁移：老版本只有一条 ssh_json
         val legacy = SshConfig.load(prefs) ?: return emptyList()
         val migrated = legacy.copy(id = legacy.id.ifBlank { newId() })
@@ -192,28 +227,22 @@ object SshHosts {
 
     /** 写列表，并把当前那条同步进 `ssh_json`（下游只认它）。 */
     fun save(prefs: SharedPreferences, hosts: List<SshConfig>, active: String) {
-        val arr = org.json.JSONArray()
-        hosts.forEach { arr.put(it.toJson()) }
-        SecurePrefs.putString(prefs, LIST_KEY, arr.toString())
+        SecurePrefs.putString(prefs, LIST_KEY, encodeList(hosts))
         SecurePrefs.putString(prefs, ACTIVE_KEY, active)
         hosts.firstOrNull { it.id == active }?.let { SshConfig.save(prefs, it) }
     }
 
     /** 新增或更新（按 id），并设为当前。返回落库后的那条（带 id）。 */
     fun upsert(prefs: SharedPreferences, config: SshConfig): SshConfig {
-        val id = config.id.ifBlank { newId() }
-        val next = config.copy(id = id)
-        val hosts = list(prefs).toMutableList()
-        val at = hosts.indexOfFirst { it.id == id }
-        if (at >= 0) hosts[at] = next else hosts.add(next)
-        save(prefs, hosts, id)
+        val next = config.copy(id = config.id.ifBlank { newId() })
+        save(prefs, merge(list(prefs), next, next.id), next.id)
         return next
     }
 
     /** 删除一条；删的若是当前那条，就把列表里第一条接上（没有则清空当前）。 */
     fun remove(prefs: SharedPreferences, id: String): List<SshConfig> {
         val hosts = list(prefs).filterNot { it.id == id }
-        val active = if (activeId(prefs) == id) (hosts.firstOrNull()?.id ?: "") else activeId(prefs)
+        val active = activeAfterRemove(hosts, id, activeId(prefs))
         save(prefs, hosts, active)
         DiagLog.i(TAG, "已删除主机 $id，剩 ${hosts.size} 条，当前=${active.ifBlank { "无" }}")
         return hosts

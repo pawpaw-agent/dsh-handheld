@@ -405,25 +405,12 @@ class MainActivity : Activity() {
         const val REQ_MIC = 2004
 
         /** 隧道的两个回环 origin（与 [SshTunnel.PORT_CANDIDATES] 同源，别各写一份）。 */
-        fun tunnelOrigins(): Set<String> =
-            SshTunnel.PORT_CANDIDATES.map { "http://127.0.0.1:$it" }.toSet()
+        fun tunnelOrigins(): Set<String> = TunnelOrigin.origins()
 
-        /**
-         * 这个 origin 是不是我们自己的隧道页面 —— 页面权限只放行它（见 onPermissionRequest）。
-         *
-         * ⚠️ 别拿字符串直接比集合：`PermissionRequest.origin` 是**带尾斜杠**的
-         * （`http://127.0.0.1:3080/`），而 [tunnelOrigins] 里没有 —— 真机第一版就是这么
-         * 被自己的日志抓出来的（「拒绝（origin=http://127.0.0.1:3080/，resources=…AUDIO_CAPTURE）」）。
-         * 解析成 scheme/host/port 来比，尾斜杠与大小写都不再是坑。
-         */
         /** 这个 URL 是不是我们自己的隧道页面（整条 URL，不是 origin）。 */
-        fun isTunnelUrl(url: String): Boolean = isTunnelOrigin(url)
+        fun isTunnelUrl(url: String): Boolean = TunnelOrigin.isTunnel(url)
 
-        fun isTunnelOrigin(origin: String): Boolean {
-            val uri = runCatching { android.net.Uri.parse(origin) }.getOrNull() ?: return false
-            if (uri.scheme != "http" || uri.host != "127.0.0.1") return false
-            return uri.port in SshTunnel.PORT_CANDIDATES
-        }
+        fun isTunnelOrigin(origin: String): Boolean = TunnelOrigin.isTunnel(origin)
 
         // ── 网页模态与系统 BACK（见 dismissWebModalThenFallback）────────────
         /** 页面里有没有活着的模态对话框（设置页就是其中之一，没有 URL 语义可退）。 */
