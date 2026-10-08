@@ -251,6 +251,7 @@
     button[class*="_remove"],
     button[class*="_tabClose"],
     button[class*="_disclosure"],
+    button[class*="_toggle"],
     [class*="_iconButton"],
     [class*="_iconBtn"] {
       position: relative;
@@ -261,10 +262,16 @@
     button[class*="_iconBtn"]::after,
     button[class*="_remove"]::after,
     button[class*="_tabClose"]::after,
-    button[class*="_disclosure"]::after {
+    button[class*="_disclosure"]::after,
+    button[class*="_toggle"]::after {
       content: "";
       position: absolute;
-      inset: -8px;
+      /* 2026-10-08 用 scripts/ui-verify.mjs --audit 量出来的：原先 -8px 在 20px 的
+         图标按钮上只到 **36×36**、26px 的头部按钮到 42×42 —— 都还不到 44。
+         改成 -12px 后：20 → 44、26 → 50、27 → 51（命中区只扩不缩，视觉尺寸不动）。
+         判据是审计里的**有效命中区**（元素盒子 ∪ ::after，再 ∩ 视口），
+         并且同一次审计会报「几何重叠」当作负对照 —— 扩过头会立刻显形。 */
+      inset: -12px;
     }
     /* 会话头页签是**左右相邻**的，水平方向不能吃邻居的空间 —— 只往上下扩。 */
     [class*="_tab"]::after {
