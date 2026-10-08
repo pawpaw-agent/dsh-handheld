@@ -1805,3 +1805,21 @@ fixture 脚手架自己给的尺寸不是。所以这张表主要用于 ① 前�
 是**用 release keystore 签的**（`hasReleaseSigning=true`），与 debug 签名**不匹配** ⇒
 `adb install -r` 报 `INSTALL_FAILED_UPDATE_INCOMPATIBLE`，只能卸载（**会丢 SSH 配置**）。
 所以真机取证目前靠 **截图 + 无障碍树 + logcat**（够用：上面三条都是这么量的）。
+
+### 本机不能构建 Android 应用（2026-10-08 实测，别再试）
+
+这台机器是 **aarch64**（树莓派 5）。JDK 那半边没问题（Debian 的 `openjdk-21` 是 arm64 原生），
+但**构建工具里有原生二进制**，而本机 SDK 里那些是 **x86-64**：
+
+```
+/usr/lib/android-sdk/build-tools/34.0.0/aapt2      ELF 64-bit x86-64
+/usr/lib/android-sdk/build-tools/34.0.0/zipalign   ELF 64-bit x86-64
+$ aapt2 version
+bash: .../aapt2: 无法执行二进制文件：可执行文件格式错误
+```
+
+而且系统**没有 qemu-user binfmt 兜底**（`/proc/sys/fs/binfmt_misc` 里只有 `jar` 与 `python3.13`）；
+平台版本也只有 `android-34/35`，AGP 9 要的是 `android-36`。
+
+**结论**：构建只能走 CI（实测 **3.0–3.8 分钟/次**）⇒ 因此**按批改、按批复验**，
+不要为单条改动起一次构建。装 JDK 解决不了问题（它只管 JVM 那半边）。
