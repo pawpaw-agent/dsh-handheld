@@ -617,6 +617,29 @@
      只在 ≤560px 生效：横屏与小平板上宿主那套居中布局本来就装得下（448px 起不截断），
      不能让它们也贴到屏幕两边。判据见 docs/mobile-adaptation.md「统计行」。 */
   @media (max-width: 560px) {
+    /* 上下文占用（用户 2026-10-09：「会话页面底部的上下文占用也移上去」）——
+       它是 dock 下的一个 _root（内含 _trigger；真机实测 41x16、原本在 CSS y=812 那条底部
+       带里），与统计行**同一个 dock 但父层不同**（统计行挂 _root、它挂 _dock，所以不是兄弟，
+       用 ~ 选不中）。搬到最顶部那条细带里**居中**放：384px 视口上那条带被两颗胶囊占去
+       162+159，中间还剩 ~63px，正好容得下 41px。 */
+    [class*="_dock"] > [class*="_root"]:has(> [class*="_trigger"]) {
+      position: fixed !important;
+      top: 0 !important;
+      left: 50% !important;
+      transform: translateX(-50%) !important;
+      height: 16px !important;
+      line-height: 14px !important;
+      padding: 1px 0 0 !important;
+      margin: 0 !important;
+      z-index: 9 !important;
+      background: var(--dsw-alias-bg-base, #151517) !important;
+      font-size: 10px !important;
+    }
+    [class*="_dock"] > [class*="_root"]:has(> [class*="_trigger"]) * {
+      font-size: 10px !important;
+      line-height: 14px !important;
+    }
+
     [data-composer-stats] {
       max-width: none !important;
       padding-left: 8px !important;
