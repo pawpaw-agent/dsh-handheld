@@ -60,6 +60,7 @@ const arg = (name, dflt) => {
   return i >= 0 && argv[i + 1] ? argv[i + 1] : dflt;
 };
 const OUT = arg('out', path.join(os.homedir(), 'dsh-verify', `ui-verify-${Date.now()}`));
+const CSS_EXTRA = arg('css', '');   // A/B 用：追加一段 CSS 进层样式表
 const REPO = path.resolve(path.dirname(new URL(import.meta.url).pathname), '..');
 const HANDHELD = path.join(REPO, 'android/app/src/main/assets/plugins/handheld');
 const MAIN_ACTIVITY = path.join(REPO, 'android/app/src/main/java/com/dshhandheld/app/MainActivity.kt');
@@ -89,7 +90,7 @@ function readInjection() {
     if (name === null) {
       const css = readFileSync(path.join(HANDHELD, 'styles.css'), 'utf8')
         .replace(/\/\*[\s\S]*?\*\//g, '');
-      scripts.push('window.__dshHandheldCss = ' + JSON.stringify(css) + ';');
+      scripts.push('window.__dshHandheldCss = ' + JSON.stringify(css + (CSS_EXTRA ? '\n' + CSS_EXTRA : '')) + ';');
     } else {
       scripts.push(readFileSync(path.join(HANDHELD, name), 'utf8'));
     }
@@ -479,6 +480,35 @@ async function audit(width, { scripts, pageUrl, label, openDrawer }) {
 
 
 
+// ── 命中归属：会话行上这几个点，按下去**谁**接住 ────────────────────────────
+//
+// 教训：早先只量"有效命中区多大"，没量"这一点归谁"。用户反馈「切换不了会话」时，
+// 真正的判据是归属：行左缘/中央按下去必须是**行**，不能是行尾那颗 ⋯。
+const ROW_HITS_JS = `(async function () {
+  var frame = document.querySelector('[data-handheld="frame"]');
+  if (frame) frame.removeAttribute('data-sidebar-collapsed');   // 开抽屉，让行有盒子
+  // 抽屉的滑入过渡是 .22s —— 不等就量，行还在屏外（实测 x=-372）
+  await new Promise(function (r) { setTimeout(r, 450); });
+  var row = document.querySelector('[class*="_sessionRow"]');
+  if (!row) return { ok: false, why: 'no-session-row' };
+  var r = row.getBoundingClientRect();
+  var btn = row.querySelector('button[class*="_iconButton"]');
+  var br = btn ? btn.getBoundingClientRect() : null;
+  var name = function (e) { return e ? e.tagName + '.' + String(e.className || '').slice(0, 24) : null; };
+  var pts = [];
+  [0.1, 0.5, 0.9].forEach(function (fx) {
+    var x = Math.round(r.left + r.width * fx), y = Math.round(r.top + r.height / 2);
+    var hit = document.elementFromPoint(x, y);
+    pts.push({ fx: fx, x: x, hit: name(hit),
+      inRow: !!(hit && row.contains(hit)),
+      isBtn: !!(hit && btn && (hit === btn || btn.contains(hit))) });
+  });
+  var btnHit = null;
+  if (br) btnHit = name(document.elementFromPoint(Math.round(br.left + br.width / 2), Math.round(br.top + br.height / 2)));
+  return { ok: true, rowBox: { x: Math.round(r.left), y: Math.round(r.top), w: Math.round(r.width), h: Math.round(r.height) },
+    btnBox: br ? { w: Math.round(br.width), h: Math.round(br.height) } : null, pts: pts, btnHit: btnHit };
+})()`;
+
 // ── 主流程 ──────────────────────────────────────────────────────────────────
 const main = async () => {
   mkdirSync(OUT, { recursive: true });
@@ -511,6 +541,8 @@ const main = async () => {
   console.log('[A 基线·不注入] 完成');
   const adapted = await run({ inject: true, viewport: MOBILE, label: 'b-adapted-mobile', scripts, pageUrl });
   console.log('[B 适配·注入]   完成');
+  const rowHits = await run({ inject: true, viewport: MOBILE, label: 'e-row-hits', scripts, pageUrl, probeExpr: ROW_HITS_JS });
+  console.log('[E 命中归属]    完成（V13：行左缘/中央按下去必须归行，不能归行尾的 ⋯）');
   const desktop = await run({ inject: true, viewport: DESKTOP, label: 'c-desktop', scripts, pageUrl });
   console.log('[C 桌面档]      完成（V8：层不该生效）');
   // 失败负对照：喂一条**必定抛异常**的修复（runner 会隔离它）。信标必须写 FAILED，
@@ -568,6 +600,15 @@ const main = async () => {
   add('V10', '信标合法（<html> 属性 + 能穿过 App 的 WARNING 门槛）',
     st.ok === true && st.styles === 'ok' && st.fixes === `${o.fixesLen}/${o.fixesLen}` && !!warnLine,
     `status=${o.statusRaw}；console.warn=${warnLine ? '✓ ' + warnLine.text.slice(0, 60) : '✗ 没有'}`);
+  const rh = rowHits.auditData || {};
+  // 判据含**右缘**：实测 -12px 只偷走行右 10%（10%/50% 仍归行），所以只查左缘/中央
+  // 会漏判 —— 右缘是"分钟级误触"和"整行不可点"之间的分界。
+  add('V13', '会话行可点：左缘/中央/右缘按下去都必须归**行**，不能归行尾的 ⋯',
+    rh.ok === true && rh.pts?.length === 3
+      && rh.pts.every((p) => p.inRow === true && p.isBtn === false),
+    rh.ok ? `行 ${JSON.stringify(rh.rowBox)}；⋯ ${JSON.stringify(rh.btnBox)}；`
+      + rh.pts.map((p) => `${Math.round(p.fx * 100)}%→${p.hit}${p.isBtn ? '(⋯!)' : p.inRow ? '(行)' : '(行外)'}`).join(' ')
+      : `探针失败：${rh.why}`);
   add('V12', 'hero/inert 相位的目录浮动入口（新会话页唯一的会话列表入口）',
     o.fab?.exists === true && adapted.heroFab?.ok === true
       && adapted.heroFab.inHero !== 'none' && adapted.heroFab.inActive === 'none',
