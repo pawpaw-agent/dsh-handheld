@@ -46,6 +46,17 @@
                 // 而这一层要在每次 DOM 变动时参与重算。
                 if (!document.documentElement.classList.contains("dsh-handheld-mobile")) {
                   document.documentElement.classList.add("dsh-handheld-mobile");
+                  // ⚠️ 2026-10-09 补：宿主那颗「目录/侧栏」开关（button[class*="_toggle"]）。
+                  // 层里有两条规则挂在 [data-handheld="toggle"] 上（绝对定位到头部左边缘、
+                  // 与右角按钮对称、竖直跟标题行走；>=1024px 隐藏），
+                  // 但**从来没有任何 JS 设置过这个属性** ⇒ 两条规则一直是死的：
+                  // 那颗按钮保持宿主「桌面窗口标题栏」公式定位，真机实测只有 28x28。
+                  // 用户报「会话页面切不了会话」，很可能就是点不中它。
+                  // 这条修复是 repeat，宿主重渲染后会补回。
+                  var tog = document.querySelector('button[class*="_toggle"]');
+                  if (tog && tog.getAttribute("data-handheld") !== "toggle") {
+                    tog.setAttribute("data-handheld", "toggle");
+                  }
                 }
               }
             };
