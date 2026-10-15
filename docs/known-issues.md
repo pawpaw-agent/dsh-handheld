@@ -1857,3 +1857,47 @@ bash: .../aapt2: 无法执行二进制文件：可执行文件格式错误
 
 **调试口仍开着**（便于续做）：App → 连接屏右上「诊断」→「关掉调试口」可关；
 关掉后套接字消失，`device-audit.mjs` 会明确报"没找到可调试页面"。
+
+---
+
+## 第二十节：页面适配层整体移除（2026-10-15）
+
+**决定：取消全部页面注入。** 此前 App 在 document-start 向页面注入 7 段资产
+（`assets/plugins/handheld/`：boot / bootstrap / hooks / diag / fixes / runner + styles.css，
+共 1865 行），修窄屏排版与交互。现整体移除，页面交回 dsh 自己的响应式布局。
+
+### 背景：这一层经历了两次生死
+
+| 时间 | 事件 |
+|---|---|
+| 2026-09-25 | 移除。宿主加载器按服务端清单 reconcile，把注入的插件 entry 拆掉（fiber 销毁 + 删样式） |
+| 2026-10-08 | 以**纯注入**形式恢复（不注册 dsh 插件，加载器无可回收之物） |
+| 2026-10-15 | **整体取消**（本次） |
+
+根因不是某一次具体故障，而是成本结构：适配依赖一批**没有版本契约**的宿主 DOM 钩子
+（`data-*` 属性取值、CSS 模块类名后缀），宿主每次升级都要重新对齐，而失效是**静默的**
+—— 只能在真机上肉眼发现。为此建的三道防线（13 条断言的 fixture harness、契约金丝雀、
+注入列表一致性检查）本身也成了要跟随宿主演进的负担。
+
+### 本次一并删除
+
+- 注入资产 7 个文件：`android/app/src/main/assets/plugins/handheld/`
+- 验证与契约工具 5 个：`check-injection-parity.mjs`、`check-mobile-hooks.mjs`、
+  `mobile-hooks-contract.json`、`ui-verify.mjs`、`device-audit.mjs`
+- 孤儿库 2 个：`scripts/lib/cdp.mjs`、`scripts/lib/audit-probe.mjs`（仅被上面两个脚本消费）
+- CI 中 3 个步骤：注入列表一致性、适配契约、fixture harness（含 chromium 安装与产物上传）
+- Kotlin：注入装配块、`injectionRemover` 句柄、`HANDHELD_MARK` 信标、`JS_HANDHELD_STATUS`、
+  `tunnelOrigins()`、诊断页「适配层」行、console 信标接收钩子、两处未使用导入、
+  以及 `DshApp` 里两处历史遗留的孤立 KDoc
+
+### 保留不动（重要）
+
+系统 BACK 阶梯、网页模态 Esc、抽屉收起判定**全部保留** —— 它们早已改用宿主自己的选择器
+（`data-sidebar-collapsed`、`button[class*="_toggle"]`、`[role=dialog][aria-modal=true]`），
+不依赖注入层。`evaluateJavascript` 仍剩 3 处，都是这套 BACK 逻辑，不是注入。
+
+### 验证边界（诚实记录）
+
+本机**无法构建 Android 应用**（aapt2 是 x86-64、无 binfmt 兜底，gradle 亦未安装），
+所以本次改动**未经编译验证**，只做了：全仓残留扫描、Kotlin 括号/结构平衡校验（脚本剥离
+注释与字符串后比对 HEAD）、CI YAML 解析校验。最终以 CI 的 `test` 与 `build` 两作业为准。

@@ -111,25 +111,39 @@ metadata 版本 ≤ 编译器可读上限）。
 
 ## 移动端界面适配
 
-**2026-09-25 起本仓库不再注入任何东西。** 此前有一层自研的手机端适配（注入进 dsh 页面，
-改布局、补抽屉、报回合状态），它已被整体移除 —— 直接原因是 dsh 0.1.7-rc.2 的加载器会按服务端
-清单 reconcile，把注入的插件 entry 整个拆掉（fiber 销毁 + 按包名删样式）。历史与教训见
-[`docs/archive/mobile-adaptation.md`](docs/archive/mobile-adaptation.md)（**已移除模块的历史记录**）。现在页面交给 dsh 自己的响应式布局。
+**2026-10-15 起本仓库不再注入任何东西 —— 页面适配层已整体移除。**
 
-（以下为已移除的那一层的原始说明，保留作记录）dsh 官方前端是桌面布局，窄屏下侧栏常驻挤占内容。本项目在 **App 侧**注入一个**自研的**客户端插件
-（`android/app/src/main/assets/plugins/dsh-handheld-mobile.js`）：`addDocumentStartJavaScript` 钩住
-`__DSH_BOOT__` 启动图，`shouldInterceptRequest` 从 APK assets 供 bundle，**服务端零改动**。
+### 移除的是什么
 
-它建立在 dsh 的 DOM 之上（`data-*` 属性与哈希类名后缀，清单以 `scripts/mobile-hooks-contract.json`
-为准）。这些**没有版本契约**：dsh 改个属性名或换层结构，适配就**静默失效**（抽屉不弹、布局错位），
-只能在手机上发现 —— 所以 CI 里有一只契约金丝雀：
+此前 App 在 `document-start` 往页面注入 7 段资产
+（`android/app/src/main/assets/plugins/handheld/`：boot / bootstrap / hooks / diag / fixes / runner
+共 6 个 JS + `styles.css`），用来修 dsh Web UI 在窄屏上的一批排版与交互问题：侧栏抽屉、顶部细带、
+命中区尺寸、输入区高度、hover-only 控件等。它与宿主 DOM 之间**没有版本契约**
+（依赖 `data-*` 属性与 CSS 模块类名后缀），宿主一改版就静默失效，只能在手机上肉眼发现。
 
-```sh
-# （注入层移除后，这两个检查脚本与契约文件已一并删除）
-```
+### 为什么移除
 
-设计取舍与能力边界见 [`docs/archive/mobile-adaptation.md`](docs/archive/mobile-adaptation.md)（历史），验证方式（本地渲染回环、
-真机取证、A/B 断言）见 [`docs/archive/mobile-ui-verification.md`](docs/archive/mobile-ui-verification.md)（历史）。
+这一层前后经历了两轮生死：2026-09-25 因宿主加载器会按服务端清单 reconcile、把注入的插件 entry
+整个拆掉而移除；2026-10-08 改成**纯注入**（不注册 dsh 插件）后恢复；最终于 2026-10-15 整体取消。
+根因是这类适配的成本结构：每一次宿主升级都要重新对齐一批无名契约，而失效是静默的。
+现在页面**完全交给 dsh 自己的响应式布局**。
+
+### 随层一并删除的东西
+
+- 注入资产：`android/app/src/main/assets/plugins/handheld/`（7 个文件，1865 行）
+- 契约金丝雀与 UI 验证台：`scripts/check-injection-parity.mjs`、`scripts/check-mobile-hooks.mjs`、
+  `scripts/mobile-hooks-contract.json`、`scripts/ui-verify.mjs`、`scripts/device-audit.mjs`
+- CI 里的两道注入门禁（注入列表一致性、适配契约）与 fixture harness 步骤
+- 页面侧信标、诊断页「适配层」行、`DshApp.injectionRemover` 句柄
+
+保留不动的：系统 BACK 阶梯、网页模态 Esc、抽屉收起判定 —— 它们早已改用**宿主自己的**选择器
+（`data-sidebar-collapsed`、`button[class*="_toggle"]`），不依赖注入层。
+
+### 历史
+
+设计取舍与能力边界见 [`docs/archive/mobile-adaptation.md`](docs/archive/mobile-adaptation.md)，验证方式（本地渲染回环、
+真机取证、A/B 断言）见 [`docs/archive/mobile-ui-verification.md`](docs/archive/mobile-ui-verification.md)。两者都是
+**已移除模块的历史记录**，方法仍可借鉴，但其中的选择器与脚本路径均已失效。
 
 ---
 
@@ -155,7 +169,7 @@ android/
   app/                         # App 本体：连接屏 + WebView 壳 + 隧道编排
     src/main/java/com/dshhandheld/{app,protocol}/   # MainActivity / DshApp / SshTunnel …
     src/main/java/com/termux/shared/terminal/io/    # vendored 的 Termux 额外键栏（见 License）
-    src/main/assets/                                # 已无注入资产（2026-09-25 移除）
+    src/main/assets/                                # 仅 licenses/（注入资产已于 2026-10-15 移除）
     src/main/jniLibs/arm64-v8a/                     # dbclient / dropbearkey（CI 阶段构建后放入）
   terminal-conformance/        # 纯 JVM 终端行为回归测试台（不进 APK）
 scripts/                       # dropbear 交叉编译、契约金丝雀、渲染回环、API 推送

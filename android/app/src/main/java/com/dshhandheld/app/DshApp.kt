@@ -217,7 +217,11 @@ class DshApp : Application() {
     private var eventsClient: HarnessEventsClient? = null
     private var eventsBase: String? = null
 
-    /** 事件流报告的「正在跑」的会话；null = 当前没有在跑的一轮。 */
+    /**
+     * 事件流报告的「正在跑」的会话；null = 当前没有在跑的一轮。
+     *
+     * 这是**权威**回合状态：页面适配层移除后，它自己就是完整的一路来源。
+     */
     @Volatile private var runningSession: String? = null
 
     /**
@@ -252,23 +256,11 @@ class DshApp : Application() {
         eventsBase = null
     }
 
-    /**
-     * Host 报告的权威回合状态 —— 注入层移除后它自己就是完整的一路。
-     */
+
     /**
      * C1：会话 id → 名字。由事件流的 `api-session/added` 填（见 [HarnessEventsClient]）。
      * 拿不到就不放进来 —— 通知侧退回「id 后 6 位」，不编造名字。
      */
-    /**
-     * document-start 注入脚本的句柄移除器（见 MainActivity 的注入块）。
-     *
-     * 挂在 Application 上而不是 Activity：WebView 是**保活**的（`retainedWebView`），
-     * 注入的生效期与 WebView 同寿。重建 Activity 时先调它，避免同一个 WebView 上
-     * 累积多份脚本。
-     */
-    @Volatile
-    var injectionRemover: (() -> Unit)? = null
-
     private val sessionNames = java.util.concurrent.ConcurrentHashMap<String, String>()
 
     private fun onHostTurnStatus(sessionId: String, running: Boolean) {

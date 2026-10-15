@@ -31,8 +31,6 @@ import android.webkit.WebResourceRequest
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import android.widget.Spinner
-import androidx.webkit.WebViewCompat
-import androidx.webkit.WebViewFeature
 import android.widget.Button
 import android.widget.EditText
 import android.widget.FrameLayout
@@ -491,13 +489,6 @@ class MainActivity : Activity() {
         /** 诊断页里的「WebView 远程调试」开关（真机取证用；默认关）。 */
         const val PREF_WEBVIEW_DEBUG = "webview_debug"
 
-        /** 适配层信标前缀（见 assets/plugins/handheld/diag.js）；命中就进诊断日志。 */
-        const val HANDHELD_MARK = "[handheld]"
-
-        /** 读页面侧适配层状态：层写在 <html data-handheld-status>（紧凑 JSON）。 */
-        const val JS_HANDHELD_STATUS = "(function(){try{var d=document.documentElement;" +
-            "return d?(d.getAttribute('data-handheld-status')||'（无）'):'（无 documentElement）';}" +
-            "catch(e){return '（读取失败：'+e+'）';}})()"
         // 配色与尺寸基元集中在 UiKit（此前 MainActivity / TuiActivity 各定义一份）。
         // 保留这些别名是为了让 60 余处调用点不必改动；定义只有一处。
         const val COL_BG = UiKit.BG
@@ -518,9 +509,6 @@ class MainActivity : Activity() {
         const val REQ_WEB_FILE = 2002
         /** 页面的麦克风请求：先申请系统 RECORD_AUDIO，拿到结果再放行那个 WebView 请求。 */
         const val REQ_MIC = 2004
-
-        /** 隧道的两个回环 origin（与 [SshTunnel.PORT_CANDIDATES] 同源，别各写一份）。 */
-        fun tunnelOrigins(): Set<String> = TunnelOrigin.origins()
 
         /** 这个 URL 是不是我们自己的隧道页面（整条 URL，不是 origin）。 */
         fun isTunnelUrl(url: String): Boolean = TunnelOrigin.isTunnel(url)
@@ -625,63 +613,6 @@ class MainActivity : Activity() {
                 setSupportMultipleWindows(true)
             }
 
-            // ── 手机端页面适配层：纯注入，**不注册 dsh 插件**（2026-10-08）──────
-            //
-            // 为什么注入：dsh 的 Web UI 是给桌面鼠标设计的，手机上有一批纯排版问题
-            // （留白、命中区、头部/输入区高度、hover-only 控件）—— 逐条见
-            // assets/plugins/dsh-handheld-mobile.js 的文件头。
-            //
-            // ⚠️ 与 1.0.89 及更早版本的关键差别：**不再往 `window.__DSH_BOOT__` 补插件条目**。
-            // dsh 0.1.7-rc.2 起，客户端加载器会按服务端清单回收这类条目
-            // （`tearDownEntryFiber` + `removeOwnedStyles`），旧做法在真机上被拆掉、
-            // 只能靠看门狗一轮轮自愈（日志里的 `heals:`）。现在由 App 在 document-start
-            // 直接注入，加载器**没有任何东西可以回收**。
-            //
-            // origin 收窄到隧道页面：注入只在 `127.0.0.1:<候选端口>` 上生效。
-            if (WebViewFeature.isFeatureSupported(WebViewFeature.DOCUMENT_START_SCRIPT)) {
-                val app = application as DshApp
-                // 顺序有意义（2026-10-08 重新设计后的结构，见 assets/plugins/handheld/）：
-                //   ⓪ boot.js：引导队列（document-start 只定义，DOM 一出现就跑任务）；
-                //   ① 引导脚本：**解析期**补 viewport-fit=cover（Chromium 只认第一条
-                //      viewport meta，必须最早）；
-                //   ② hooks.js：宿主 DOM 钩子的唯一出处；
-                //   ③ diag.js：自证与开销，**默认关闭**（零成本替身）；
-                //   ④ fixes.js：修复集（每条声明自己依赖哪些钩子）；
-                //   ⑤ 样式：styles.css 读进来包成一行赋值 —— 注释只在仓库里给人看，
-                //      注入前剥掉（34 KB 注释不进手机）；
-                //   ⑥ runner.js：挂样式、观察 DOM、按需应用修复、隔离异常。
-                fun readAsset(path: String): String? = runCatching {
-                    assets.open(path).use { it.readBytes() }.toString(Charsets.UTF_8)
-                }.getOrElse {
-                    DiagLog.e(TAG, "读取 $path 失败，手机端适配将不生效：${it.message}")
-                    null
-                }
-                val cssScript = readAsset("plugins/handheld/styles.css")?.let { css ->
-                    val stripped = css.replace(Regex("/\\*[\\s\\S]*?\\*/"), "")
-                    "window.__dshHandheldCss = " + org.json.JSONObject.quote(stripped) + ";"
-                }
-                val scripts = listOf(
-                    // boot.js 必须最先：document-start 段只允许"定义"，呈现型工作注册进它，
-                    // DOM 一出现就执行（bootstrap 依赖它拿最早时机）。
-                    "plugins/handheld/boot.js",
-                    "plugins/handheld/bootstrap.js",
-                    "plugins/handheld/hooks.js",
-                    "plugins/handheld/diag.js",
-                    "plugins/handheld/fixes.js",
-                ).mapNotNull { readAsset(it) } + listOfNotNull(cssScript, readAsset("plugins/handheld/runner.js"))
-                if (scripts.isNotEmpty()) {
-                    // 先撤上一次的句柄：WebView 是保活的，重建 Activity 时不移除会累积 N 份。
-                    runCatching { app.injectionRemover?.invoke() }
-                    val handlers = scripts.map {
-                        WebViewCompat.addDocumentStartJavaScript(this, it, tunnelOrigins())
-                    }
-                    app.injectionRemover = { handlers.forEach { h -> runCatching { h.remove() } } }
-                    DiagLog.i(
-                        TAG,
-                        "适配层：已注入 ${scripts.size} 段（共 ${scripts.sumOf { it.length }} 字符）"
-                    )
-                }
-            }
             webViewClient = object : WebViewClient() {
                 override fun onPageStarted(view: WebView?, url: String?, favicon: android.graphics.Bitmap?) {
                     // 新导航开始 → 清掉上一次的失败标记（它决定 onPageFinished 要不要隐藏覆盖层）
@@ -795,13 +726,6 @@ class MainActivity : Activity() {
                  */
                 override fun onConsoleMessage(msg: android.webkit.ConsoleMessage?): Boolean {
                     msg ?: return false
-                    // 适配层的信标：**无论级别**都收。层刻意用 console.warn 发信标（见 diag.js），
-                    // 但这里只认前缀、不依赖级别 —— 免得哪天层改了级别又静默丢失。这正是
-                    // 2026-10-08 那次事故的教训：整层没生效，诊断页里却一行字都没有。
-                    if (msg.message().contains(HANDHELD_MARK)) {
-                        DiagLog.i(TAG, msg.message())
-                        return true
-                    }
                     // 其余只记 warning/error：dsh 页面平时的 console 输出很密，全记会把真正
                     // 有用的那几条淹掉（语音输入这次的失败现场就是一条 console error）。
                     if (msg.messageLevel() >= android.webkit.ConsoleMessage.MessageLevel.WARNING) {
@@ -2470,25 +2394,6 @@ class MainActivity : Activity() {
         }
         box.removeAllViews()
         box.addView(UiKit.text(this, "诊断信息", 20f, COL_TITLE, bold = true))
-
-        // 适配层状态：层写在 <html data-handheld-status>（见 diag.js 的信标），异步读回。
-        // 放在最上面一行 —— 「层有没有生效」是手机上最先要回答的问题：2026-10-08 那次整层
-        // 静默失效，诊断页里一行字都没有，只能靠肉眼猜「是没生效还是样式本来就这样」。
-        val adapterLine = UiKit.text(this, "适配层：读取中…", 11f, COL_MUTED)
-        box.addView(
-            adapterLine,
-            LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
-            ).apply { topMargin = dp(6) }
-        )
-        runCatching {
-            webView?.evaluateJavascript(JS_HANDHELD_STATUS) { raw ->
-                val v = runCatching {
-                    org.json.JSONTokener(raw ?: "").nextValue() as? String
-                }.getOrNull()
-                adapterLine.text = "适配层：" + (v ?: "（读不到）")
-            }
-        }.onFailure { adapterLine.text = "适配层：（读取失败 " + it.message + "）" }
 
         val body = TextView(this).apply {
             textSize = 10f

@@ -117,48 +117,6 @@ jobs:
         with:
           cache-provider: basic
 
-      # 适配层依赖一组**没有版本契约**的宿主 DOM 钩子（dsh 独立演进）。这个金丝雀
-      # 断言「适配层用到的钩子」与「契约文件里记的」一致 —— 谁加了钩子没登记、
-      # 或把插件注册机制写回来（那正是旧版被拆掉的原因），这里就红。
-      # 完整检查（断言钩子确实存在于 dsh 前端产物里）需要本机装 dsh，CI 里跑 --contract。
-      # harness 验的必须是「手机上跑的那一份」。App 的注入列表在 Kotlin 里，
-      # harness 的在 ui-verify.mjs —— 两份漂移过就会变成在验一个不存在的东西。
-      # 这条不需要浏览器，所以能进 CI（harness 本身要 dsh + chromium，只能本机跑）。
-      - name: Check injection list parity (App ↔ ui-verify harness)
-        run: node scripts/check-injection-parity.mjs
-
-      - name: Check mobile adaptation contract
-        run: node scripts/check-mobile-hooks.mjs --contract
-
-      - name: Set up Node
-        uses: actions/setup-node@v4
-        with:
-          node-version: '22'
-
-      # 适配层 harness（scripts/ui-verify.mjs）需要两样东西：
-      #   ① 真实宿主 CSS —— 从 dsh 安装产物里抽（固定成真机同版本；不把 dsh 的 CSS 抄进仓库）；
-      #   ② 一个 chromium —— 用 Playwright 的构建，与本地跑的是同一种。
-      # 它跑 13 条断言（注入/标记/几何/视口变量/键盘滚动/右侧栏命中/负对照/信标/失败负对照）。
-      - name: Install dsh + chromium (for the fixture harness)
-        run: |
-          npm i -g @deepseek-ai/dsh@0.2.0-rc.2 --no-audit --no-fund
-          npm i -g playwright --no-audit --no-fund
-          npx --yes playwright install --with-deps chromium
-
-      - name: Verify mobile adaptation layer (fixture harness, 13 assertions)
-        run: |
-          CHROME=$(node -e "console.log(require('$(npm root -g)/playwright').chromium.executablePath())")
-          echo "chromium: $CHROME"
-          node scripts/ui-verify.mjs --chrome "$CHROME" --out "$RUNNER_TEMP/ui-verify"
-
-      - name: Upload harness screenshots + report
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: ui-verify
-          path: ${{ runner.temp }}/ui-verify
-          if-no-files-found: warn
-
       - name: Run unit tests
         run: |
           cd android
@@ -369,18 +327,17 @@ jobs:
           # artifact 路径写错时默认只 warning（审计 L10）——这里要它直接失败。
           if-no-files-found: error
 
-      # 另出一份 **debug** 包，专供真机排查（注入层已于 2026-09-25 移除）。
+      # 另出一份 **debug** 包，专供真机排查（页面适配层已于 2026-10-15 整体移除）。
       #
       # 为什么需要它：MainActivity 只在 debuggable 时开 `setWebContentsDebuggingEnabled`，
-      # 而 release 包必须保持不可调试（上面那步硬校验）。于是「真机上页面到底被适配成什么样」
+      # 而 release 包必须保持不可调试（上面那步硬校验）。于是「真机上页面到底渲染成什么样」
       # 这一层，用 release 包**无法取证** —— 拿不到 WebView 的 DOM。
       #
       # 有了 debug 包的 WebView devtools socket，就能 adb forward 后直接查真实渲染结果
-      # （[data-handheld] 在不在、有没有横向溢出），也就是把 scripts/ui-verify.mjs
-      # 对真实页面做的那套断言搬到真机上。见 docs/mobile-ui-verification.md。
+      # （布局有没有溢出、抽屉能不能开）。也可由连接屏「诊断」页的 WebView 远程调试开关打开。
       #
       # ⚠️ 该产物是 debuggable + debug 签名，**绝不可对外分发**，只是 CI artifact。
-      - name: Build debug APK (for on-device UI verification)
+      - name: Build debug APK (for on-device debugging)
         run: |
           cd android
           ./gradlew assembleDebug --no-daemon
