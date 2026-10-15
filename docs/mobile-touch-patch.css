@@ -1,0 +1,35 @@
+/* dsh-handheld mobile touch patch (prototype, 2026-10-16)
+ *
+ * 目的：粗指针（手机）上把过小的可点元素抬到 40px（贴近 44px 推荐值）。
+ * 范围：仅 @media (pointer: coarse) 生效，桌面精确指针不受影响。
+ * 基线：真机 SM-S9280 / Android 16 / CSS 视口 384x832 / dpr 3.75 / dsh 0.2.0-rc.2。
+ * 验证：补丁前 30/30 个可点元素 < 44px；补丁后目标元素均达 40px，无横向溢出。
+ * 来源：选择器来自真机 DOM 实测（不是抄文档），14/14 在页面上命中 ≥1 个元素。
+ * 警告：类名含构建哈希，dsh 升级后会变 —— 升级后需重新实测类名并重生成本文件。
+ */
+
+@media (pointer: coarse) {
+  /* 紧凑按钮（顶栏「更多操作」「打开右侧边栏」）：高 28 -> 40 */
+  ._sm_1rv3m_28 { height: 40px !important; min-width: 40px !important; }
+
+  /* 侧栏图标（开合 / 新建 / 插件）：36 -> 40（行距 48，留 8px） */
+  .hHd-Xa_iconButton, .hHd-Xa_toggle, .hHd-Xa_newSession, .hHd-Xa_panelRow { min-width: 40px !important; min-height: 40px !important; }
+
+  /* 面板图标（右栏收起 / 分栏）：28 -> 40 */
+  .nLMEza_iconBtn, ._iconButton_6nhg2_511, .P3OORG_iconButton { min-width: 40px !important; min-height: 40px !important; }
+
+  /* 页签（对话 / 轨迹）：高 25 -> 40（宽 25 是网格固有，改不了） */
+  .wSkVaW_tab, .wSkVaW_tabActive { height: 40px !important; }
+
+  /* 输入区附件按钮：28 -> 40 */
+  .uV2eYG_add { min-width: 40px !important; min-height: 40px !important; }
+
+  /* 输入区发送按钮：34 -> 40 */
+  .uV2eYG_primary { min-width: 40px !important; min-height: 40px !important; }
+
+  /* 输入区模式 / 模型触发器：高 28 -> 40 */
+  .iWlSmW_trigger, ._7KE1Ra_trigger { height: 40px !important; }
+
+  /* 未处理：统计胶囊（22px 高）。宿主把它放在 height:16px + overflow:hidden 的
+   * 固定细带里，抬高会被裁掉并挤掉正文 —— 见 known-issues 第十五节限制 1。 */
+}
