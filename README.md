@@ -172,7 +172,11 @@ android/
     src/main/assets/                                # 仅 licenses/（注入资产已于 2026-10-15 移除）
     src/main/jniLibs/arm64-v8a/                     # dbclient / dropbearkey（CI 阶段构建后放入）
   terminal-conformance/        # 纯 JVM 终端行为回归测试台（不进 APK）
-scripts/                       # dropbear 交叉编译、契约金丝雀、渲染回环、API 推送
+scripts/                       # dropbear 交叉编译、隧道校验、API 推送
+tools/                         # 手机端可用性工具（见 docs/known-issues.md 第二十一节）
+  mobile-audit.mjs             # 真机审计：连 WebView 的 CDP，量触控目标/竖向预算/溢出
+  verify-audit-expr.mjs        # 离线校验上面那个页面内表达式（设备不在也能验）
+  gen-mobile-touch-patch.py    # 生成/应用/还原移动端触控补丁（--apply / --revert）
 docs/                          # 已知问题、发布说明；docs/archive/ 是已移除模块的历史记录
 .github/workflows/ci.yml       # dbclient → 契约与一致性门禁 → 构建并校验 release APK
 ```

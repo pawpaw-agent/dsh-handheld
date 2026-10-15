@@ -2038,3 +2038,69 @@ bash: .../aapt2: 无法执行二进制文件：可执行文件格式错误
 3. 评估竖向代价：一屏内若同时出现多个可展开行，多出来的高度是否影响阅读（需要取舍阈值）；
 4. 页签宽度 / 「轨迹」入口（第十五节遗留决策，仍未拍板）；
 5. 决定是否把原型改造成 bundle（路线 B）。
+
+### 第三轮补充（2026-10-16）：审计工具固化 + 保活缺口排查
+
+设备仍未回来（`.175` 连续 5 次探测全丢包，ARP 仍 FAILED；顺带发现 `.174` 在线但不是同一台）。
+本轮做的是**离线可完成、且设备回来即用**的交付。
+
+#### ① 审计工具固化：`tools/mobile-audit.mjs`
+
+第一轮的测量是一次性内联脚本，现已固化成可复用工具，设备一回来**一条命令出全量报告**：
+
+```sh
+# 前置三步（缺一步都连不上）
+adb connect <ip>:<port>                       # 手机开无线调试
+PID=$(adb shell ps -A | grep dshhandheld | awk '{print $2}')
+adb forward tcp:9222 localabstract:webview_devtools_remote_$PID
+
+# 出报告（并可存档 / 对比）
+node tools/mobile-audit.mjs --json before.json
+node tools/mobile-audit.mjs --diff before.json      # 改完再跑，直接看增量
+```
+
+报告含四块：**视口与粗指针**、**竖向预算**（头部/消息区/输入区各占多少，带条形图）、
+**触控目标**（有效命中区 = 盒子 ∪ 伪元素 ∩ 视口，按最小边排序）、**消息区可折叠行**统计。
+无设备时它不会静默失败，而是打印那三条前置命令 —— 这点是特意做的。
+
+#### ② 页面内测量表达式已离线验证（`tools/verify-audit-expr.mjs`）
+
+这段表达式是在**手机上**由 CDP 求值的，语法或运行时错误只会在设备上才暴露 —— 所以先离线验：
+
+1. `new Function` 解析（语法）；
+2. 在极简 DOM 桩上真跑一遍（运行时，含 `getComputedStyle` / `matchMedia` / 伪元素分支）；
+3. 断言返回字段完整。
+
+实测：表达式 4587 字符，三项全过，采样值与第一轮真机数据吻合（视口 384×832、胶囊 90×22、
+可折叠行 24px）—— 说明桩的保真度够用。**这是「设备不在也能验证」的正确用法。**
+
+#### ③ 保活缺口：找到了两个具体缺失（值得优先查）
+
+第三轮掉线的现象是**整机从局域网消失**（不只是 App 断），所以查了 App 的保活实现。现状：
+
+| 机制 | 现状 | 说明 |
+|---|---|---|
+| 前台服务 | ✅ 有（`TunnelService` + `IMPORTANCE_MIN` 通知） | 走的是正确的基本盘 |
+| `FOREGROUND_SERVICE_SPECIAL_USE` 权限 | ✅ 有 | — |
+| **`WAKE_LOCK` 权限** | ❌ **无** | 想拿 `WifiLock`/`WakeLock` 也拿不到 |
+| **电池优化白名单** | ❌ **未申请** | 无 `isIgnoringBatteryOptimizations` / `ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS` |
+| `WifiLock` / `WakeLock` | ❌ 完全未使用 | 代码里没有 `WifiManager`/`PowerManager` 调用 |
+
+**推断（尚未证实）**：屏幕锁定后 Wi-Fi 进入省电/断开，隧道随之失效；Samsung 的额外电池优化
+还可能把前台服务一起收掉。这与 `.175` 整机不可达的现象一致。
+
+**但这只是推断** —— 设备可能只是被关机/手动断网/离开 Wi-Fi 范围，本轮**不能**当成结论。
+设备回来后要做的判定：
+
+1. 复现时看 `adb shell dumpsys deviceidle` 与 `dumpsys wifi` 的省电状态；
+2. 看 `TunnelService` 是否仍在（`dumpsys activity services | grep dshhandheld`）；
+3. 只在**确认是休眠导致**之后，才谈要不要加 `WAKE_LOCK` + 白名单申请 ——
+   那是会明显增加耗电的改动，不该凭推断就上。
+
+#### 下一轮（设备回来后按序）
+
+1. 跑 `node tools/mobile-audit.mjs --json baseline.json` 取**打补丁后的完整基线**；
+2. 核验 `._row_jhda5_16[data-expandable]` 是否真实存在（第二轮加的补丁至今未验）；
+3. 判定掉线根因（见上「3 步」），再决定保活改动；
+4. 页签宽度 / 「轨迹」入口（第十五节遗留决策）；
+5. 决定原型是否改造成 bundle（路线 B）。
