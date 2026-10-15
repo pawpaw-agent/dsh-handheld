@@ -12,11 +12,9 @@ on:
   workflow_dispatch:
 
 jobs:
-  # Mobile adaptation contract gate. The app's whole value is "dsh's web UI on a
-  # phone", and that adaptation rests entirely on dsh's DOM hooks (data-phase,
-  # data-composer-input, …) which have NO version contract: dsh evolves on its
-  # own, the plugin is vendored and pinned. If dsh renames one, the adaptation
-  # silently breaks and you only find out on the phone.
+  # 页面适配层已于 2026-10-15 整体移除（见 README 与 docs/known-issues.md 第二十节）。
+  # 因此原先的「适配契约 / 注入列表一致性」门禁与 fixture harness 均已删除。
+  # 现在 CI 只做三件事：构建 dbclient、跑单测、出 release/debug APK。
   build-dropbear:
     name: Build dropbear dbclient (arm64)
     runs-on: ubuntu-latest
