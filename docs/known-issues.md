@@ -2104,3 +2104,94 @@ node tools/mobile-audit.mjs --diff before.json      # 改完再跑，直接看�
 3. 判定掉线根因（见上「3 步」），再决定保活改动；
 4. 页签宽度 / 「轨迹」入口（第十五节遗留决策）；
 5. 决定原型是否改造成 bundle（路线 B）。
+
+### 第四轮补充（2026-10-16）：侧栏宽度根因 + CSS 补丁的能力边界
+
+设备仍未回来。本轮从**宿主源码**里挖出了「窄屏侧栏挤占内容」的根因，并划清了一个重要边界。
+
+#### ① 宿主的列宽算法（读 `dsh-client-ui-layout/lib/client.js`）
+
+```js
+const s = sidebar === 0 ? collapsedWidth : clampWidth(sidebar, 264, 420);
+const available = viewport - s - 400;
+const r = rightbar === 0 || available < 300 ? 0 : Math.min(available, clampWidth(rightbar, 300, viewport * RIGHTBAR_MAX_RATIO));
+```
+
+关键常量：`collapsedWidth = 56`、侧栏 clamp **[264, 420]**、右栏 clamp **[300, viewport*0.7]**、
+`SIDEBAR_AUTO_COLLAPSE = 1024`。窄屏走独立分支：
+
+```js
+const narrow = viewport < SIDEBAR_AUTO_COLLAPSE;          // 384 < 1024 => true
+const sidebarCollapsed = narrow ? !layoutInfo.narrowExpanded : layoutInfo.sidebar === 0;
+const sidebarPreference = sidebarCollapsed ? 0 : layoutInfo.sidebar === 0 ? 280 : layoutInfo.sidebar;
+```
+
+代入真机视口 **384px**：
+
+| 场景 | 侧栏 | 中心区 | 中心占比 |
+|---|---|---|---|
+| 侧栏收起（图标轨道） | 56px | 328px | 85% |
+| **侧栏展开（点一下开关）** | **264px** | **120px** | **31%** |
+| 侧栏展开 + 右栏 | 264px | 120px | 31%（右栏实际开不了：`available = 384-264-400 < 300`） |
+| 对照：桌面 1440px 侧栏展开 | 264px | 1176px | 82% |
+
+**结论**：窄屏确实有折叠机制（不挤占），但**一旦展开就按桌面宽度 264px** —— 在 384px 视口上占 69%，
+内容区只剩 31%。这正是旧注入层要解决的「侧栏常驻挤占内容」的根因，现在有了确切数字。
+
+宿主**没有为这个做移动端适配**：布局包的媒体查询只有 `prefers-reduced-motion` / `prefers-reduced-transparency`，
+没有任何宽度覆盖。所以这是上游的空白，不是配置问题。
+
+#### ② 重要边界：**这个问题 CSS 修不了**
+
+列宽是**内联样式**落上去的：
+
+```js
+gridTemplateColumns: `${cols.sidebar}px minmax(${cols.rightbar === 0 ? 0 : 400}px, 1fr) minmax(0px, ${rightbarMax}px)`
+```
+
+而**内联样式在层叠中优先于样式表规则**（内联 `!important` 又高于样式表 `!important`）。
+所以对 `gridTemplateColumns` 而言，**往样式表里写任何选择器都没用** —— 包括带 `!important` 的。
+
+我也核过宿主的变量通道：`--dsh-windows-sidebar-width` 只在
+`document.documentElement.hasAttribute("data-windows-titlebar")` 时才设置，Android 上不存在这个属性，
+因此那条路也不通。
+
+**所以侧栏宽度只能从 JS 侧解决**：
+
+| 做法 | 可行性 |
+|---|---|
+| 给宿主提窄屏分支（`narrow` 时把侧栏 clamp 到 ~86vw 或 ≥240px 上限） | ✅ 正道，属上游化 |
+| 客户端插件在 render 后覆盖 frame 的内联 grid（需同时维护 UI 状态一致） | ⚠️ 可行但脆，属重演旧注入层 |
+| 纯 CSS 补丁 | ❌ **不可能**（内联样式优先） |
+
+#### ③ 这条边界对整体方案的意义
+
+前几轮的触控目标补丁之所以 CSS 能做，是因为那些尺寸来自**样式表**（dist 产物或插件内联 `<style>`），
+`!important` 有效。而**布局类**问题（列宽、轨道）走内联样式，**CSS 一律无效**。所以：
+
+- **CSS 路线**适合：尺寸、间距、命中区、字号 —— 已做，已验证；
+- **JS 路线**必须解决：列宽、窄屏布局、面板开合策略 —— 尚未做，且只能上游化或插件化。
+
+这个分野应作为后续判断「某问题能不能用补丁修」的第一道筛子。
+
+#### ④ 新增工具：`tools/check-mobile-patch.mjs`（带自测）
+
+补丁写在 dist 产物里，而类名含构建哈希 —— dsh 一升级会**静默失效**（文件名哈希变→补丁段整个没了；
+类名哈希变→选择器再也匹配不到）。这个守卫主动查这三件事：
+
+1. dist CSS 是否还带补丁标记；
+2. 补丁依赖的选择器是否还在（对着未打补丁的 `.orig` 核验，避免自我验证）；
+3. 是否有多个 `index-*.css`（升级残留信号）。
+
+退出码分流：`0` 正常 / `3` 补丁未应用 / `4` dsh 升级导致失效 / `5` 找不到 dist。
+
+**它自带 `--selftest`**：喂合成输入验证「ok / not-applied / stale」三种判定都正确（6/6 通过）。
+检查器本身如果不灵，检查结果就没有意义 —— 这是从第二轮那次「拿已打补丁的文件当核验基准」
+的假阳性里学到的。
+
+#### 下一轮
+
+1. 设备回来 → 跑 `node tools/mobile-audit.mjs --json baseline.json`；
+2. 核验 `._row_jhda5_16[data-expandable]`（第二轮补丁至今未真机验证）；
+3. 实测侧栏展开后的真实中心区宽度（验证上面的 264/120 推算）；
+4. 就「侧栏窄屏宽度」写一份上游 issue 草稿（属正道，且有确切数字支撑）。
