@@ -2195,3 +2195,89 @@ gridTemplateColumns: `${cols.sidebar}px minmax(${cols.rightbar === 0 ? 0 : 400}p
 2. 核验 `._row_jhda5_16[data-expandable]`（第二轮补丁至今未真机验证）；
 3. 实测侧栏展开后的真实中心区宽度（验证上面的 264/120 推算）；
 4. 就「侧栏窄屏宽度」写一份上游 issue 草稿（属正道，且有确切数字支撑）。
+
+---
+
+## 第二十二节：401 死锁 —— token 抓取位置错 + 错误页被误判为认证成功（2026-10-18）
+
+**现象**：手机打不开网页，WebView 里只有一行英文 `dsh web authentication required;
+reopen the URL printed by dsh web.`；App 每 60 秒重试事件流并持续报
+「尚无 dsh-auth cookie（页面还没完成 token 交换）」。用户描述为「设备验证未通过」。
+
+### 定位过程（每一步都有日志实证）
+
+1. 手机本地访问隧道端口 → **HTTP 401**，隧道本身是通的，问题在认证；
+2. CDP 读 WebView → `url=http://127.0.0.1:3080/`、**无 `?token=`**、页面就是那行 401 文本；
+3. 拉 App 的诊断日志（`files/diag.log`，release 包 logcat 里看不到 DiagLog）→ 关键序列：
+
+```
+autoFetchToken: SUCCESS len=43                      ← 抓取「成功」
+connectWeb: ack=false tokenLen=43 needsToken=true   ← 确实带上了 token
+onReceivedHttpError: HTTP 401 url=.../?token=***    ← 服务端拒绝
+401: 带 token 页失败 → 回退干净 URL 重试
+401: 干净 URL 仍失败 → 令牌提示页
+onPageFinished: 正式页面加载完成 → ack=true          ← 把 401 页当成了成功页
+```
+
+4. 在服务端比对两个 token：
+
+| 来源 | 前 8 位 | 判定 |
+|---|---|---|
+| journald（App 的候选①） | `LUJ4VIQb…` | **过期**（时间戳 2026-10-15T22:26） |
+| `~/.dsh/run/web-20261017T165831.log`（实际在用） | `nFlT9TH4…` | **正确** |
+
+两串 token **长度都是 43**，所以 `length >= 40` 的校验照样通过 —— App 一直以为自己抓对了。
+
+### 根因（两个独立缺陷叠加成死锁）
+
+**缺陷 1：token 抓取的位置列表里没有当前版本的实际位置。**
+
+`~/.dsh/web-server.log` 显示 dsh web 是**手动脚本**重启的：
+
+```
+stopping pid 2484002 on port 3080
+started pid 2484103, stdout -> /home/xsj/.dsh/run/web-20261017T165831.log
+open: http://127.0.0.1:3080/?token=nFlT9TH4…
+```
+
+新 token **只写进 `~/.dsh/run/web-<时间戳>.log`，不进 journald**。而 `autoFetchToken` 的候选是
+「journal 优先、文件兜底」，文件候选里又只有 `~/.dsh/web.log` / `~/.dsh/web_log` / `~/.dsh/dsh-web.log`
+（**三个都不存在**）。于是候选①在 journal 里抓到 10-15 的旧 token 就返回了，永远走不到文件候选。
+
+**缺陷 2：`onPageFinished` 把 401 错误页当成「正式页面加载完成」。**
+
+原判据是「URL 是 http 且不带 `?token=`」——而 **401 的响应体恰好也满足这个形状**。
+于是一次 401 之后 `sshTokenAck = true`，token 交换被**永久跳过**，即使服务端恢复也不会自动重连，
+必须杀进程重开。这解释了为什么故障会「粘住」。
+
+（另外「需要访问令牌」覆盖层也没留在屏上：`hideErrorPage()` 在 `navFailed` 为 false 时把它盖掉了，
+而 `navFailed` 又被 `onPageStarted` 清掉 —— 401 回退恰好是「清掉 → 又 401 → finished」这个序列。）
+
+### 修法（commit `1d8fc56`）
+
+1. **候选重排 + 补位置**：新增 `~/.dsh/run/web-*.log` 并**按 mtime 取最新那个**（多次重启也能拿对），
+   文件优先、journal 降为兜底，老路径保留；
+2. **新增 `mainFrameAuthFailed` 标记**：`onReceivedHttpError` 收到主框架 401 时置位，
+   `onPageFinished` **优先判它** → 不置 ack；`connectWeb` 时重置。
+   刻意不用 `navFailed`（它被 `onPageStarted` 清掉，靠不住）；
+3. **认证失败时保留覆盖层**，不再 `hideErrorPage()`。
+
+### 验证（真机）
+
+新抓取命令在本机实测拿到 `nFlT9TH4…` = 服务端在用（旧命令仍是 `LUJ4VIQb…` 过期）。
+CI 单测 + APK 构建全绿，装到 SM-S9280 后重启：
+
+| 指标 | 修复前 | 修复后 |
+|---|---|---|
+| 页面标题 | （空） | 关闭lightrag部署 — DeepSeek Harness |
+| 页面内容 | 401 文本 | 真实会话 + 侧栏 + 输入区 |
+| 事件流 | 每 60s 报错 | 已连接、已就绪 |
+| 401 | 持续 | 无 |
+
+### 教训
+
+- **「抓到了」不等于「抓对了」**：只看长度的校验会把过期凭据放过去。凭据类的东西应当校验来源的新鲜度
+  （这里用的是「按文件 mtime 取最新」），而不是只看形状。
+- **错误响应体是「合法的页面形状」**：凡是用「URL/形状」判断成功的判据，都要问一句「错误响应会不会也长这样」。
+- **release 包的 logcat 看不到 `DiagLog`**（它写私有目录 `files/diag.log`）。这次排查靠的是
+  `run-as` 拉那个文件 —— 这条通道值得记住。
