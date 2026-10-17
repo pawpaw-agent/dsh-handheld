@@ -111,6 +111,19 @@ metadata 版本 ≤ 编译器可读上限）。
 
 ## 移动端界面适配
 
+> **决定（2026-10-18）：本项目不做任何注入，页面交给 dsh 原版。**
+>
+> 手机端不注入、不补样式、不改 dsh 前端产物。App 的职责只有：连上隧道 + 显示官方页面。
+> 因此 `tools/` 里的两个「补丁」工具（生成器与失效守卫）**保留作研究记录，但不再使用**；
+> 与之配套的补丁文件已删除。
+>
+> 宿主在窄屏上的适配问题**应报给上游**，而不是在本地打补丁 —— 那条路本项目走过两次
+> （2026-09-25 移除、2026-10-08 以纯注入恢复、2026-10-15 再次整体移除），结论是成本大于收益：
+> 宿主一升级类名哈希就变，补丁静默失效，且只能靠真机发现。
+>
+> 已记录的上游问题与建议见 [docs/upstream-issue-narrow-sidebar.md](docs/upstream-issue-narrow-sidebar.md)。
+> 手机端实测方法与基线数据仍有效（`tools/mobile-audit.mjs`），用途是**取证报上游**，不是本地修。
+
 **2026-10-15 起本仓库不再注入任何东西 —— 页面适配层已整体移除。**
 
 ### 移除的是什么
@@ -176,8 +189,8 @@ scripts/                       # dropbear 交叉编译、隧道校验、API 推�
 tools/                         # 手机端可用性工具（见 docs/known-issues.md 第二十一节）
   mobile-audit.mjs             # 真机审计：连 WebView 的 CDP，量触控目标/竖向预算/溢出
   verify-audit-expr.mjs        # 离线校验上面那个页面内表达式（设备不在也能验）
-  gen-mobile-touch-patch.py    # 生成/应用/还原移动端触控补丁（--apply / --revert）
-  check-mobile-patch.mjs       # 补丁守卫：dsh 升级导致补丁静默失效时报警（带 --selftest）
+  gen-mobile-touch-patch.py    # 【保留不再使用】曾经的样式补丁生成器
+  check-mobile-patch.mjs       # 【保留不再使用】曾经的补丁失效守卫
 docs/                          # 已知问题、发布说明；docs/archive/ 是已移除模块的历史记录
 .github/workflows/ci.yml       # dbclient → 契约与一致性门禁 → 构建并校验 release APK
 ```
