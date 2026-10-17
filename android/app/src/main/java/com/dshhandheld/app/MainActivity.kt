@@ -258,6 +258,20 @@ class MainActivity : Activity() {
 
     /** 401 时是否已尝试过回退干净 URL（防重复回退循环；每次 connectWeb 重置）。 */
     private var unauthorizedCleanTried = false
+
+    /**
+     * 最近一次**主框架**响应是不是认证失败（401）。
+     *
+     * 为什么需要它：401 的错误响应体也是一张「http 且不带 ?token= 的页面」，
+     * [onPageFinished] 原先只看 URL 形状，会把这张错误页误判成「正式页面加载完成」
+     * 而置 `sshTokenAck = true` —— 一旦置上，token 交换被永久跳过，页面只能一直 401，
+     * 且用户必须杀进程重开才有机会恢复（2026-10-18 真机踩到）。
+     *
+     * 与 [navFailed] 的区别：那个被 onPageStarted 清掉（导航一开始就清），
+     * 而 401 回退重试恰好是「清掉 → 又 401 → onPageFinished」，所以那个标记靠不住。
+     * 这个只在**明确收到主框架 401** 时置位、只在 [connectWeb] 里重置。
+     */
+    private var mainFrameAuthFailed = false
     private lateinit var prefs: android.content.SharedPreferences
 
     // ── 生命周期契约：本实例排的工作不得活在实例之外 ──────────────────────
@@ -626,7 +640,11 @@ class MainActivity : Activity() {
                     // 只对 http(s) 正式页面置 ack：about:blank 等内部加载不能污染状态
                     //（1.5.2 断开连接加载 about:blank 会把 ack 误置 true → 省掉 token 交换 → 401）。
                     val u = webView?.url
-                    if (u?.startsWith("http") == true && !u.contains("?token=")) {
+                    // ⚠️ 认证失败优先判：401 的响应体也是一张「http 且无 ?token= 的页面」，
+                    // 只看 URL 形状会把它当成认证成功（见 mainFrameAuthFailed 注释）。
+                    if (mainFrameAuthFailed) {
+                        DiagLog.w(TAG, "onPageFinished: 主框架 401，不置 ack url=$u")
+                    } else if (u?.startsWith("http") == true && !u.contains("?token=")) {
                         sshTokenAck = true
                         DiagLog.i(TAG, "onPageFinished: 正式页面加载完成 → ack=true url=$u")
                         guideLine(3, "③ 打开 dsh 网页 ✓ 已打开", state = false)
@@ -635,9 +653,11 @@ class MainActivity : Activity() {
                         DiagLog.i(TAG, "onPageFinished: 非正式页面，不置 ack url=$u")
                     }
                     // 只在**这一次导航没失败**时隐藏（审计 M3）：否则错误响应一结束就把
-                    // 刚弹出的令牌页/错误页自己盖掉。
-                    if (!navFailed) hideErrorPage()
-                    else DiagLog.i(TAG, "onPageFinished: 这次导航失败过，保留覆盖层")
+                    // 刚弹出的令牌页/错误页自己盖掉。认证失败同样要保留覆盖层，
+                    // 否则刚弹出的「需要访问令牌」会被自己盖掉（2026-10-18 真机现象）。
+                    if (!navFailed && !mainFrameAuthFailed) hideErrorPage()
+                    else DiagLog.i(TAG, "onPageFinished: 导航失败或认证失败，保留覆盖层 " +
+                        "(navFailed=$navFailed authFailed=$mainFrameAuthFailed)")
                 }
                 /**
                  * 页面里点了个**非隧道**的链接（没有走 `_blank` 的那种）：别把壳导航走 ——
@@ -670,6 +690,9 @@ class MainActivity : Activity() {
                         DiagLog.w(TAG, "onReceivedHttpError: HTTP $code url=${request.url} " +
                             "reason=${resp?.reasonPhrase}")
                         if (code == 401) {
+                            // 记下来给 onPageFinished 用：401 的响应体同样是「http 且无 token」的
+                            // 页面，不记就会把错误页当成认证成功（见 mainFrameAuthFailed 注释）。
+                            mainFrameAuthFailed = true
                             handleUnauthorized(view)
                         } else {
                             showErrorPage("HTTP $code")
@@ -1985,22 +2008,34 @@ class MainActivity : Activity() {
         // SSH 非交互会话通常没有 XDG_RUNTIME_DIR，而 journalctl --user 依赖它
         // 定位用户会话的 systemd 实例 —— 显式导出（UID 1000 为主流桌面/服务器用户）。
         val xdg = "export XDG_RUNTIME_DIR=/run/user/$(id -u 2>/dev/null || echo 1000); "
+        // ── 候选顺序的依据（2026-10-18 真机踩到后重排）──
+        //
+        // 原来是 journal 优先、文件兜底，结果是**拿到过期 token**：dsh web 由手动脚本
+        // 重启时，新 token 只写进 `~/.dsh/run/web-<时间戳>.log`，**不进 journald**；
+        // 而 journal 里还留着上一次（systemd 启的）那条旧 token。两串 token 长度都是 43，
+        // 于是 `length >= 40` 的校验照样通过，App 拿着过期 token 一直 401。
+        //
+        // 现在改成**文件优先**（文件里的 token 是最近一次启动写的，最新），journal 降到兜底。
         // 实测教训（树莓派）：部分宿主 user journal 不在（journalctl --user 报
         // No journal files），但 system journal 可按 _SYSTEMD_USER_UNIT 过滤。
-        // 候选顺序：user-unit → system-unit 过滤 → 全量 user → 全量 system → 日志文件。
         val commands = arrayOf(
-            // 候选 1：system journal 按用户单元过滤（user journal 缺失时仍可用）
+            // 候选 1：dsh web 的运行日志目录（**当前版本的实际位置**）——按修改时间取最新那个，
+            // 这样「多次重启过」也能拿到最后一次的 token，而不是某个随机顺序的最后一个。
+            "find ~/.dsh/run -maxdepth 1 -name 'web-*.log' -printf '%T@ %p\\n' 2>/dev/null " +
+                "| sort -rn | head -1 | cut -d' ' -f2- | xargs -r grep -oE 'token=[A-Za-z0-9_-]+' " +
+                "2>/dev/null | tail -1 | cut -d= -f2",
+            // 候选 2：常见日志文件（老版本 / 其它手动部署写法）
+            "for f in ~/.dsh/web.log ~/.dsh/web_log ~/.dsh/dsh-web.log; do " +
+                "grep -oE 'token=[A-Za-z0-9_-]+' \"\$f\" 2>/dev/null; done | tail -1 | cut -d= -f2",
+            // 候选 3：system journal 按用户单元过滤（systemd 部署常见；可能落后于文件）
             "$xdg journalctl _SYSTEMD_USER_UNIT=dsh-web.service -n 200 --no-pager 2>/dev/null " +
                 "| grep -oE 'token=[A-Za-z0-9_-]+' | tail -1 | cut -d= -f2",
-            // 候选 2：dsh-web service（systemd user unit，常见部署）
+            // 候选 4：dsh-web service（systemd user unit）
             "$xdg journalctl --user -u dsh-web.service -n 200 --no-pager 2>/dev/null " +
                 "| grep -oE 'token=[A-Za-z0-9_-]+' | tail -1 | cut -d= -f2",
-            // 候选 3：全量 system journal 找 dsh（Unit 名不同/非 systemd 时兜底）
+            // 候选 5：全量 system journal 找 dsh（Unit 名不同/非 systemd 时兜底）
             "journalctl -n 500 --no-pager 2>/dev/null " +
-                "| grep -oE 'token=[A-Za-z0-9_-]+' | tail -1 | cut -d= -f2",
-            // 候选 4：常见日志文件（手动 nohup 等部署）
-            "for f in ~/.dsh/web.log ~/.dsh/web_log ~/.dsh/dsh-web.log; do " +
-                "grep -oE 'token=[A-Za-z0-9_-]+' \"\$f\" 2>/dev/null; done | tail -1 | cut -d= -f2"
+                "| grep -oE 'token=[A-Za-z0-9_-]+' | tail -1 | cut -d= -f2"
         )
         for ((i, cmd) in commands.withIndex()) {
             val out = tunnel.execOnce(cmd)
@@ -2031,6 +2066,7 @@ class MainActivity : Activity() {
         if (switchScreen) showScreen(Screen.WEB)
         lastUrl = url
         unauthorizedCleanTried = false
+        mainFrameAuthFailed = false
         // 重试路径**不重置预算**（审计 H6）：原先每次调用都重置回 3，而重试正是通过调用它
         // 实现的 → 计数器恒为 3，「3 次余量」永不生效，页面每 5s 无限重载。
         if (!retry) loadRetriesLeft = 3
