@@ -2384,3 +2384,64 @@ CI 单测 + APK 构建全绿，装到 SM-S9280 后重启：
 第二十二节的修复解决了「把它盖掉」的那条路径（`hideErrorPage` 不再在认证失败时执行），
 按代码推演应当显示；但**没有实测到它显示**（当前 token 正常，构造 401 需要改服务端状态）。
 这条如实留作未验证。
+
+---
+
+## 第二十五节：401 第二次复发 —— token 落在哪儿取决于 dsh web 怎么启动（2026-10-23）
+
+**现象**：手机又打不开网页，`contentType: text/plain`、`els=5`、正文就是那行 401 英文。
+
+### 关键事实：介质跟着「启动方式」走
+
+| 启动方式 | token 写到哪儿 |
+|---|---|
+| 手动脚本（`nohup` / 自己的 restart 脚本） | 只写到 `~/.dsh/run/web-<时间戳>.log` |
+| **systemd**（`systemctl --user start dsh-web`） | **只写到 journald** |
+
+两次故障恰好是**同一类错误的两个方向**：
+
+| 日期 | 当时的部署 | 我在代码里认定的优先级 | 结果 |
+|---|---|---|---|
+| 2026-10-18 | 手动脚本启 | journal 优先 | 文件里是新 token → **拿到过期** |
+| 2026-10-23 | systemd 启（`ActiveEnterTimestamp` = 10-23 00:17:54） | 文件优先（我上次改的） | journal 里是新 token → **又拿到过期** |
+
+**两次 token 长度都是 43**，所以 `length >= 40` 的形状校验一次都没拦住。
+
+### 结论：不该赌「哪个来源优先」
+
+改成**收集候选 + 逐个向服务端验证**：`?token=` 返回 303/200 才采用。
+验证是安全的 —— 实测同一 token 连续两次请求都是 303，验证不会把它用掉。
+
+### 中间还踩了一个坑（值得记）
+
+第一版验证代码收集了 **12 个候选全 401**。原因：journal 的 token 按**时间正序**输出，
+最新那条在**最后**，而 Kotlin 侧 `take(12)` 在到达它之前就截断了 —— 验证机制没机会救场。
+
+修法：每个来源只取**最新几条**（journal `tail -2`、运行日志各取最后 1 条），
+并把 systemd 的 journal 提到最前。裸环境实测：5~7 个候选，有效 token 出现在 **#0 或 #1**，
+即第 1~2 个就被采用。
+
+### 真机验证
+
+```
+autoFetchToken: 收集到 5 个候选
+autoFetchToken: 候选#0 验证=401 跳过        ← 过期 token
+autoFetchToken: 候选#1 验证=303 接受        ← 服务端现在认的那个
+autoFetchToken: SUCCESS（已验证）len=43
+connectWeb: ack=false tokenLen=43 needsToken=true
+onPageFinished: 正式页面加载完成 → ack=true
+```
+
+页面完整渲染：标题 `GitHub 与 SSH 及手机浏览器调试 — DeepSeek Harness`、
+`sidebar=true`、`composer=true`、DOM 元素 **5485** 个。
+
+### 一个顺带得到的教训（排查方法）
+
+排查时容易误判：`adb exec-out screencap` 拍到的是**手机当前前台 App**，
+当时前台是抖音，于是看到封面就以为「页面正常」。所以看页面状态要区分三件事：
+
+1. **WebView DOM**（CDP 读）—— 页面自己渲染成什么样；
+2. **前台 Activity**（`dumpsys activity activities`）—— 用户眼前到底是哪个 App；
+3. **WebView 是否被节流**（App 退到后台会 `pauseTimers`，DOM 会停在半渲染状态）。
+
+这次三者都对上之后才得到可信结论。
