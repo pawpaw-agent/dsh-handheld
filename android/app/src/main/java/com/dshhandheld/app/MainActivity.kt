@@ -2025,20 +2025,25 @@ class MainActivity : Activity() {
         // SSH 非交互会话通常没有 XDG_RUNTIME_DIR，而 journalctl --user 依赖它
         // 定位用户会话的 systemd 实例 —— 显式导出（UID 1000 为主流桌面/服务器用户）。
         val xdg = "export XDG_RUNTIME_DIR=/run/user/$(id -u 2>/dev/null || echo 1000); "
-        // 收集：运行日志（按 mtime 新→旧）+ 老路径 + 三路 journal。刻意不截断，
-        // 由下面的验证来筛 —— 截断会把有效 token 切掉（2026-10-23 就踩过：
-        // sort -u 是字母序，head -6 之后有效 token 根本不在里面）。
+        // 收集：**每个来源取最新几条**（不是全部）。关键教训（2026-10-23 第二次踩到）：
+        // 早先这里不截断、把 journal 的全部 token 按时间正序都吐出来，再在 Kotlin 侧
+        // `take(12)` —— 而**最新的那一条排在最后**，还没来得及验证就被截掉了，
+        // 于是 12 个候选全是历史 token、全 401。现在改成「每个来源 tail 取最新」，
+        // 并把 systemd 的 journal 放最前（当前部署就是 systemd 起的）。
         val collect = xdg +
             "{ " +
-            "ls -t ~/.dsh/run/web-*.log 2>/dev/null | head -5 | while read f; do " +
+            // 1) system journal 按用户单元过滤 —— systemd 部署下最新 token 的落点
+            "journalctl _SYSTEMD_USER_UNIT=dsh-web.service -n 400 --no-pager 2>/dev/null " +
+            "| grep -oE 'token=[A-Za-z0-9_-]+' | tail -2; " +
+            "journalctl --user -u dsh-web.service -n 400 --no-pager 2>/dev/null " +
+            "| grep -oE 'token=[A-Za-z0-9_-]+' | tail -2; " +
+            "journalctl -n 500 --no-pager 2>/dev/null | grep -oE 'token=[A-Za-z0-9_-]+' | tail -2; " +
+            // 2) 手动脚本部署：运行日志按 mtime 新→旧，各取最后一条
+            "ls -t ~/.dsh/run/web-*.log 2>/dev/null | head -3 | while read f; do " +
             "grep -hoE 'token=[A-Za-z0-9_-]+' \"\$f\" 2>/dev/null | tail -1; done; " +
+            // 3) 老路径兜底
             "for f in ~/.dsh/web.log ~/.dsh/web_log ~/.dsh/dsh-web.log; do " +
             "grep -hoE 'token=[A-Za-z0-9_-]+' \"\$f\" 2>/dev/null | tail -1; done; " +
-            "journalctl _SYSTEMD_USER_UNIT=dsh-web.service -n 400 --no-pager 2>/dev/null " +
-            "| grep -oE 'token=[A-Za-z0-9_-]+'; " +
-            "journalctl --user -u dsh-web.service -n 400 --no-pager 2>/dev/null " +
-            "| grep -oE 'token=[A-Za-z0-9_-]+'; " +
-            "journalctl -n 500 --no-pager 2>/dev/null | grep -oE 'token=[A-Za-z0-9_-]+'; " +
             "} | sed 's/^token=//' | awk 'length >= 40'"
         val raw = tunnel.execOnce(collect)
         val candidates = raw?.split("\n")
