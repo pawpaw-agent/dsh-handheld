@@ -579,6 +579,14 @@ class MainActivity : Activity() {
 
         const val PREF_SERVER_TOKEN = "server_token" // dsh 0.1.2+ 一次性启动 token（服务重启后自动更新）
 
+        /**
+         * 自动抓取 token 时最多验证多少个候选。
+         *
+         * 候选来自「运行日志 + 老路径 + 三路 journal」，历史重启越多候选越多；
+         * 每个候选要回环 curl 验证一次（~10ms），12 个已在 100ms 量级，够用且不至于拖慢连接。
+         */
+        private const val MAX_TOKEN_CANDIDATES = 12
+
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -2000,56 +2008,72 @@ class MainActivity : Activity() {
      * 用户不再需要手输。失败（服务端无 journald/Unit 名不同等）时静默
      * 返回 null，连接流程回退到已存/手输 token。
      *
-     * 命令选择：优先 user unit；兜底全量 user journal（2 个候选，都会试）。
-     * 只认 `?token=` 后 base64url 字符（服务重启后旧 token 行仍在日志里，
-     * 取最后一行 = 当前进程的 token）。
+     * 命令选择（2026-10-23 改为「收集候选 + 逐个验证」）：
+     *
+     * 不再赌「哪个来源优先」—— token 落在哪儿取决于 dsh web 是**怎么启动的**：
+     *   - 手动脚本启（nohup / 自己的 restart 脚本）→ 只写进 ~/.dsh/run/web-<时间戳>.log；
+     *   - systemd 启（systemctl --user start dsh-web）→ 只写进 journald。
+     * 两种都真实发生过：2026-10-18 是「文件新、journal 旧」，2026-10-23 反了过来
+     * （journal 新、文件停在 4 天前）。任何固定优先级都会在某一种部署上拿到过期 token，
+     * 而两串 token 长度都是 43，`length >= 40` 的校验拦不住。
+     *
+     * 现在的做法：把各来源的 token 全收集起来，逐个向服务端验证，用第一个被接受的。
+     * 验证走 curl（token 可重复使用 —— 实测同一 token 连续两次都 303，验证不会把它用掉）。
+     * 全部验证失败时回退到第一个候选（保持旧行为，并留日志）。
      */
     private fun autoFetchToken(tunnel: SshTunnel): String? {
         // SSH 非交互会话通常没有 XDG_RUNTIME_DIR，而 journalctl --user 依赖它
         // 定位用户会话的 systemd 实例 —— 显式导出（UID 1000 为主流桌面/服务器用户）。
         val xdg = "export XDG_RUNTIME_DIR=/run/user/$(id -u 2>/dev/null || echo 1000); "
-        // ── 候选顺序的依据（2026-10-18 真机踩到后重排）──
-        //
-        // 原来是 journal 优先、文件兜底，结果是**拿到过期 token**：dsh web 由手动脚本
-        // 重启时，新 token 只写进 `~/.dsh/run/web-<时间戳>.log`，**不进 journald**；
-        // 而 journal 里还留着上一次（systemd 启的）那条旧 token。两串 token 长度都是 43，
-        // 于是 `length >= 40` 的校验照样通过，App 拿着过期 token 一直 401。
-        //
-        // 现在改成**文件优先**（文件里的 token 是最近一次启动写的，最新），journal 降到兜底。
-        // 实测教训（树莓派）：部分宿主 user journal 不在（journalctl --user 报
-        // No journal files），但 system journal 可按 _SYSTEMD_USER_UNIT 过滤。
-        val commands = arrayOf(
-            // 候选 1：dsh web 的运行日志目录（**当前版本的实际位置**）——按修改时间取最新那个，
-            // 这样「多次重启过」也能拿到最后一次的 token，而不是某个随机顺序的最后一个。
-            "find ~/.dsh/run -maxdepth 1 -name 'web-*.log' -printf '%T@ %p\\n' 2>/dev/null " +
-                "| sort -rn | head -1 | cut -d' ' -f2- | xargs -r grep -oE 'token=[A-Za-z0-9_-]+' " +
-                "2>/dev/null | tail -1 | cut -d= -f2",
-            // 候选 2：常见日志文件（老版本 / 其它手动部署写法）
+        // 收集：运行日志（按 mtime 新→旧）+ 老路径 + 三路 journal。刻意不截断，
+        // 由下面的验证来筛 —— 截断会把有效 token 切掉（2026-10-23 就踩过：
+        // sort -u 是字母序，head -6 之后有效 token 根本不在里面）。
+        val collect = xdg +
+            "{ " +
+            "ls -t ~/.dsh/run/web-*.log 2>/dev/null | head -5 | while read f; do " +
+            "grep -hoE 'token=[A-Za-z0-9_-]+' \"\$f\" 2>/dev/null | tail -1; done; " +
             "for f in ~/.dsh/web.log ~/.dsh/web_log ~/.dsh/dsh-web.log; do " +
-                "grep -oE 'token=[A-Za-z0-9_-]+' \"\$f\" 2>/dev/null; done | tail -1 | cut -d= -f2",
-            // 候选 3：system journal 按用户单元过滤（systemd 部署常见；可能落后于文件）
-            "$xdg journalctl _SYSTEMD_USER_UNIT=dsh-web.service -n 200 --no-pager 2>/dev/null " +
-                "| grep -oE 'token=[A-Za-z0-9_-]+' | tail -1 | cut -d= -f2",
-            // 候选 4：dsh-web service（systemd user unit）
-            "$xdg journalctl --user -u dsh-web.service -n 200 --no-pager 2>/dev/null " +
-                "| grep -oE 'token=[A-Za-z0-9_-]+' | tail -1 | cut -d= -f2",
-            // 候选 5：全量 system journal 找 dsh（Unit 名不同/非 systemd 时兜底）
-            "journalctl -n 500 --no-pager 2>/dev/null " +
-                "| grep -oE 'token=[A-Za-z0-9_-]+' | tail -1 | cut -d= -f2"
-        )
-        for ((i, cmd) in commands.withIndex()) {
-            val out = tunnel.execOnce(cmd)
-            DiagLog.i(TAG, "autoFetchToken: cmd#$i rc=${if (out == null) "null" else "len=" + out.length}")
-            val token = out?.trim()
-            if (!token.isNullOrEmpty() && token.length >= 40) {
-                // 只记长度：令牌前缀本身也是凭据（此前记了 take(8)，等于往 logcat 写半个口令）
-                DiagLog.i(TAG, "autoFetchToken: SUCCESS len=${token.length}")
-                SecurePrefs.putString(prefs, PREF_SERVER_TOKEN, token)
-                return token
+            "grep -hoE 'token=[A-Za-z0-9_-]+' \"\$f\" 2>/dev/null | tail -1; done; " +
+            "journalctl _SYSTEMD_USER_UNIT=dsh-web.service -n 400 --no-pager 2>/dev/null " +
+            "| grep -oE 'token=[A-Za-z0-9_-]+'; " +
+            "journalctl --user -u dsh-web.service -n 400 --no-pager 2>/dev/null " +
+            "| grep -oE 'token=[A-Za-z0-9_-]+'; " +
+            "journalctl -n 500 --no-pager 2>/dev/null | grep -oE 'token=[A-Za-z0-9_-]+'; " +
+            "} | sed 's/^token=//' | awk 'length >= 40'"
+        val raw = tunnel.execOnce(collect)
+        val candidates = raw?.split("\n")
+            ?.map { it.trim() }
+            ?.filter { it.length >= 40 }
+            ?.distinct()
+            ?.take(MAX_TOKEN_CANDIDATES)
+            .orEmpty()
+        DiagLog.i(TAG, "autoFetchToken: 收集到 ${candidates.size} 个候选")
+        if (candidates.isEmpty()) {
+            DiagLog.w(TAG, "autoFetchToken: 无候选；fall back to manual token")
+            return null
+        }
+        // 验证：哪个 token 服务端认。只记序号与状态码，不记 token 本身。
+        val remotePort = SshConfig.load(prefs)?.remotePort ?: SshConfig.DEFAULT_REMOTE_PORT
+        for ((i, tok) in candidates.withIndex()) {
+            val code = tunnel.execOnce(
+                "curl -s -o /dev/null -w '%{http_code}' --max-time 6 " +
+                    "'http://127.0.0.1:$remotePort/?token=$tok' 2>/dev/null"
+            )?.trim()
+            val accepted = code == "303" || code == "200"
+            DiagLog.i(TAG, "autoFetchToken: 候选#$i 验证=${code ?: "null"} ${if (accepted) "接受" else "跳过"}")
+            if (accepted) {
+                // 只记长度：令牌前缀本身也是凭据
+                DiagLog.i(TAG, "autoFetchToken: SUCCESS（已验证）len=${tok.length}")
+                SecurePrefs.putString(prefs, PREF_SERVER_TOKEN, tok)
+                return tok
             }
         }
-        DiagLog.w(TAG, "autoFetchToken: all commands failed/long-empty; fall back to manual token")
-        return null
+        // 全都验证不过 —— 可能是自定义部署（日志里拿不到 token），回退首个候选让流程照旧走；
+        // 真拿不到就由 401 的令牌提示页兜底。
+        val fallback = candidates.first()
+        DiagLog.w(TAG, "autoFetchToken: 无一验证通过，回退首候选 len=${fallback.length}")
+        SecurePrefs.putString(prefs, PREF_SERVER_TOKEN, fallback)
+        return fallback
     }
 
     /**
