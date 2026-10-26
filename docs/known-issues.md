@@ -2445,3 +2445,69 @@ onPageFinished: 正式页面加载完成 → ack=true
 3. **WebView 是否被节流**（App 退到后台会 `pauseTimers`，DOM 会停在半渲染状态）。
 
 这次三者都对上之后才得到可信结论。
+
+---
+
+## 第二十六节：401 第三次复发 —— journal 查询窗口把 token 行挤出了（2026-10-26）
+
+**现象**：又报「获取令牌不行」。手机装的是 10-23 的「收集 + 验证」版，机制本身在跑，
+但日志显示：
+
+```
+autoFetchToken: 收集到 3 个候选
+autoFetchToken: 候选#0 验证=401 跳过
+autoFetchToken: 候选#1 验证=401 跳过
+autoFetchToken: 候选#2 验证=401 跳过
+autoFetchToken: 无一验证通过，回退首候选
+```
+
+**根因**：`dsh-web.service` 的 unit journal 当时共 **568 行**，而查询窗口写的是 `-n 400`。
+
+token 是**进程启动时**写的那一条，之后 dsh 还会持续写日志（模型列表、请求等）。
+日志一多，启动那行就被挤出「最后 400 行」的窗口 —— 于是**三条 journal 分支全部返回空**，
+候选只剩 `~/.dsh/run/` 里那 3 个过期文件 token。
+
+实测对比（裸环境，模拟 SSH 非交互会话）：
+
+| 查询方式 | 结果 |
+|---|---|
+| `journalctl _SYSTEMD_USER_UNIT=dsh-web.service -n 400` | **空** |
+| `journalctl _SYSTEMD_USER_UNIT=dsh-web.service`（不设窗口） | `nhiu6nud…` / `WQdiyQ2I…` |
+| `-n 20000` | 同上 |
+
+其中 `WQdiyQ2I…` 经 curl 验证返回 **303**，就是当前进程的 token。
+
+**修法**：窗口 `-n 400` / `-n 500` → `-n 20000`。按 unit 过滤后 journal 本身很小，全扫也不慢。
+
+**真机验证**：
+
+```
+autoFetchToken: 收集到 5 个候选
+autoFetchToken: 候选#0 验证=401 跳过
+autoFetchToken: 候选#1 验证=303 接受
+autoFetchToken: SUCCESS（已验证）len=43
+onPageFinished: 正式页面加载完成 → ack=true
+```
+
+页面完整渲染：6723 个 DOM 元素、`sidebar=true`、`composer=true`。
+
+### 三次复发的共同模式（值得总结）
+
+| 次 | 日期 | 断在哪 | 教训 |
+|---|---|---|---|
+| 1 | 10-18 | **来源优先级**（journal 优先，但 token 在文件里） | 别赌来源 |
+| 2 | 10-23 | **来源优先级**（文件优先，但 token 在 journal 里） | 别赌来源 → 改成收集+验证 |
+| 3 | 10-26 | **查询窗口**（journal 里有，但被窗口挤出） | 「查了」不等于「查到了」 |
+
+三次都不是「认证逻辑错了」，而是「**取 token 的这一段**在某个部署形态下看不到 token」。
+而三次的症状完全一样（同一个 401 文本），所以**每次都得看 `diag.log` 里那几行
+`autoFetchToken: 候选#N 验证=...` 才能分辨**断在哪一环。
+
+这条日志（每个候选的验证状态码）是 10-23 加的，现在成了最有价值的诊断信息 ——
+如果没有它，这次只会看到「全 401」，无法判断是「没收集到」还是「收集到但都不对」。
+
+### 仍未解决的体感问题
+
+`autoFetchToken` 最坏要走完所有候选（每个一次 curl，约 300ms），本次实测
+从启动到页面完成 `09:49:38 → 09:49:52` = **14 秒**（含 SSH 拨号与页面加载）。
+这个耗时只在「token 失效后首次连接」时出现，日常冷启动仍是 ~1s（见第二十四节）。
