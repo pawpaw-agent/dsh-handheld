@@ -40,6 +40,12 @@ check("systemd 部署：journalctl 按 user unit 过滤", "_SYSTEMD_USER_UNIT=ds
 check("systemd 部署：journalctl --user -u", "journalctl --user -u dsh-web.service" in fn)
 check("老路径仍保留", "~/.dsh/web.log" in fn)
 check("按 mtime 取新（ls -t）", "ls -t" in fn)
+# 2026-10-26 真机踩到：unit 共 568 行而窗口是 -n 400，启动时的 token 行被挤出窗口，
+# 三条 journal 分支全空 => 候选只剩文件里的旧 token。窗口必须够大。
+check("journal 窗口够大（token 行不被挤出）", "n 20000" in fn)
+# 只看**实际命令**（带 --no-pager），避免被注释里提到的历史数字误伤
+check("未退回 -n 400/500 小窗口",
+      ("-n 400 --no-pager" not in fn) and ("-n 500 --no-pager" not in fn))
 
 print()
 print("=== 验证：核心防线 ===")

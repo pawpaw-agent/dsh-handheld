@@ -2032,12 +2032,17 @@ class MainActivity : Activity() {
         // 并把 systemd 的 journal 放最前（当前部署就是 systemd 起的）。
         val collect = xdg +
             "{ " +
-            // 1) system journal 按用户单元过滤 —— systemd 部署下最新 token 的落点
-            "journalctl _SYSTEMD_USER_UNIT=dsh-web.service -n 400 --no-pager 2>/dev/null " +
+            // 1) system journal 按用户单元过滤 —— systemd 部署下最新 token 的落点。
+            //
+            //    ⚠️ 窗口必须够大：token 行是**进程启动时**写的那一条，之后 dsh 还会写很多
+            //    日志。2026-10-26 真机踩到：该 unit 当时共 568 行，而这里是 -n 400 ——
+            //    启动那行正好被挤到窗口外，三条 journal 分支**全空**，候选只剩文件里的
+            //    旧 token（3 个全 401）。按 unit 过滤后 journal 本身很小，宁可窗口开大。
+            "journalctl _SYSTEMD_USER_UNIT=dsh-web.service -n 20000 --no-pager 2>/dev/null " +
             "| grep -oE 'token=[A-Za-z0-9_-]+' | tail -2; " +
-            "journalctl --user -u dsh-web.service -n 400 --no-pager 2>/dev/null " +
+            "journalctl --user -u dsh-web.service -n 20000 --no-pager 2>/dev/null " +
             "| grep -oE 'token=[A-Za-z0-9_-]+' | tail -2; " +
-            "journalctl -n 500 --no-pager 2>/dev/null | grep -oE 'token=[A-Za-z0-9_-]+' | tail -2; " +
+            "journalctl -n 20000 --no-pager 2>/dev/null | grep -oE 'token=[A-Za-z0-9_-]+' | tail -2; " +
             // 2) 手动脚本部署：运行日志按 mtime 新→旧，各取最后一条
             "ls -t ~/.dsh/run/web-*.log 2>/dev/null | head -3 | while read f; do " +
             "grep -hoE 'token=[A-Za-z0-9_-]+' \"\$f\" 2>/dev/null | tail -1; done; " +
