@@ -119,6 +119,11 @@ if os.path.exists(kt):
           "setInitialScale(" not in code)
     check("不再用 zoomBy() 做缩小（page scale 会被钳制）", "zoomBy(" not in code)
     check("用视图级缩放（scaleX/scaleY）", ("scaleX = scale" in code) and ("scaleY = scale" in code))
+    # 默认路径必须是「最简单」的那条：只缩字号。视图级缩放属于可选项，
+    # 否则每加一个显示偏好都要动布局，风险与收益不成比例。
+    check("默认走 setTextZoom（一行方案）", "textZoom = pct" in code)
+    check("布局缩放由开关控制（默认关）",
+          ("PREF_WEB_ZOOM_LAYOUT" in code) and ("layoutZoomEnabled()" in code))
     m = re.search(r"DEFAULT_WEB_ZOOM_PCT\s*=\s*(\d+)", code)
     if m:
         val = int(m.group(1))

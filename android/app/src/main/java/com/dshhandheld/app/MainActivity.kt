@@ -523,6 +523,16 @@ class MainActivity : Activity() {
         const val PREF_WEB_ZOOM = "web_zoom_pct"
         const val DEFAULT_WEB_ZOOM_PCT = 75
 
+        /**
+         * 是否连**布局**一起缩放（默认关）。
+         *
+         * 关（默认）：只用 [android.webkit.WebSettings.setTextZoom] 缩放字号 —— 一行代码、
+         *   零风险，且不受 page scale 钳制影响。代价是图标/间距/列宽不变，布局仍是 384 px。
+         * 开：额外做视图级缩放（布局放到 1/scale 再整体缩），于是 CSS 视口变宽
+         *   （0.75 → 512），列也一起变宽 —— 「看到更多内容」的效果更强，但改动更重。
+         */
+        const val PREF_WEB_ZOOM_LAYOUT = "web_zoom_layout"
+
         // 配色与尺寸基元集中在 UiKit（此前 MainActivity / TuiActivity 各定义一份）。
         // 保留这些别名是为了让 60 余处调用点不必改动；定义只有一处。
         const val COL_BG = UiKit.BG
@@ -692,7 +702,10 @@ class MainActivity : Activity() {
                     else DiagLog.i(TAG, "onPageFinished: 导航失败或认证失败，保留覆盖层 " +
                         "(navFailed=$navFailed authFailed=$mainFrameAuthFailed)")
                     // 页面切换后重新套一次显示缩放（root 尺寸/子 view 布局可能变过）
-                    if (u?.startsWith("http") == true) applyWebScale()
+                    if (u?.startsWith("http") == true) {
+                        applyTextZoom()
+                        applyWebScale()
+                    }
                 }
                 /**
                  * 页面里点了个**非隧道**的链接（没有走 `_blank` 的那种）：别把壳导航走 ——
@@ -909,7 +922,10 @@ class MainActivity : Activity() {
         root.addOnLayoutChangeListener { _, l, t, r, bo, ol, ot, orr, ob ->
             if (r - l != orr - ol || bo - t != ob - ot) applyWebScale()
         }
-        root.post { applyWebScale() }
+        root.post {
+            applyTextZoom()   // 默认路径：只缩字号（一行的事）
+            applyWebScale()   // 若开了「连布局一起缩放」才真正动布局
+        }
 
         // 细进度条（WebView 加载时顶部一条白线，保持沉浸、不遮挡内容）
         progressBar = ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal).apply {
@@ -2055,9 +2071,12 @@ class MainActivity : Activity() {
      * 验证走 curl（token 可重复使用 —— 实测同一 token 连续两次都 303，验证不会把它用掉）。
      * 全部验证失败时回退到第一个候选（保持旧行为，并留日志）。
      */
-    /** 当前生效的显示缩放（1.0 = 原样；0.75 = 整个页面画到 75%）。 */
-    private fun webZoomScale(): Float =
-        prefs.getInt(PREF_WEB_ZOOM, DEFAULT_WEB_ZOOM_PCT).coerceIn(50, 200) / 100f
+    /** 当前生效的缩放百分比（prefs，默认 [DEFAULT_WEB_ZOOM_PCT]）。 */
+    private fun webZoomPct(): Int =
+        prefs.getInt(PREF_WEB_ZOOM, DEFAULT_WEB_ZOOM_PCT).coerceIn(50, 200)
+
+    /** 同上，转成倍率（1.0 = 原样；0.75 = 整体画到 75%）。 */
+    private fun webZoomScale(): Float = webZoomPct() / 100f
 
     /**
      * 按 prefs 里的比例对**整个 WebView 做视图级缩放**。
@@ -2076,10 +2095,30 @@ class MainActivity : Activity() {
      *
      * 只缩放 WebView 自己：错误页/诊断页等是 root 的其它子 view，保持原尺寸。
      */
+    /** 是否启用了「连布局一起缩放」。关的时候布局保持原样，只由 textZoom 缩字号。 */
+    private fun layoutZoomEnabled(): Boolean = prefs.getBoolean(PREF_WEB_ZOOM_LAYOUT, false)
+
+    /**
+     * 把字号缩放应用到 WebView（**最简单的那个方案**，一行搞定）。
+     *
+     * 为什么不担心钳制：`setTextZoom` 改的是字号倍率，不走 page scale，
+     * 所以 2026-10-30 实测到的那条「缩小被钳制在 1.0」对它不适用。
+     * 布局缩放开启时把字号倍率放回 100，避免「字号缩一次 + 视图再缩一次」变成双重缩小。
+     */
+    private fun applyTextZoom() {
+        val wv = webView ?: return
+        val pct = if (layoutZoomEnabled()) 100 else webZoomPct()
+        if (wv.settings.textZoom != pct) {
+            wv.settings.textZoom = pct
+            DiagLog.i(TAG, "textZoom: ${pct}%")
+        }
+    }
+
     private fun applyWebScale() {
         val wv = webView ?: return
         val host = wv.parent as? ViewGroup ?: return
-        val scale = webZoomScale()
+        // 布局缩放默认关闭：只缩字号，不动布局（见 PREF_WEB_ZOOM_LAYOUT 注释）
+        val scale = if (layoutZoomEnabled()) webZoomScale() else 1f
         if (scale >= 0.999f) {
             // 100%：显式复原，避免上一次缩放残留
             if (wv.scaleX != 1f || wv.scaleY != 1f) {
