@@ -503,6 +503,17 @@ class MainActivity : Activity() {
         /** 诊断页里的「WebView 远程调试」开关（真机取证用；默认关）。 */
         const val PREF_WEBVIEW_DEBUG = "webview_debug"
 
+        /**
+         * WebView 缩放百分比（100 = 原样）。
+         *
+         * 为什么放 prefs 而不是写死：这是**显示偏好** —— 同一份页面在不同人眼里合适的大小
+         * 不同，存下来调值不必改代码重编。
+         *
+         * 默认 75：2026-10-30 用户明确要「试试 0.75」（想一屏看到更多内容）。
+         */
+        const val PREF_WEB_ZOOM = "web_zoom_pct"
+        const val DEFAULT_WEB_ZOOM_PCT = 75
+
         // 配色与尺寸基元集中在 UiKit（此前 MainActivity / TuiActivity 各定义一份）。
         // 保留这些别名是为了让 60 余处调用点不必改动；定义只有一处。
         const val COL_BG = UiKit.BG
@@ -624,9 +635,13 @@ class MainActivity : Activity() {
                 domStorageEnabled = true
                 allowFileAccess = false
                 allowContentAccess = false
-                builtInZoomControls = false
+                // 缩放：dsh 的 index.html 只写了 `width=device-width, initial-scale=1`，
+                // **没有** user-scalable=no / maximum-scale —— 所以缩放是允许的，
+                // 之前关掉纯属保守设置。打开 supportZoom 后才能用 zoomBy 落到目标比例，
+                // 同时用户也能双指缩放（按钮隐藏，避免遮挡页面）。
+                builtInZoomControls = true
                 displayZoomControls = false
-                setSupportZoom(false)
+                setSupportZoom(true)
                 loadWithOverviewMode = true
                 useWideViewPort = true
                 // dsh 用 `window.open(url, "_blank", ...)` 开外链（聊天里的链接、右栏浏览器
@@ -634,6 +649,9 @@ class MainActivity : Activity() {
                 // —— 点了没反应。开多窗口能力后由下面的 onCreateWindow 接住。
                 setSupportMultipleWindows(true)
             }
+            // 初始缩放。注意 setInitialScale 对**自带 viewport** 的页面经常不生效
+            // （dsh 就是这种），所以还要在 onPageFinished 里用 [applyWebZoom] 校正一次。
+            setInitialScale(webZoomPct())
 
             webViewClient = object : WebViewClient() {
                 override fun onPageStarted(view: WebView?, url: String?, favicon: android.graphics.Bitmap?) {
@@ -666,6 +684,8 @@ class MainActivity : Activity() {
                     if (!navFailed && !mainFrameAuthFailed) hideErrorPage()
                     else DiagLog.i(TAG, "onPageFinished: 导航失败或认证失败，保留覆盖层 " +
                         "(navFailed=$navFailed authFailed=$mainFrameAuthFailed)")
+                    // 页面加载完再校正一次缩放（setInitialScale 对自带 viewport 的页面常被忽略）
+                    if (u?.startsWith("http") == true) applyWebZoom()
                 }
                 /**
                  * 页面里点了个**非隧道**的链接（没有走 `_blank` 的那种）：别把壳导航走 ——
@@ -2021,6 +2041,30 @@ class MainActivity : Activity() {
      * 验证走 curl（token 可重复使用 —— 实测同一 token 连续两次都 303，验证不会把它用掉）。
      * 全部验证失败时回退到第一个候选（保持旧行为，并留日志）。
      */
+    /** 当前生效的 WebView 缩放百分比（prefs，默认 [DEFAULT_WEB_ZOOM_PCT]）。 */
+    private fun webZoomPct(): Int =
+        prefs.getInt(PREF_WEB_ZOOM, DEFAULT_WEB_ZOOM_PCT).coerceIn(50, 200)
+
+    /**
+     * 把页面缩放校正到 prefs 里的目标百分比。
+     *
+     * 为什么需要「校正」而不是只靠 [WebView.setInitialScale]：
+     * 那个 API 主要对**没有 viewport meta** 的页面生效，而 dsh 的 index.html 写的是
+     * `width=device-width, initial-scale=1` —— 实测初始缩放会被忽略、停在 100%。
+     * 页面加载完后按「实际 scale 与目标的差额」调 `zoomBy` 补一次，才稳定落到目标比例。
+     * （zoomBy 需要 supportZoom=true，见 WebView 设置处。）
+     */
+    private fun applyWebZoom() {
+        val wv = webView ?: return
+        val target = webZoomPct()
+        val curPct = Math.round(wv.scale * 100f)
+        if (curPct <= 0) return
+        val delta = (target - curPct) / 100f
+        if (kotlin.math.abs(delta) < 0.02f) return
+        val ok = wv.zoomBy(delta)
+        DiagLog.i(TAG, "webZoom: ${curPct}% → ${target}%（zoomBy(${delta}) ok=${ok}）")
+    }
+
     private fun autoFetchToken(tunnel: SshTunnel): String? {
         // SSH 非交互会话通常没有 XDG_RUNTIME_DIR，而 journalctl --user 依赖它
         // 定位用户会话的 systemd 实例 —— 显式导出（UID 1000 为主流桌面/服务器用户）。
