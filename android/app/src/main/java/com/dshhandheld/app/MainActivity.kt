@@ -509,10 +509,18 @@ class MainActivity : Activity() {
          * 为什么放 prefs 而不是写死：这是**显示偏好** —— 同一份页面在不同人眼里合适的大小
          * 不同，存下来调值不必改代码重编。
          *
-         * 默认 75：2026-10-30 用户明确要「试试 0.75」（想一屏看到更多内容）。
+         * ⚠️ **小于 100 在本页面上不可能生效**（2026-10-30 实测，见 known-issues 第二十七节）：
+         * dsh 的 viewport 是 `width=device-width, initial-scale=1`，Blink 会把「缩小」钳制在
+         * 适配宽度（= 1.0），只有放大（>100）才真正起作用：
+         *
+         *   请求 0.75 → 实际 1.0（钳制）   请求 1.25 → 实际 1.25
+         *
+         * 所以默认必须是 100 —— 默认给 75 只会造成「设置生效了」的错觉。
+         * 想让一屏看到更多内容，杠杆是**加宽布局视口**（useWideViewPort=false 走桌面式布局），
+         * 不是缩放比例：实测 384/512/768 宽时输入区宽度分别是 321/449/705 CSS px。
          */
         const val PREF_WEB_ZOOM = "web_zoom_pct"
-        const val DEFAULT_WEB_ZOOM_PCT = 75
+        const val DEFAULT_WEB_ZOOM_PCT = 100
 
         // 配色与尺寸基元集中在 UiKit（此前 MainActivity / TuiActivity 各定义一份）。
         // 保留这些别名是为了让 60 余处调用点不必改动；定义只有一处。

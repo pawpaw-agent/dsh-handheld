@@ -1,0 +1,91 @@
+{
+  "conditions": {
+    "mode": "chrome-engine-proxy",
+    "url": "http://127.0.0.1:3080/?token=LND0XckHipuCOoYIPK1nFK5zmzT78ydCuRMlY-fM3rQ",
+    "width": 512,
+    "height": 832,
+    "dpr": 3.75,
+    "scales": "1"
+  },
+  "page": {
+    "ready": {
+      "ready": "complete",
+      "els": 423,
+      "title": "DeepSeek Harness",
+      "ct": "text/html",
+      "bodyLen": 91
+    },
+    "info": {
+      "url": "http://127.0.0.1:3080/",
+      "title": "DeepSeek Harness",
+      "contentType": "text/html",
+      "els": 423,
+      "innerWidth": 512,
+      "dpr": 3.75,
+      "compatMode": "CSS1Compat",
+      "visualScale": 1
+    }
+  },
+  "probe": {
+    "ws": "ws://127.0.0.1:9343/devtools/page/3D74059ECA64FE7AAAC3F3BF9EA10B7A",
+    "tolerance": 0.02,
+    "emulation": {
+      "width": 512,
+      "height": 832,
+      "dpr": 3.75
+    },
+    "baseline": {
+      "innerWidth": 512,
+      "innerHeight": 832,
+      "dpr": 3.75,
+      "visualScale": 1,
+      "visualWidth": 512,
+      "scrollWidth": 512,
+      "clientWidth": 512,
+      "probeClass": "wSkVaW_composerSeat",
+      "rectCss": {
+        "x": 56,
+        "y": 317,
+        "w": 449,
+        "h": 238
+      },
+      "fontSizePx": 16,
+      "textLines": 7,
+      "textChars": 91
+    },
+    "steps": [
+      {
+        "requested": 1,
+        "actualScale": 1,
+        "deviation": 0,
+        "clamped": false,
+        "geometry": {
+          "innerWidth": 512,
+          "innerHeight": 832,
+          "dpr": 3.75,
+          "visualScale": 1,
+          "visualWidth": 512,
+          "scrollWidth": 512,
+          "clientWidth": 512,
+          "probeClass": "wSkVaW_composerSeat",
+          "rectCss": {
+            "x": 56,
+            "y": 317,
+            "w": 449,
+            "h": 238
+          },
+          "fontSizePx": 16,
+          "textLines": 7,
+          "textChars": 91
+        }
+      }
+    ],
+    "verdict": {
+      "anyClamped": false,
+      "clampedAt": [],
+      "request075Effective": null,
+      "layoutWidthChanged": false
+    }
+  },
+  "note": "本机 Chrome 引擎对照：可验证缩放语义，但 Android WebView 的钳制规则可能不同，最终需真机复核"
+}
