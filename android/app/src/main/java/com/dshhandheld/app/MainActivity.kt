@@ -509,18 +509,19 @@ class MainActivity : Activity() {
          * 为什么放 prefs 而不是写死：这是**显示偏好** —— 同一份页面在不同人眼里合适的大小
          * 不同，存下来调值不必改代码重编。
          *
-         * ⚠️ **小于 100 在本页面上不可能生效**（2026-10-30 实测，见 known-issues 第二十七节）：
-         * dsh 的 viewport 是 `width=device-width, initial-scale=1`，Blink 会把「缩小」钳制在
-         * 适配宽度（= 1.0），只有放大（>100）才真正起作用：
+         * 语义 = **显示缩放**（视图级）：75 表示整个页面画到 75%，同时把布局视口放宽，
+         * 于是「一屏看到更多内容」。见 [applyWebScale]。
          *
-         *   请求 0.75 → 实际 1.0（钳制）   请求 1.25 → 实际 1.25
+         * ⚠️ 为什么要用视图级缩放而不是 WebView 的缩放 API（2026-10-30 实测）：
+         * dsh 的 viewport 是 `width=device-width, initial-scale=1`，
+         * `setInitialScale()` 会被它覆盖，`zoomBy()` 走 page scale 又被 Blink 钳制在
+         * 适配宽度 —— 请求 0.75/0.9/0.5 全部回落到 1.0，只有放大（1.25/1.5）生效。
+         * 那两条路都做不出「小于 100%」，视图级缩放可以。
          *
-         * 所以默认必须是 100 —— 默认给 75 只会造成「设置生效了」的错觉。
-         * 想让一屏看到更多内容，杠杆是**加宽布局视口**（useWideViewPort=false 走桌面式布局），
-         * 不是缩放比例：实测 384/512/768 宽时输入区宽度分别是 321/449/705 CSS px。
+         * 默认 75：2026-10-30 用户要求「试试 0.75」。
          */
         const val PREF_WEB_ZOOM = "web_zoom_pct"
-        const val DEFAULT_WEB_ZOOM_PCT = 100
+        const val DEFAULT_WEB_ZOOM_PCT = 75
 
         // 配色与尺寸基元集中在 UiKit（此前 MainActivity / TuiActivity 各定义一份）。
         // 保留这些别名是为了让 60 余处调用点不必改动；定义只有一处。
@@ -657,9 +658,7 @@ class MainActivity : Activity() {
                 // —— 点了没反应。开多窗口能力后由下面的 onCreateWindow 接住。
                 setSupportMultipleWindows(true)
             }
-            // 初始缩放。注意 setInitialScale 对**自带 viewport** 的页面经常不生效
-            // （dsh 就是这种），所以还要在 onPageFinished 里用 [applyWebZoom] 校正一次。
-            setInitialScale(webZoomPct())
+            // 缩放不走 WebView 的 API（对自带 viewport 的页面无效，见 [applyWebScale]）
 
             webViewClient = object : WebViewClient() {
                 override fun onPageStarted(view: WebView?, url: String?, favicon: android.graphics.Bitmap?) {
@@ -692,8 +691,8 @@ class MainActivity : Activity() {
                     if (!navFailed && !mainFrameAuthFailed) hideErrorPage()
                     else DiagLog.i(TAG, "onPageFinished: 导航失败或认证失败，保留覆盖层 " +
                         "(navFailed=$navFailed authFailed=$mainFrameAuthFailed)")
-                    // 页面加载完再校正一次缩放（setInitialScale 对自带 viewport 的页面常被忽略）
-                    if (u?.startsWith("http") == true) applyWebZoom()
+                    // 页面切换后重新套一次显示缩放（root 尺寸/子 view 布局可能变过）
+                    if (u?.startsWith("http") == true) applyWebScale()
                 }
                 /**
                  * 页面里点了个**非隧道**的链接（没有走 `_blank` 的那种）：别把壳导航走 ——
@@ -904,6 +903,13 @@ class MainActivity : Activity() {
             }
         }
         root.addView(webView)
+
+        // 显示缩放（prefs 里的 web_zoom_pct）：布局尺寸变了就重新套一遍
+        //（旋转、键盘弹出、分屏都会改 root 尺寸，不重算的话页面只缩放一部分）。
+        root.addOnLayoutChangeListener { _, l, t, r, bo, ol, ot, orr, ob ->
+            if (r - l != orr - ol || bo - t != ob - ot) applyWebScale()
+        }
+        root.post { applyWebScale() }
 
         // 细进度条（WebView 加载时顶部一条白线，保持沉浸、不遮挡内容）
         progressBar = ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal).apply {
@@ -2049,28 +2055,62 @@ class MainActivity : Activity() {
      * 验证走 curl（token 可重复使用 —— 实测同一 token 连续两次都 303，验证不会把它用掉）。
      * 全部验证失败时回退到第一个候选（保持旧行为，并留日志）。
      */
-    /** 当前生效的 WebView 缩放百分比（prefs，默认 [DEFAULT_WEB_ZOOM_PCT]）。 */
-    private fun webZoomPct(): Int =
-        prefs.getInt(PREF_WEB_ZOOM, DEFAULT_WEB_ZOOM_PCT).coerceIn(50, 200)
+    /** 当前生效的显示缩放（1.0 = 原样；0.75 = 整个页面画到 75%）。 */
+    private fun webZoomScale(): Float =
+        prefs.getInt(PREF_WEB_ZOOM, DEFAULT_WEB_ZOOM_PCT).coerceIn(50, 200) / 100f
 
     /**
-     * 把页面缩放校正到 prefs 里的目标百分比。
+     * 按 prefs 里的比例对**整个 WebView 做视图级缩放**。
      *
-     * 为什么需要「校正」而不是只靠 [WebView.setInitialScale]：
-     * 那个 API 主要对**没有 viewport meta** 的页面生效，而 dsh 的 index.html 写的是
-     * `width=device-width, initial-scale=1` —— 实测初始缩放会被忽略、停在 100%。
-     * 页面加载完后按「实际 scale 与目标的差额」调 `zoomBy` 补一次，才稳定落到目标比例。
-     * （zoomBy 需要 supportZoom=true，见 WebView 设置处。）
+     * 为什么不用 WebView 自己的缩放 API（2026-10-30 实测结论）：
+     *  - `setInitialScale()` 对自带 viewport 的页面会被忽略 —— dsh 的 index.html 是
+     *    `width=device-width, initial-scale=1`；
+     *  - `zoomBy()` / 捏合缩放走 **page scale**，而 Blink 把「缩小」钳制在适配宽度（=1.0）：
+     *    实测请求 0.75/0.9/0.5 全部回落到 1.0，只有放大（1.25/1.5）生效。
+     * 所以上面两条路都做不出「小于 100%」。
+     *
+     * 视图级缩放没有这个限制，而且能真正实现「看到更多内容」：
+     * 先把 WebView 的**布局**放大到 `1/scale`（CSS 视口随之变宽，0.75 → 512），
+     * 再把整个 view 缩到 `scale`。root 负责裁剪，观感正是「缩放到 75%」，
+     * 而页面因为布局变宽会按更宽的视口重排 —— 实测 512 宽时输入区 321→449 CSS px、无横向溢出。
+     *
+     * 只缩放 WebView 自己：错误页/诊断页等是 root 的其它子 view，保持原尺寸。
      */
-    private fun applyWebZoom() {
+    private fun applyWebScale() {
         val wv = webView ?: return
-        val target = webZoomPct()
-        val curPct = Math.round(wv.scale * 100f)
-        if (curPct <= 0) return
-        val delta = (target - curPct) / 100f
-        if (kotlin.math.abs(delta) < 0.02f) return
-        val ok = wv.zoomBy(delta)
-        DiagLog.i(TAG, "webZoom: ${curPct}% → ${target}%（zoomBy(${delta}) ok=${ok}）")
+        val host = wv.parent as? ViewGroup ?: return
+        val scale = webZoomScale()
+        if (scale >= 0.999f) {
+            // 100%：显式复原，避免上一次缩放残留
+            if (wv.scaleX != 1f || wv.scaleY != 1f) {
+                wv.scaleX = 1f
+                wv.scaleY = 1f
+                wv.pivotX = 0f
+                wv.pivotY = 0f
+                wv.layoutParams = FrameLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT
+                )
+                DiagLog.i(TAG, "webScale: 复原为 100%")
+            }
+            return
+        }
+        val rw = host.width
+        val rh = host.height
+        // 还没量过尺寸就返回：root 的 layout 监听会再调一次，别在这里 post 成死循环
+        if (rw <= 0 || rh <= 0) return
+        val targetW = Math.ceil(rw / scale.toDouble()).toInt()
+        val targetH = Math.ceil(rh / scale.toDouble()).toInt()
+        val cur = wv.layoutParams
+        if (cur.width == targetW && cur.height == targetH) return
+        wv.layoutParams = FrameLayout.LayoutParams(targetW, targetH).apply {
+            gravity = Gravity.TOP or Gravity.START
+        }
+        wv.pivotX = 0f
+        wv.pivotY = 0f
+        wv.scaleX = scale
+        wv.scaleY = scale
+        DiagLog.i(TAG, "webScale: ${(scale * 100).toInt()}%" +
+            "（布局 ${rw}x${rh} → ${targetW}x${targetH}，CSS 视口约 ${Math.round(rw / scale)}）")
     }
 
     private fun autoFetchToken(tunnel: SshTunnel): String? {

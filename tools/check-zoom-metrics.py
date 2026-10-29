@@ -106,15 +106,23 @@ if d384 is not None and d512 is not None:
           "%s vs %s" % (g384["fontSizePx"], g512["fontSizePx"]))
 
 print()
-print("=== 4. App 侧不得把无效的默认缩放装回去（A5）===")
+print("=== 4. App 侧：缩小必须走视图级缩放，不能走 WebView 的 zoom API（A5）===")
 kt = os.path.join(REPO, "android/app/src/main/java/com/dshhandheld/app/MainActivity.kt")
 if os.path.exists(kt):
     src = open(kt, encoding="utf-8").read()
     import re
-    m = re.search(r"DEFAULT_WEB_ZOOM_PCT\s*=\s*(\d+)", src)
+    # 结论来自本文件第 2 节：page scale 的缩小被钳制在 1.0。
+    # 所以只要还有人用 setInitialScale/zoomBy 去做「小于 100%」，就一定不生效 —— 拦住它。
+    code = re.sub(r"/\*.*?\*/", "", src, flags=re.S)   # 去掉块注释，避免误伤说明文字
+    code = re.sub(r"//[^\n]*", "", code)               # 去掉行注释
+    check("不再用 setInitialScale()（对自带 viewport 的页面无效）",
+          "setInitialScale(" not in code)
+    check("不再用 zoomBy() 做缩小（page scale 会被钳制）", "zoomBy(" not in code)
+    check("用视图级缩放（scaleX/scaleY）", ("scaleX = scale" in code) and ("scaleY = scale" in code))
+    m = re.search(r"DEFAULT_WEB_ZOOM_PCT\s*=\s*(\d+)", code)
     if m:
         val = int(m.group(1))
-        check("默认缩放为 100（<100 在本页面是无效的假象）", val == 100, "当前 %d" % val)
+        check("默认缩放在 50..100 之间（视图级缩放的有效区间）", 50 <= val <= 100, "当前 %d" % val)
     else:
         check("找到 DEFAULT_WEB_ZOOM_PCT", False)
 
