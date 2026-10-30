@@ -16,9 +16,7 @@
          清掉，整条 Wi-Fi 掉线 —— 实测重启电脑后手机在 ARP 表里变成 incomplete，
          即它根本不在网上，任何重连逻辑都无从谈起。 -->
     <uses-permission android:name="android.permission.WAKE_LOCK" />
-    <!-- 开机自恢复：手机重启后（以及 APK 覆盖安装后）自动把隧道接回来，
-         否则用户必须先手动打开 App —— 那正是「重启后怎么都连不上」的成因。 -->
-    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+
     <!-- 「任务完成时提醒我」（Notifier）：Android 13+ 的运行时权限，只在用户打开那个
          开关时才请求（连接屏「通知」卡）。不申请它的话，通知发出去也不会显示。 -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
@@ -78,19 +76,6 @@
                 android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
                 android:value="保持到用户电脑的 SSH 隧道，使用户离开应用后仍能继续使用 dsh" />
         </service>
-
-        <!-- 开机 / 覆盖安装后自动恢复隧道（见 BootReceiver 的类注释）。
-             exported=true 是必须的：BOOT_COMPLETED 由系统广播给所有申请了该权限的应用。 -->
-        <receiver
-            android:name=".BootReceiver"
-            android:exported="true"
-            android:enabled="true">
-            <intent-filter>
-                <action android:name="android.intent.action.BOOT_COMPLETED" />
-                <action android:name="android.intent.action.QUICKBOOT_POWERON" />
-                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
-            </intent-filter>
-        </receiver>
 
     </application>
 
