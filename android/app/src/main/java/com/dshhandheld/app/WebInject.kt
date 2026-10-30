@@ -1,6 +1,7 @@
 package com.dshhandheld.app
 
 import android.webkit.WebView
+import com.dshhandheld.diag.DiagLog
 
 /**
  * WebView 端的界面增强（App 侧注入）。
