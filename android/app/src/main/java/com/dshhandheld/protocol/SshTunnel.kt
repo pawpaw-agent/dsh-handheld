@@ -98,6 +98,16 @@ class SshTunnel(
 
     private var reconnectThread: Thread? = null
 
+    /**
+     * 「立刻重试」信号。
+     *
+     * 为什么需要它：看门狗失败后按 5s/15s/**45s** 退避（见 [backoffMs]）。如果手机
+     * Wi-Fi 掉了一会儿才回来，退避中的那 45 秒就是**纯粹的干等** —— 用户看到的是
+     * 「网回来了但还是连不上」。DshApp 注册系统网络回调，网络一恢复就调 [nudgeNow]，
+     * 把失败计数清零并把等待打断。
+     */
+    @Volatile private var nudge: Boolean = false
+
     /** 隧道就绪后手机侧访问的本地基址（http://127.0.0.1:<port>）。 */
     @Volatile var localBaseUrl: String? = null
         private set
@@ -165,7 +175,7 @@ class SshTunnel(
                     consecutiveFailures > 0 -> backoffMs()
                     else -> PROBE_RETRY_MS
                 }
-                try { Thread.sleep(sleepMs) } catch (_: InterruptedException) { return@Thread }
+                sleepOrNudge(sleepMs) ?: return@Thread
             }
         }.apply { isDaemon = true; name = "ssh-tunnel-watchdog"; start() }
         return localPort
@@ -232,6 +242,41 @@ class SshTunnel(
             n >= 5 && String(buf, 0, 5, Charsets.US_ASCII) == "HTTP/"
         }
     } catch (_: Exception) { false }
+
+    /**
+     * 外部信号：网络恢复 / 用户回到前台时调用 —— 清掉退避计数并**立即**重试一次。
+     *
+     * 只置标志、不直接建连：真正的重建仍然只发生在看门狗线程里，避免并发建连。
+     */
+    fun nudgeNow() {
+        consecutiveFailures = 0
+        nudge = true
+    }
+
+    /**
+     * 可被打断的睡眠：被 [nudgeNow] 唤醒时立即返回 Unit；线程被中断时返回 null，
+     * 调用方据此退出看门狗。
+     *
+     * 分片 500ms 轮询而不是 wait/notify：这段代码每轮只跑一次，实现越简单越好，
+     * 唤醒延迟 500ms 对「网回来了立刻重连」完全够用。
+     */
+    private fun sleepOrNudge(ms: Long): Unit? {
+        var left = ms
+        while (left > 0 && started.get()) {
+            if (nudge) {
+                nudge = false
+                return Unit
+            }
+            val step = if (left < 500L) left else 500L
+            try {
+                Thread.sleep(step)
+            } catch (_: InterruptedException) {
+                return null
+            }
+            left -= step
+        }
+        return Unit
+    }
 
     /** 重建连续失败后的退避：OpenSSH 9.8+ 默认开着 PerSourcePenalties，别打连环拳。 */
     private fun backoffMs(): Long = when (consecutiveFailures) {

@@ -12,6 +12,10 @@
          并在内存压力下被优先杀掉。见 TunnelService 的类注释。 -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+    <!-- WiFiLock 必须项（缺口见 tunnel）：没有它，熄屏后射频进入省电、AP 也会把空闲客户端
+         清掉，整条 Wi-Fi 掉线 —— 实测重启电脑后手机在 ARP 表里变成 incomplete，
+         即它根本不在网上，任何重连逻辑都无从谈起。 -->
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
     <!-- 「任务完成时提醒我」（Notifier）：Android 13+ 的运行时权限，只在用户打开那个
          开关时才请求（连接屏「通知」卡）。不申请它的话，通知发出去也不会显示。 -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />

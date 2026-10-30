@@ -7,7 +7,9 @@ import android.app.PendingIntent
 import android.app.Service
 import android.content.Context
 import android.content.Intent
+import android.os.Build
 import android.os.IBinder
+import android.net.wifi.WifiManager
 import com.dshhandheld.diag.DiagLog
 
 /**
@@ -45,6 +47,8 @@ import com.dshhandheld.diag.DiagLog
  */
 class TunnelService : Service() {
 
+    private var wifiLock: WifiManager.WifiLock? = null
+
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onCreate() {
@@ -59,13 +63,55 @@ class TunnelService : Service() {
         //     ServiceRecord{... com.dshmobile.app/.AgentMonitorService}
         startForeground(NOTIFICATION_ID, buildNotification(intent?.getStringExtra(EXTRA_TEXT)))
         DiagLog.i(TAG, "TunnelService: startForeground（隧道保活中）")
+        acquireWifiLock()
         // 隧道由 DshApp 持有；系统把服务拉起来时隧道并不在，所以不要粘性重建
         return START_NOT_STICKY
     }
 
     override fun onDestroy() {
         DiagLog.i(TAG, "TunnelService: onDestroy")
+        releaseWifiLock()
         super.onDestroy()
+    }
+
+    /**
+     * 持有 WiFiLock：熄屏/待机期间**不让射频进入省电**，也不让 AP 把这条空闲关联清掉。
+     *
+     * 为什么必须有它（2026-10-30 实测）：电脑重启之后，手机在 PC 的 ARP 表里变成
+     * `incomplete` —— 说明它**根本不在 Wi-Fi 上**，不是「连上了但隧道断了」。
+     * 这种情况下隧道看门狗再勤快也没用（它只能重连，不能让射频回来）。
+     *
+     * 模式选择：Q 及以上用 `WIFI_MODE_FULL_LOW_LATENCY`（前台服务在，允许），
+     * 更老的系统退回 `WIFI_MODE_FULL_HIGH_PERF`（已废弃但仍有效）。
+     */
+    private fun acquireWifiLock() {
+        if (wifiLock?.isHeld == true) return
+        try {
+            val wm = applicationContext.getSystemService(WifiManager::class.java) ?: return
+            val mode = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                WifiManager.WIFI_MODE_FULL_LOW_LATENCY
+            } else {
+                @Suppress("DEPRECATION")
+                WifiManager.WIFI_MODE_FULL_HIGH_PERF
+            }
+            wifiLock = wm.createWifiLock(mode, WIFI_LOCK_TAG).apply {
+                setReferenceCounted(false)
+                acquire()
+            }
+            DiagLog.i(TAG, "TunnelService: WiFiLock 已持有（mode=$mode）")
+        } catch (t: Throwable) {
+            // 拿不到锁不该弄挂隧道：只记录，连接照常走（只是熄屏后可能掉线）
+            DiagLog.e(TAG, "TunnelService: WiFiLock 获取失败：${t.javaClass.simpleName} ${t.message}")
+        }
+    }
+
+    private fun releaseWifiLock() {
+        try {
+            wifiLock?.let { if (it.isHeld) it.release() }
+        } catch (_: Throwable) {
+        } finally {
+            wifiLock = null
+        }
     }
 
     private fun ensureChannel() {
@@ -112,6 +158,9 @@ class TunnelService : Service() {
 
     companion object {
         private const val TAG = "TunnelService"
+
+        /** WiFiLock 的标签（系统里能看到，排查熄屏掉线时用来确认锁是否还在）*/
+        private const val WIFI_LOCK_TAG = "dsh:tunnel-wifi"
 
         /**
          * 通知上的「打开连接屏」动作带来的 extra。

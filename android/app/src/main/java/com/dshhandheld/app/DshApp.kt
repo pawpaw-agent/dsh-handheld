@@ -4,7 +4,10 @@ import android.app.Activity
 import android.app.ActivityManager
 import android.app.Application
 import android.app.ApplicationExitInfo
+import android.content.Context
 import android.content.MutableContextWrapper
+import android.net.ConnectivityManager
+import android.net.Network
 import android.os.Build
 import android.webkit.WebView
 import androidx.annotation.RequiresApi
@@ -295,6 +298,33 @@ class DshApp : Application() {
         }
     }
 
+    /**
+     * 网络恢复时立刻唤醒隧道看门狗。
+     *
+     * 为什么需要它（2026-10-30 实测）：手机 Wi-Fi 掉一会儿再回来时，隧道看门狗
+     * 正处于 5s/15s/**45s** 的退避等待里；这段等待与网络状态无关，纯属白等，
+     * 表现就是用户说的「网明明回来了却还是连不上」。这里在系统报告网络可用时
+     * 调 [SshTunnel.nudgeNow] 把退避清零并打断睡眠。
+     *
+     * 只用 default network 回调（不是 requestNetwork）：我们只关心「现在有没有网」，
+     * 不关心是哪一条；重复触发无副作用 —— nudge 只是置标志位。
+     */
+    private fun watchNetworkForTunnel() {
+        try {
+            val cm = getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager ?: return
+            cm.registerDefaultNetworkCallback(object : ConnectivityManager.NetworkCallback() {
+                override fun onAvailable(network: Network) {
+                    val t = sshTunnel ?: return
+                    DiagLog.i(TAG, "网络已恢复 → 让隧道立即重试")
+                    t.nudgeNow()
+                }
+            })
+        } catch (t: Throwable) {
+            // 注册失败（个别 ROM 限制）不该影响启动：退避仍在，只是恢复慢一点
+            DiagLog.w(TAG, "网络回调注册失败：${t.javaClass.simpleName} ${t.message}")
+        }
+    }
+
     override fun onCreate() {
         super.onCreate()
         // 诊断日志必须最先起来：后面每一行 DiagLog 都依赖它把文件打开
@@ -306,6 +336,7 @@ class DshApp : Application() {
         // HOME 用 filesDir，与原终端模式（）一致：两边写同一份 known_hosts，
         // TOFU 信任才不会分裂成两份。见 SshTunnel.homeDir。
         SshTunnel.homeDir = filesDir.absolutePath
+        watchNetworkForTunnel()
         // 开关打开着就把通知渠道准备好（顺手做一次渠道迁移：删掉旧的 dsh-turn）。
         // 不能等到第一条通知才建：渠道是用户在系统设置里能单独调的对象，
         // 「第一条通知之前看不到它」会让「为什么没弹横幅」变成一个查不到的空白。
