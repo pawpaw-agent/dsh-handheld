@@ -31,7 +31,7 @@ object WebInject {
     private const val SIDEBAR_FAB_JS =
         "(function () {" +
         "  try {" +
-        "    var V = \"v8\";" +
+        "    var V = \"v11\";" +
         "    if (window.__dshhhSidebarFab === V) return \"already\";" +
         // 预留的让位开关：若页面（例如服务端插件）已自带窄屏适配并打了
         // data-dsh-mobile-fit 标记，就跳过本注入，避免出现两个悬浮按钮。
@@ -58,18 +58,22 @@ object WebInject {
         "      \"[class*=frame] > [class*=overlayLayer]{grid-column:1 / -1 !important}\"," +
         "      \"[class*=frame] > [class*=handle]{grid-column:3 !important}\"," +
         "      \"[class*=sidebarCol]{position:fixed !important;left:0;top:0;bottom:0;\"," +
-        "      \"  width:280px !important;max-width:82vw;z-index:60;background:#17171a;\"," +
+        // 全屏抽屉（2026-10-31 用户要求）：铺满整幅，不再固定 280px。
+        "      \"  width:100vw !important;max-width:none !important;z-index:60;background:#17171a;\"," +
         // transform 必须 !important：宿主可能给同一元素写内联 transform（展开/收起动画），
         // 内联样式优先级高于普通规则，会把我们的滑动直接顶掉 —— 表现就是「不走动画，直接闪一下」。
         "      \"  transform:translateX(-102%) !important;transition:transform .18s ease;\"," +
         "      \"  box-shadow:2px 0 18px rgba(0,0,0,.55);display:block !important;overflow:hidden}\"," +
+        "      \"[class*=sidebarCol] > *{width:100% !important;max-width:none !important}\"," +
+        "      \"[class*=sidebarCol] [class*=hHd-Xa_root]{width:100% !important;max-width:none !important}\"," +
         "      \"html.dshhh-open [class*=sidebarCol]{transform:translateX(0) !important}\"," +
         // 悬浮按钮：最左上角；同时给头部让出左内边距，避免盖住宿主的「智能体团队」入口
         "      \"#dshhh-fab{position:fixed;left:6px;top:6px;width:40px;height:40px;border-radius:20px;\"," +
         "      \"  background:rgba(43,43,48,.92);border:1px solid #3d3d44;z-index:70;\"," +
         "      \"  display:flex;align-items:center;justify-content:center;box-shadow:0 3px 12px rgba(0,0,0,.55)}\"," +
         "      \"header[class*=header]{padding-left:56px !important}\"," +
-        "      \"html.dshhh-open #dshhh-fab{background:#3a3a42}\"," +
+        // 全屏抽屉铺满后，悬浮按钮会压在面板上；让它随抽屉一起移出（抽屉自带关闭按钮/遮罩）。
+        "      \"html.dshhh-open #dshhh-fab{opacity:0;pointer-events:none;transition:opacity .12s}\"," +
         "      \"#dshhh-fab i{display:block;width:18px;height:2px;background:#e6e6ea;border-radius:1px;\"," +
         "      \"  box-shadow:0 -6px 0 #e6e6ea,0 6px 0 #e6e6ea}\"," +
         "      \"#dshhh-scrim{position:fixed;top:0;right:0;bottom:0;left:0;background:rgba(0,0,0,.42);z-index:55;display:none}\"," +
