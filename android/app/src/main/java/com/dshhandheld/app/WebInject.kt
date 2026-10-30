@@ -72,8 +72,8 @@ object WebInject {
         "    return true;" +
         "  }" +
         "  function toggleHost() {" +
-        "    var t = document.querySelector(\"[aria-label=\\\u6536\\u8d77\\u4fa7\\u8fb9\\u680f]\") ||" +
-        "            document.querySelector(\"[aria-label=\\\u6253\\u5f00\\u4fa7\\u8fb9\\u680f]\");" +
+        "    var t = document.querySelector(\"[aria-label=\\u6536\\u8d77\\u4fa7\\u8fb9\\u680f]\") ||" +
+        "            document.querySelector(\"[aria-label=\\u6253\\u5f00\\u4fa7\\u8fb9\\u680f]\");" +
         "    if (!t) return false; t.click(); setTimeout(sync, 60); return true;" +
         "  }" +
         "  if (!build()) {" +
