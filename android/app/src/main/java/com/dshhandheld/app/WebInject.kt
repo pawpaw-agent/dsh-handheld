@@ -12,46 +12,50 @@ import com.dshhandheld.diag.DiagLog
  *
  * 设计要点（均在真机验证，过程与踩坑见 docs/handheld-injection-sidebar.md）：
  *
- * 1. 宿主 `.pI_x6G_frame` 的 `grid-template-columns` 是**内联样式**，但样式表 `!important` 能覆盖；
- *    侧栏那一列压成 0，内容列即可吃满整幅宽度。
+ * 1. 宿主 `[class*=frame]` 的 `grid-template-columns` 是**内联样式**，但样式表 `!important` 能覆盖；
+ *    只把第一列（图标栏）替换成 0，内容列即可吃满整幅宽度。
  * 2. 侧栏用 `position:fixed` 变浮层后**脱离网格流**，其余列会整体前移（内容列被挤成 0、白屏）。
  *    必须显式给 centerCol/rightbarCol/bottomRow/overlayLayer/handle 指定 grid-column。
  * 3. **不能**把整条 grid-template 写死成 `0 1fr 0` —— 那会把宿主的右侧面板一起压成 0。
- *    正确做法：读出宿主的模板，只把第一列改 0，其余列原样保留。
  * 4. 开合状态**完全跟随宿主**（读 rail 的 `collapsed` 类），不自己维护状态机。
  * 5. 切换动作 = 对宿主自己的「打开/收起侧边栏」按钮派发 click，不直接改宿主状态。
  * 6. **不要**在 JS 里写 `[aria-label="..."]` 这类带引号的选择器 —— Kotlin/JS 双层转义极易写错
- *    （踩过：生成出 `"[aria-label=\" + X + "\"]"`，整段变成一个字符串）。改成遍历
+ *    （踩过：生成出 `"[aria-label=\" + X + "\"]"`，整段变成一个字符串）。改为遍历
  *    `[aria-label]` 逐个比较文本，彻底不需要转义。
  * 7. 注入结果通过 `evaluateJavascript` 的回调写进 DiagLog —— 否则语法/运行时错误会被静默吞掉。
+ * 8. **选择器不要带 CSS 哈希前缀**（如 `pI_x6G_frame`）：哈希随宿主构建变化，
+ *    dsh 每次升级都可能全变。统一用 `[class*=名字]` 只匹配名字部分。
  */
 object WebInject {
 
     private const val SIDEBAR_FAB_JS =
         "(function () {" +
         "  try {" +
-        "    var V = \"v5\";" +
+        "    var V = \"v6\";" +
         "    if (window.__dshhhSidebarFab === V) return \"already\";" +
         "    window.__dshhhSidebarFab = V;" +
         "    var LBL_CLOSE = String.fromCharCode(25910,36215,20391,36793,26639);" +
         "    var LBL_OPEN  = String.fromCharCode(25171,24320,20391,36793,26639);" +
-        "    var FRAME = \".pI_x6G_frame\";" +
+        // 只用「名字部分」匹配，不带哈希前缀（宿主升级后哈希会变）
+        "    var FRAME = \"[class*=frame]\";" +
         "    var RAIL = \"[class*=hHd-Xa_root]\";" +
 
         "    var CSS = [" +
-        "      \".pI_x6G_frame > .pI_x6G_centerCol{grid-column:2 !important}\"," +
-        "      \".pI_x6G_frame > .pI_x6G_rightbarCol{grid-column:3 !important}\"," +
-        "      \".pI_x6G_frame > .pI_x6G_bottomRow{grid-column:1 / -1 !important}\"," +
-        "      \".pI_x6G_frame > .pI_x6G_overlayLayer{grid-column:1 / -1 !important}\"," +
-        "      \".pI_x6G_frame > .pI_x6G_handle{grid-column:3 !important}\"," +
+        "      \"[class*=frame] > [class*=centerCol]{grid-column:2 !important}\"," +
+        "      \"[class*=frame] > [class*=rightbarCol]{grid-column:3 !important}\"," +
+        "      \"[class*=frame] > [class*=bottomRow]{grid-column:1 / -1 !important}\"," +
+        "      \"[class*=frame] > [class*=overlayLayer]{grid-column:1 / -1 !important}\"," +
+        "      \"[class*=frame] > [class*=handle]{grid-column:3 !important}\"," +
         "      \"[class*=sidebarCol]{position:fixed !important;left:0;top:0;bottom:0;\"," +
         "      \"  width:280px !important;max-width:82vw;z-index:60;background:#17171a;\"," +
         "      \"  transform:translateX(-102%);transition:transform .18s ease;\"," +
         "      \"  box-shadow:2px 0 18px rgba(0,0,0,.55);display:block !important;overflow:hidden}\"," +
         "      \"html.dshhh-open [class*=sidebarCol]{transform:translateX(0)}\"," +
-        "      \"#dshhh-fab{position:fixed;left:10px;bottom:150px;width:44px;height:44px;border-radius:22px;\"," +
+        // 悬浮按钮：最左上角；同时给头部让出左内边距，避免盖住宿主的「智能体团队」入口
+        "      \"#dshhh-fab{position:fixed;left:6px;top:6px;width:40px;height:40px;border-radius:20px;\"," +
         "      \"  background:rgba(43,43,48,.92);border:1px solid #3d3d44;z-index:70;\"," +
         "      \"  display:flex;align-items:center;justify-content:center;box-shadow:0 3px 12px rgba(0,0,0,.55)}\"," +
+        "      \"header[class*=header]{padding-left:56px !important}\"," +
         "      \"html.dshhh-open #dshhh-fab{background:#3a3a42}\"," +
         "      \"#dshhh-fab i{display:block;width:18px;height:2px;background:#e6e6ea;border-radius:1px;\"," +
         "      \"  box-shadow:0 -6px 0 #e6e6ea,0 6px 0 #e6e6ea}\"," +
