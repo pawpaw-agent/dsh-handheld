@@ -518,10 +518,11 @@ class MainActivity : Activity() {
          * 适配宽度 —— 请求 0.75/0.9/0.5 全部回落到 1.0，只有放大（1.25/1.5）生效。
          * 那两条路都做不出「小于 100%」，视图级缩放可以。
          *
-         * 默认 75：2026-10-30 用户要求「试试 0.75」。
+         * 默认 85：2026-10-30 用户先试 0.75、真机看过后定为 0.85。
+         * 真机实测（SM-S9280，dpr 3.75）：body 字号 16px → **13.6px**。
          */
         const val PREF_WEB_ZOOM = "web_zoom_pct"
-        const val DEFAULT_WEB_ZOOM_PCT = 75
+        const val DEFAULT_WEB_ZOOM_PCT = 85
 
         /**
          * 是否连**布局**一起缩放（默认关）。
