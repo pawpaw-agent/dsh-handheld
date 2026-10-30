@@ -527,6 +527,8 @@ class DshApp : Application() {
             // 隧道真的起来了才需要保活。放在成功分支里（而不是 build()），
             // 免得拨号失败也留下一个常驻前台服务。
             lastTunnelError = null
+            // 记住「用户上次确实连上过」：开机/覆盖安装后据此决定要不要自动恢复隧道
+            prefs.edit().putBoolean(PREF_WAS_CONNECTED, true).apply()
             TunnelService.start(this, "已连接到 ${cfg.host}")
             DiagLog.i(TAG, "ensureTunnel: 已建立 ${t.localBaseUrl}")
             // 隧道刚起来：把权威回合状态的订阅挂上（页面被冻时通知只能靠它）。
@@ -543,6 +545,32 @@ class DshApp : Application() {
      * 回收线程记在 [pendingClose]，下一次拨号前会被 join —— 「端口稳定」仍然成立，
      * 只是这份代价不再由 UI 线程付（原先它要排队等拨号锁，是 ANR 来源）。
      */
+    /** 用户上次是否「确实连上过」（供开机自恢复判定，见 [BootReceiver]）。 */
+    fun wasConnectedBefore(): Boolean = prefs.getBoolean(PREF_WAS_CONNECTED, false)
+
+    /**
+     * 在后台线程把隧道接回来（开机广播用）。
+     *
+     * 为什么不在广播里同步做：[ensureTunnel] 会阻塞到拨号完成（秒级），广播接收者
+     * 有 10s 上限，而且主线程做网络会触发 ANR。失败只记日志 —— 用户打开 App 时
+     * 界面自己还会再试一次。
+     */
+    fun restoreTunnelInBackground() {
+        val cfg = SshConfig.load(prefs)?.takeIf { it.isComplete } ?: run {
+            DiagLog.w(TAG, "开机恢复：连接配置不完整，跳过")
+            return
+        }
+        Thread({
+            val t = ensureTunnel(cfg)
+            if (t == null) {
+                DiagLog.w(TAG, "开机恢复失败：${lastTunnelError ?: "原因未记录"}")
+                TunnelService.stop(this)
+            } else {
+                DiagLog.i(TAG, "开机恢复成功：${t.localBaseUrl}")
+            }
+        }, "boot-restore-tunnel").apply { isDaemon = true }.start()
+    }
+
     fun closeTunnel() {
         val closing = synchronized(tunnelLock) {
             dialGeneration++
@@ -551,6 +579,8 @@ class DshApp : Application() {
             tunnelFingerprint = null
             cur
         }
+        // 用户主动断开：清掉「上次连着」的标记，下次开机不该再自动拉起
+        prefs.edit().putBoolean(PREF_WAS_CONNECTED, false).apply()
         // 隧道没了就不该继续占着前台服务
         TunnelService.stop(this)
         // 订阅也停掉：它的目标是那条隧道里的 127.0.0.1:3080，隧道没了重连只会白转。
@@ -596,6 +626,14 @@ class DshApp : Application() {
          * 判断在 [onHostTurnStatus]。键名写两遍就会漂移成「开了没反应」。
          */
         const val PREF_NOTIF_TURN = "notif_turn_done"
+
+        /**
+         * 「用户上次确实连着」——只用于开机/覆盖安装后的自动恢复判定。
+         *
+         * 由隧道发布成功置 true、由用户手动 [closeTunnel] 置 false。
+         * 临时掉线**不**清它：那种情况正需要开机后自动接回来。
+         */
+        const val PREF_WAS_CONNECTED = "was_connected"
 
         /** 普通偏好文件名（开关不是凭据，不必走 SecurePrefs）。 */
         const val PREFS = "dsh-handheld"
