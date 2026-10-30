@@ -47,7 +47,12 @@ import com.dshhandheld.diag.DiagLog
  */
 class TunnelService : Service() {
 
-    private var wifiLock: WifiManager.WifiLock? = null
+    /**
+     * 已持有的 WifiLock（可能有多个，见 [acquireWifiLock]）。
+     *
+     * 为什么是复数：`HIGH_PERF` 与 `LOW_LATENCY` 两档作用不同，且**只有前者会关省电**。
+     */
+    private val wifiLocks = mutableListOf<WifiManager.WifiLock>()
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -85,47 +90,55 @@ class TunnelService : Service() {
      * 更老的系统退回 `WIFI_MODE_FULL_HIGH_PERF`（已废弃但仍有效）。
      */
     private fun acquireWifiLock() {
-        if (wifiLock?.isHeld == true) return
+        if (wifiLocks.isNotEmpty()) return
         val wm = applicationContext.getSystemService(WifiManager::class.java) ?: return
 
-        // 依次尝试：低延迟锁 → 高性能锁。
-        // 为什么要回退：LOW_LATENCY 在部分 ROM 上要求应用处于前台/有特定 FGS 类型，
-        // 被拒时 acquire() 不会抛异常而是**静默不生效**（isHeld 仍为 false），
-        // 那样我们就以为「已经关掉省电」了，实际什么都没做。**必须验证 isHeld**。
+        // 两档都要，作用不同（2026-10-30 真机验证）：
+        //
+        //  - HIGH_PERF：**真正关掉 Wi-Fi 省电**。判据是 dumpsys wifi 里的
+        //    `mPowerSaveDisableRequests` —— 只持 LOW_LATENCY 时它是 0，说明省电没被关，
+        //    实测这段时间 PC→手机方向丢包 70%、隧道因此反复重建；
+        //  - LOW_LATENCY：提高调度优先级，对交互延迟有帮助，但它不增加上面那个计数。
+        //
+        // 另外：任何一档被系统拒绝时 acquire() 通常**不抛异常**，只是 isHeld 保持 false，
+        // 所以每一档都必须验证 isHeld，否则会「以为关掉了省电，其实什么都没做」。
         val modes = buildList {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                add(WifiManager.WIFI_MODE_FULL_LOW_LATENCY)
-            }
             @Suppress("DEPRECATION")
-            add(WifiManager.WIFI_MODE_FULL_HIGH_PERF)
+            add(WifiManager.WIFI_MODE_FULL_HIGH_PERF to "highperf")
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                add(WifiManager.WIFI_MODE_FULL_LOW_LATENCY to "lowlatency")
+            }
         }
 
-        for (mode in modes) {
+        for ((mode, label) in modes) {
             try {
-                val lock = wm.createWifiLock(mode, WIFI_LOCK_TAG)
+                val lock = wm.createWifiLock(mode, "$WIFI_LOCK_TAG/$label")
                 lock.setReferenceCounted(false)
                 lock.acquire()
                 if (lock.isHeld) {
-                    wifiLock = lock
-                    DiagLog.i(TAG, "TunnelService: WiFiLock 已持有（mode=$mode）")
-                    return
+                    wifiLocks += lock
+                    DiagLog.i(TAG, "TunnelService: WiFiLock 已持有（$label, mode=$mode）")
+                } else {
+                    DiagLog.w(TAG, "TunnelService: WiFiLock $label 未生效（isHeld=false）")
                 }
-                DiagLog.w(TAG, "TunnelService: WiFiLock mode=$mode 未生效（isHeld=false），尝试下一档")
             } catch (t: Throwable) {
-                DiagLog.w(TAG, "TunnelService: WiFiLock mode=$mode 失败：${t.javaClass.simpleName} ${t.message}")
+                DiagLog.w(TAG, "TunnelService: WiFiLock $label 失败：${t.javaClass.simpleName} ${t.message}")
             }
         }
-        // 拿不到锁不该弄挂隧道：连接照常走，只是熄屏后可能掉线
-        DiagLog.e(TAG, "TunnelService: 所有 WiFiLock 档位都未生效")
+        if (wifiLocks.isEmpty()) {
+            // 拿不到锁不该弄挂隧道：连接照常走，只是熄屏后可能掉线
+            DiagLog.e(TAG, "TunnelService: 所有 WiFiLock 档位都未生效")
+        }
     }
 
     private fun releaseWifiLock() {
-        try {
-            wifiLock?.let { if (it.isHeld) it.release() }
-        } catch (_: Throwable) {
-        } finally {
-            wifiLock = null
+        for (lock in wifiLocks) {
+            try {
+                if (lock.isHeld) lock.release()
+            } catch (_: Throwable) {
+            }
         }
+        wifiLocks.clear()
     }
 
     private fun ensureChannel() {
