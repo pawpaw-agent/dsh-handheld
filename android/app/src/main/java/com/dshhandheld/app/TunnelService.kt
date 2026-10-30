@@ -86,23 +86,37 @@ class TunnelService : Service() {
      */
     private fun acquireWifiLock() {
         if (wifiLock?.isHeld == true) return
-        try {
-            val wm = applicationContext.getSystemService(WifiManager::class.java) ?: return
-            val mode = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                WifiManager.WIFI_MODE_FULL_LOW_LATENCY
-            } else {
-                @Suppress("DEPRECATION")
-                WifiManager.WIFI_MODE_FULL_HIGH_PERF
+        val wm = applicationContext.getSystemService(WifiManager::class.java) ?: return
+
+        // 依次尝试：低延迟锁 → 高性能锁。
+        // 为什么要回退：LOW_LATENCY 在部分 ROM 上要求应用处于前台/有特定 FGS 类型，
+        // 被拒时 acquire() 不会抛异常而是**静默不生效**（isHeld 仍为 false），
+        // 那样我们就以为「已经关掉省电」了，实际什么都没做。**必须验证 isHeld**。
+        val modes = buildList {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                add(WifiManager.WIFI_MODE_FULL_LOW_LATENCY)
             }
-            wifiLock = wm.createWifiLock(mode, WIFI_LOCK_TAG).apply {
-                setReferenceCounted(false)
-                acquire()
-            }
-            DiagLog.i(TAG, "TunnelService: WiFiLock 已持有（mode=$mode）")
-        } catch (t: Throwable) {
-            // 拿不到锁不该弄挂隧道：只记录，连接照常走（只是熄屏后可能掉线）
-            DiagLog.e(TAG, "TunnelService: WiFiLock 获取失败：${t.javaClass.simpleName} ${t.message}")
+            @Suppress("DEPRECATION")
+            add(WifiManager.WIFI_MODE_FULL_HIGH_PERF)
         }
+
+        for (mode in modes) {
+            try {
+                val lock = wm.createWifiLock(mode, WIFI_LOCK_TAG)
+                lock.setReferenceCounted(false)
+                lock.acquire()
+                if (lock.isHeld) {
+                    wifiLock = lock
+                    DiagLog.i(TAG, "TunnelService: WiFiLock 已持有（mode=$mode）")
+                    return
+                }
+                DiagLog.w(TAG, "TunnelService: WiFiLock mode=$mode 未生效（isHeld=false），尝试下一档")
+            } catch (t: Throwable) {
+                DiagLog.w(TAG, "TunnelService: WiFiLock mode=$mode 失败：${t.javaClass.simpleName} ${t.message}")
+            }
+        }
+        // 拿不到锁不该弄挂隧道：连接照常走，只是熄屏后可能掉线
+        DiagLog.e(TAG, "TunnelService: 所有 WiFiLock 档位都未生效")
     }
 
     private fun releaseWifiLock() {
