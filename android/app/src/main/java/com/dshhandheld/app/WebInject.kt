@@ -31,7 +31,7 @@ object WebInject {
     private const val SIDEBAR_FAB_JS =
         "(function () {" +
         "  try {" +
-        "    var V = \"v7\";" +
+        "    var V = \"v8\";" +
         "    if (window.__dshhhSidebarFab === V) return \"already\";" +
         // 预留的让位开关：若页面（例如服务端插件）已自带窄屏适配并打了
         // data-dsh-mobile-fit 标记，就跳过本注入，避免出现两个悬浮按钮。
@@ -50,6 +50,8 @@ object WebInject {
         "    var RAIL = \"[class*=hHd-Xa_root]\";" +
 
         "    var CSS = [" +
+        "      \"@media (max-width:520px){[class*=frame]{grid-template-columns:0 minmax(0px,1fr) 0 !important;\"," +
+        "      \"  transition:none !important}}\"," +
         "      \"[class*=frame] > [class*=centerCol]{grid-column:2 !important}\"," +
         "      \"[class*=frame] > [class*=rightbarCol]{grid-column:3 !important}\"," +
         "      \"[class*=frame] > [class*=bottomRow]{grid-column:1 / -1 !important}\"," +
@@ -57,9 +59,11 @@ object WebInject {
         "      \"[class*=frame] > [class*=handle]{grid-column:3 !important}\"," +
         "      \"[class*=sidebarCol]{position:fixed !important;left:0;top:0;bottom:0;\"," +
         "      \"  width:280px !important;max-width:82vw;z-index:60;background:#17171a;\"," +
-        "      \"  transform:translateX(-102%);transition:transform .18s ease;\"," +
+        // transform 必须 !important：宿主可能给同一元素写内联 transform（展开/收起动画），
+        // 内联样式优先级高于普通规则，会把我们的滑动直接顶掉 —— 表现就是「不走动画，直接闪一下」。
+        "      \"  transform:translateX(-102%) !important;transition:transform .18s ease;\"," +
         "      \"  box-shadow:2px 0 18px rgba(0,0,0,.55);display:block !important;overflow:hidden}\"," +
-        "      \"html.dshhh-open [class*=sidebarCol]{transform:translateX(0)}\"," +
+        "      \"html.dshhh-open [class*=sidebarCol]{transform:translateX(0) !important}\"," +
         // 悬浮按钮：最左上角；同时给头部让出左内边距，避免盖住宿主的「智能体团队」入口
         "      \"#dshhh-fab{position:fixed;left:6px;top:6px;width:40px;height:40px;border-radius:20px;\"," +
         "      \"  background:rgba(43,43,48,.92);border:1px solid #3d3d44;z-index:70;\"," +
@@ -157,16 +161,22 @@ object WebInject {
         "      if (!build()) return false;" +
         "      if (started) return true;" +
         "      started = true;" +
-        "      var obs = new MutationObserver(sync);" +
+        // 观察器挂在 documentElement 的整棵子树（只过滤 class 变化）。
+        //
+        // 为什么不再直接观察 rail 节点（2026-10-31 逐帧实测的教训）：
+        // 宿主展开侧栏时会**替换** rail 那个节点，我们持有的引用立刻变成游离节点，
+        // 观察器从此再也不触发；只能等 setInterval 兜底（最长 500ms）。
+        // 实测「dshhh-open 生效」因此晚约 200ms —— 这段时间栅格已经被宿主拉到 280px，
+        // 内容被推走后再滑回来，就是用户看到的跳变。
+        "      var obs = new MutationObserver(function () { sync(); });" +
+        "      obs.observe(document.documentElement, {attributes:true, subtree:true, attributeFilter:[\"class\"]});" +
         "      var fObs = new MutationObserver(function () { fixGrid(); });" +
-        "      var boundRail = null, boundFrame = null;" +
+        "      var boundFrame = null;" +
         "      setInterval(function () {" +
-        "        var r = rail();" +
-        "        if (r && r !== boundRail) { obs.disconnect(); obs.observe(r, {attributes:true, attributeFilter:[\"class\"]}); boundRail = r; }" +
         "        var f = document.querySelector(FRAME);" +
         "        if (f && f !== boundFrame) { fObs.disconnect(); fObs.observe(f, {attributes:true, attributeFilter:[\"style\"]}); boundFrame = f; }" +
         "        fixGrid(); sync(); tuneMessages();" +
-        "      }, 500);" +
+        "      }, 250);" +
         "      fixGrid(); sync(); tuneMessages();" +
         "      return true;" +
         "    }" +

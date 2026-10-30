@@ -2645,3 +2645,54 @@ WiFiLock 的作用就是**关闭 Wi-Fi 省电**，直接消除上面的环节 1�
 - App 在后台被冻结/回收：**视为正常**，回前台自动重建；
 - 链路抖动几秒：不再拆隧道；
 - 真断（持续约 40–50 秒不通）：重建。
+
+## 29. 展开侧边栏时「跳变」（2026-10-31）
+
+### 现象
+
+点悬浮按钮展开侧栏时，内容区/会话栏先**闪一下再滑回来**。
+
+### 根因（用无头 Chrome 按帧采样定位）
+
+宿主的展开动画是**对 `grid-template-columns` 做过渡**：
+
+```css
+.pI_x6G_frame[data-animating]{
+  transition: grid-template-columns var(--ds-transition-duration-slow) var(--ds-ease-in-out)
+}
+```
+
+而我们的实现是「用 JS 把内联样式里的第一列改写成 0px」。两边改同一个属性，于是：
+
+| 时刻 | 侧栏 x | 内容列 x | 说明 |
+|---|---|---|---|
+| 39–193ms | -287（屏外） | **280** | 宿主把第一列拉到 280px，内容被推走 |
+| 212ms | 开始滑入 | 280 → 0 | 我们的 `dshhh-open` 才生效，内容滑回来 |
+
+**为什么我们的状态晚了约 200ms**：`MutationObserver` 绑在 rail 节点上，
+而宿主展开时会**替换**这个节点 —— 观察器从此监听的是一个游离节点，再也不触发，
+只能等 500ms 的兜底轮询。
+
+### 修法
+
+1. **栅格覆盖改成纯 CSS，且只作用于窄屏**：
+
+   ```css
+   @media (max-width:520px){
+     [class*=frame]{grid-template-columns: 0 minmax(0px,1fr) 0 !important; transition: none !important}
+   }
+   ```
+
+   值恒定不变 → 宿主再怎么改内联样式，计算值也不变 → **栅格永远不动**，
+   不再依赖任何 JS 时序；`transition:none` 顺手关掉宿主那套我们已经在对抗的动画。
+2. **观察器改挂 `document.documentElement`（subtree + class 过滤）**：节点被替换也不受影响。
+3. **轮询 500ms → 250ms**（兜底更快）。
+4. 两处 `transform` 加 `!important`：宿主可能写内联 transform，会把我们的滑动顶掉。
+
+### 验证（无头 Chrome，384×832，逐帧）
+
+| | 修复前 | 修复后 |
+|---|---|---|
+| 内容列 x | 0 → **280** → 滑回 0 | **恒为 0** |
+| `dshhh-open` 生效 | 延迟约 200ms | 首帧 |
+| 侧栏滑动 | -287 → 0 | -287 → 0（约 190ms 平滑）|
