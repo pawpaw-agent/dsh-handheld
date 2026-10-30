@@ -502,11 +502,18 @@ class DshApp : Application() {
                 DiagLog.i(TAG, "tunnel base changed: $b")
                 tunnelObservers.forEach { it.onTunnelBaseChanged(b) }
             }
+            // ⚠️ 必须**拨号前**就抬起前台服务（2026-10-30 真机定位）：
+            // 原先只在成功分支启动服务，于是「连接中」这段时间进程还在 background
+            // cgroup 里；用户这时切走或熄屏，进程被冻结，拨号线程连日志都停在半路
+            // （实测日志在 tune #2 之后 6 分钟没有任何新行，而 dbclient 子进程还活着）。
+            // 拨号失败时下面会 stop()，不会留下常驻服务。
+            TunnelService.start(this, "正在连接 ${cfg.host}…")
             t.start()
             if (t.localBaseUrl == null) {
                 // 失败原因带到 UI 去（否则只剩一句「检查地址/账号/密码」）
                 lastTunnelError = t.lastError
                 t.close()
+                TunnelService.stop(this)
                 DiagLog.w(TAG, "ensureTunnel: 拨号失败（${lastTunnelError ?: "原因未记录"}）")
                 return null
             }
