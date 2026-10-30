@@ -33,8 +33,11 @@ object WebInject {
         "  try {" +
         "    var V = \"v7\";" +
         "    if (window.__dshhhSidebarFab === V) return \"already\";" +
-        // 服务器端插件 dsh-mobile-fit 已接管时直接让位 —— 否则会出现两个悬浮按钮。
-        // 插件是**正确的层**（由 dsh 服务端下发），App 注入只是它装好之前的兜底。
+        // 预留的让位开关：若页面（例如服务端插件）已自带窄屏适配并打了
+        // data-dsh-mobile-fit 标记，就跳过本注入，避免出现两个悬浮按钮。
+        //
+        // 背景：曾实现过 dsh 插件版（dsh-mobile-fit）来做同一件事，但用户明确要求
+        // 「不要改 dsh」，故已从 profile 完整撤回；此分支保留为空钩子，当前不会触发。
         "    if (document.documentElement.getAttribute(\"data-dsh-mobile-fit\")) {" +
         "      window.__dshhhSidebarFab = \"skipped:plugin\";" +
         "      return \"skipped(plugin)\";" +
