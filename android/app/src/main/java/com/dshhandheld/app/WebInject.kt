@@ -31,8 +31,14 @@ object WebInject {
     private const val SIDEBAR_FAB_JS =
         "(function () {" +
         "  try {" +
-        "    var V = \"v6\";" +
+        "    var V = \"v7\";" +
         "    if (window.__dshhhSidebarFab === V) return \"already\";" +
+        // 服务器端插件 dsh-mobile-fit 已接管时直接让位 —— 否则会出现两个悬浮按钮。
+        // 插件是**正确的层**（由 dsh 服务端下发），App 注入只是它装好之前的兜底。
+        "    if (document.documentElement.getAttribute(\"data-dsh-mobile-fit\")) {" +
+        "      window.__dshhhSidebarFab = \"skipped:plugin\";" +
+        "      return \"skipped(plugin)\";" +
+        "    }" +
         "    window.__dshhhSidebarFab = V;" +
         "    var LBL_CLOSE = String.fromCharCode(25910,36215,20391,36793,26639);" +
         "    var LBL_OPEN  = String.fromCharCode(25171,24320,20391,36793,26639);" +
