@@ -2,6 +2,11 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
     <uses-permission android:name="android.permission.INTERNET" />
+    <!-- 读网络状态：DshApp 用它注册「网络恢复」回调，好让隧道立刻重试而不是干等退避。
+         漏了这条时 registerDefaultNetworkCallback 会抛 SecurityException ——
+         实测日志里就是「Neither user 10430 nor current process has
+         android.permission.ACCESS_NETWORK_STATE」，功能静默失效。 -->
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <!-- dsh 的语音输入走 getUserMedia + MediaRecorder（不是 WebView 不支持的 Web Speech API），
          所以只要放行就能用。WebView 的权限请求还必须由 onPermissionRequest 显式 grant ——
          不实现它，WebView 默认一律拒绝，那颗麦克风按钮就是死的。 -->
