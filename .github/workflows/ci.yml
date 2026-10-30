@@ -115,6 +115,15 @@ jobs:
         with:
           cache-provider: basic
 
+      # 纯静态检查，几秒钟：拦两类真实发生过的事故。
+      # ① Kotlin 的块注释**可嵌套** —— 注释里写 `5s/15s/**45s**` 会吞掉整份文件，
+      #    编译器只在文件末尾报 Unclosed comment，指不到真因；
+      # ② 注入 JS 是 Kotlin 字符串拼出来的，evaluateJavascript 会静默吞语法错误。
+      - name: Static guards (Kotlin comments / injected JS)
+        run: |
+          python3 tools/check-kotlin-comments.py
+          python3 tools/check-inject-js.py
+
       - name: Run unit tests
         run: |
           cd android
