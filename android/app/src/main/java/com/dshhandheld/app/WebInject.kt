@@ -63,6 +63,22 @@ object WebInject {
         "      \"html.dshhh-open #dshhh-scrim{display:block}\"" +
         "    ].join(String.fromCharCode(10));" +
 
+        "    var MSG_PAD = \"12px\";" +
+        "    function tuneMessages() {" +
+        "      var cols = document.querySelectorAll(\"[class*=column]\");" +
+        "      for (var i = 0; i < cols.length; i++) {" +
+        "        var c = cols[i];" +
+        "        var sc = c.parentElement;" +
+        "        if (!sc || !sc.style) continue;" +
+        "        var txt = (c.innerText || \"\").length;" +
+        "        if (txt < 400) continue;" +
+        "        var cs = getComputedStyle(sc);" +
+        "        if (cs.paddingLeft === MSG_PAD && cs.paddingRight === MSG_PAD) continue;" +
+        "        sc.style.setProperty(\"padding-left\", MSG_PAD, \"important\");" +
+        "        sc.style.setProperty(\"padding-right\", MSG_PAD, \"important\");" +
+        "      }" +
+        "    }" +
+
         "    function rail() { return document.querySelector(RAIL); }" +
         "    function hostOpen() { var r = rail(); return !!r && r.className.toString().indexOf(\"collapsed\") < 0; }" +
         "    function sync() { document.documentElement.classList.toggle(\"dshhh-open\", hostOpen()); }" +
@@ -132,9 +148,9 @@ object WebInject {
         "        if (r && r !== boundRail) { obs.disconnect(); obs.observe(r, {attributes:true, attributeFilter:[\"class\"]}); boundRail = r; }" +
         "        var f = document.querySelector(FRAME);" +
         "        if (f && f !== boundFrame) { fObs.disconnect(); fObs.observe(f, {attributes:true, attributeFilter:[\"style\"]}); boundFrame = f; }" +
-        "        fixGrid(); sync();" +
+        "        fixGrid(); sync(); tuneMessages();" +
         "      }, 500);" +
-        "      fixGrid(); sync();" +
+        "      fixGrid(); sync(); tuneMessages();" +
         "      return true;" +
         "    }" +
 
