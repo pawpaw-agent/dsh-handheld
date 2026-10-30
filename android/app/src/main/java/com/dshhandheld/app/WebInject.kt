@@ -60,7 +60,10 @@ object WebInject {
         "      \"#dshhh-fab i{display:block;width:18px;height:2px;background:#e6e6ea;border-radius:1px;\"," +
         "      \"  box-shadow:0 -6px 0 #e6e6ea,0 6px 0 #e6e6ea}\"," +
         "      \"#dshhh-scrim{position:fixed;top:0;right:0;bottom:0;left:0;background:rgba(0,0,0,.42);z-index:55;display:none}\"," +
-        "      \"html.dshhh-open #dshhh-scrim{display:block}\"" +
+        "      \"html.dshhh-open #dshhh-scrim{display:block}\"," +
+        "      \"/* 消息区滚动条隐藏（见 tuneMessages 加的 .dshhh-msg） */\"," +
+        "      \".dshhh-msg::-webkit-scrollbar{width:0 !important;height:0 !important}\"," +
+        "      \".dshhh-msg{scrollbar-width:none !important}\"" +
         "    ].join(String.fromCharCode(10));" +
 
         "    var MSG_PAD = \"12px\";" +
@@ -72,10 +75,15 @@ object WebInject {
         "        if (!sc || !sc.style) continue;" +
         "        var txt = (c.innerText || \"\").length;" +
         "        if (txt < 400) continue;" +
+        "        if (!sc.classList.contains(\"dshhh-msg\")) sc.classList.add(\"dshhh-msg\");" +
+        "        var base = 12;" +
+        "        var diff = innerWidth - sc.getBoundingClientRect().width;" +
+        "        if (!(diff >= 0)) diff = 0;" +
+        "        var padR = Math.max(4, base - diff);" +
         "        var cs = getComputedStyle(sc);" +
-        "        if (cs.paddingLeft === MSG_PAD && cs.paddingRight === MSG_PAD) continue;" +
-        "        sc.style.setProperty(\"padding-left\", MSG_PAD, \"important\");" +
-        "        sc.style.setProperty(\"padding-right\", MSG_PAD, \"important\");" +
+        "        if (cs.paddingLeft === base + \"px\" && cs.paddingRight === padR + \"px\") continue;" +
+        "        sc.style.setProperty(\"padding-left\", base + \"px\", \"important\");" +
+        "        sc.style.setProperty(\"padding-right\", padR + \"px\", \"important\");" +
         "      }" +
         "    }" +
 
