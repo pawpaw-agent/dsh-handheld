@@ -591,8 +591,13 @@ class SshTunnel(
     companion object {
         private const val TAG = "SshTunnel"
 
-        /** 单次尝试里"连接 + 认证 + 本地监听就绪"的等待上限。 */
-        private const val LOCAL_READY_TIMEOUT_MS = 15_000L
+        /**
+         * 单次尝试里「连接 + 认证 + 本地监听就绪」的等待上限。
+         *
+         * 15s → 30s（2026-10-31）：真机日志显示同一条链路上认证要 9–14s，
+         * 链路抖动时 15s 会直接把**已经连上**的拨号判死（`tune #N 未就绪（alive）`）。
+         */
+        private const val LOCAL_READY_TIMEOUT_MS = 30_000L
         private const val MAX_ATTEMPTS = 3
         private const val REAP_WAIT_MS = 1_500L
 
@@ -601,12 +606,28 @@ class SshTunnel(
 
         /** 隧道 keepalive / 健康检查周期。 */
         private const val PROBE_INTERVAL_MS = 30_000L
-        /** 判定不健康后的短重试间隔。 */
-        private const val PROBE_RETRY_MS = 3_000L
-        /** 连续失败达到这个次数才拆掉重建（避开单次抖动）。 */
-        private const val PROBE_MISS_LIMIT = 2
+
+        /**
+         * 判定不健康后的短重试间隔。3s → 5s（配合同期把 miss 上限提到 4）。
+         */
+        private const val PROBE_RETRY_MS = 5_000L
+
+        /**
+         * 连续失败达到这个次数才拆掉重建。
+         *
+         * 2 → 4（2026-10-31）：原值配上 3s 超时 + 3s 间隔 = **12 秒**就拆隧道，
+         * 而实测这条 Wi-Fi 链路有 80% 丢包、峰值 406ms 的抖动段 —— 于是出现
+         * 「连上 12 秒就被自己拆掉」的死循环（日志里 21:09:06–21:10:47 连续六次）。
+         * 现在一次抖动最多让探针连挂 4 次（约 30s 持续不通）才重建。
+         */
+        private const val PROBE_MISS_LIMIT = 4
         private const val PROBE_CONNECT_MS = 1_500
-        private const val PROBE_TIMEOUT_MS = 3_000
+
+        /**
+         * 单次探针的超时。3s → 8s：探针要穿过 SSH 隧道往返，
+         * 链路 400ms 延迟 + TCP 重传时 3s 根本不够，会把好隧道判死。
+         */
+        private const val PROBE_TIMEOUT_MS = 8_000
 
         /** WebView 用的本地转发端口候选（按序取第一个空闲的）：3080 与 dsh web
          *  默认端口一致，被占时退到 13080。端口必须稳定，理由见 [pickFreePort]。 */

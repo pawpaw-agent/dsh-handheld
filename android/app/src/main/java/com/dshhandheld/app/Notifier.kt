@@ -26,8 +26,11 @@ import com.dshhandheld.diag.DiagLog
  *
  * | 渠道 | 名称 | 重要性 | 用途 |
  * |---|---|---|---|
- * | `dsh-tunnel` | 保持连接 | `IMPORTANCE_MIN` | 前台服务的凭据（见 [TunnelService]），静默 |
  * | `dsh-turn-hi` | 任务完成 | `IMPORTANCE_HIGH` | 「你等的那个结果好了」，**浮到屏幕上** |
+ *
+ * 曾经还有一条 `dsh-tunnel`（前台服务「保持连接」的凭据）：隧道保活层已在
+ * 2026-10-31 移除（这个 App 不需要保活，只要重连可靠），该渠道只在设备上留了个
+ * 空壳，由 [ensureChannels] 顺手删掉。
  *
  * ⚠️ `dsh-turn-hi` 的 `-hi` 是**渠道迁移**留下的：0.1.11 用的是 `dsh-turn`
  * （`IMPORTANCE_DEFAULT`）。Android 的渠道一旦创建，**重要性只有用户能改**，
@@ -65,9 +68,12 @@ object Notifier {
 
     /**
      * 用固定 id：连着干完几轮只留最新一条，而不是在通知栏里堆一排。
-     * （[TunnelService] 用 1，这里避开。）
+     * （id 1 归已移除的前台服务通知，沿用历史值以免和旧通知撞车。）
      */
     private const val ID_TURN = 2
+
+    /** 已移除的隧道保活前台服务用过的渠道 id，仅用于清理。 */
+    private const val CHANNEL_TUNNEL_LEGACY = "dsh-tunnel"
 
 
     /** 建渠道。可重复调用（已存在就跳过）。2026-09-25 起只剩「任务完成」一条。 */
@@ -86,6 +92,12 @@ object Notifier {
         if (channelId == CHANNEL_TURN && nm.getNotificationChannel(CHANNEL_ASK_LEGACY) != null) {
             nm.deleteNotificationChannel(CHANNEL_ASK_LEGACY)
             DiagLog.i(TAG, "已删除不再使用的渠道 $CHANNEL_ASK_LEGACY")
+        }
+        // 隧道保活前台服务已移除（2026-10-31）：它那条「保持连接」渠道会在设置页里
+        // 永远躺着一条不会再响的通知分类，顺手删掉。
+        if (nm.getNotificationChannel(CHANNEL_TUNNEL_LEGACY) != null) {
+            nm.deleteNotificationChannel(CHANNEL_TUNNEL_LEGACY)
+            DiagLog.i(TAG, "已删除不再使用的渠道 $CHANNEL_TUNNEL_LEGACY（保活层已移除）")
         }
         if (nm.getNotificationChannel(channelId) != null) return
         // HIGH 而不是 DEFAULT：只有 HIGH 及以上才允许**浮到屏幕上**（heads-up）。

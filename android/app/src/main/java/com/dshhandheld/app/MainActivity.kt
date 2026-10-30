@@ -614,9 +614,6 @@ class MainActivity : Activity() {
                 "t.click();return true" +
             "})()"
 
-        // 通知动作的 extra 常量定义在 TunnelService（生产者那一侧）—— 本伴生对象是
-        // private，TunnelService 引用不到它。
-
         const val PREF_SERVER_TOKEN = "server_token" // dsh 0.1.2+ 一次性启动 token（服务重启后自动更新）
 
         /**
@@ -1021,9 +1018,7 @@ class MainActivity : Activity() {
             DiagLog.i(TAG, "onCreate: 分支3 停留连接屏（无保存 url 且 WebView 非正式页面：$currentUrl）")
         }
 
-        // 通知上的「打开连接屏」动作：冷启动也走同一个处理函数。放在三分支**之后** ——
-        // 上面的分支可能已经选了 WEB，而用户点的就是「打开连接屏」，以它为准。
-        handleOpenConnectIntent(intent)
+
     }
 
     /** 启动时从保存的 SSH 配置恢复隧道，成功后把 WebView 指向新的本地端口 URL。 */
@@ -2950,13 +2945,6 @@ class MainActivity : Activity() {
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         setIntent(intent)
-        handleOpenConnectIntent(intent)
-    }
-
-    private fun handleOpenConnectIntent(intent: Intent?) {
-        if (intent?.getBooleanExtra(TunnelService.EXTRA_OPEN_CONNECT, false) != true) return
-        DiagLog.i(TAG, "intent: 打开连接屏（来自隧道通知）")
-        showConnectScreen()
     }
 
     override fun onPause() {

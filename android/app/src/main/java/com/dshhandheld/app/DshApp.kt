@@ -33,10 +33,17 @@ import java.util.concurrent.CopyOnWriteArrayList
  *   （nativeLibraryDir/libdbclient.so、filesDir），SshTunnel 自身无 Context，
  *   由这里注入（方案 B：进程式隧道与终端共用）。
  *
- * 后台行为：**有前台服务**（[com.dshhandheld.app.TunnelService]，0.1.8 起）—— 进程不进
- * cached 队列，既不冻结也不容易被低内存杀手挑中，隧道看门狗因此有机会自愈。
- * 历史上这里写过「没有前台服务、完成通知改由服务端经微信推送」：那条路 2026-09-14
- * 已被 App 自己的任务完成通知取代（[Notifier] + Host 事件流）。
+ * 后台行为：**不做保活**（2026-10-31 用户决定）。
+ *
+ * 曾经有一层前台服务（TunnelService，0.1.8 起）专门让进程不进 cached 队列，
+ * 另外还试过 WiFiLock 关 Wi-Fi 省电。两者都已移除 —— 结论是：这个 App 不需要
+ * 「后台一直活着」，需要的是**重连可靠**。所以现在的策略是：
+ *
+ * - 进程被冻结/回收**不视为故障**，回到前台时按需重建隧道；
+ * - 重建的时机与判据交给 [SshTunnel] 的看门狗 + 回到前台时的健康检查；
+ * - 阈值按真机链路质量放宽（见 SshTunnel 的 PROBE_* 注释），避免把好隧道拆掉。
+ *
+ * 任务完成通知仍由 [Notifier] + Host 事件流提供，与隧道保活无关。
  */
 class DshApp : Application() {
 
@@ -502,18 +509,11 @@ class DshApp : Application() {
                 DiagLog.i(TAG, "tunnel base changed: $b")
                 tunnelObservers.forEach { it.onTunnelBaseChanged(b) }
             }
-            // ⚠️ 必须**拨号前**就抬起前台服务（2026-10-30 真机定位）：
-            // 原先只在成功分支启动服务，于是「连接中」这段时间进程还在 background
-            // cgroup 里；用户这时切走或熄屏，进程被冻结，拨号线程连日志都停在半路
-            // （实测日志在 tune #2 之后 6 分钟没有任何新行，而 dbclient 子进程还活着）。
-            // 拨号失败时下面会 stop()，不会留下常驻服务。
-            TunnelService.start(this, "正在连接 ${cfg.host}…")
             t.start()
             if (t.localBaseUrl == null) {
                 // 失败原因带到 UI 去（否则只剩一句「检查地址/账号/密码」）
                 lastTunnelError = t.lastError
                 t.close()
-                TunnelService.stop(this)
                 DiagLog.w(TAG, "ensureTunnel: 拨号失败（${lastTunnelError ?: "原因未记录"}）")
                 return null
             }
@@ -534,7 +534,7 @@ class DshApp : Application() {
             // 隧道真的起来了才需要保活。放在成功分支里（而不是 build()），
             // 免得拨号失败也留下一个常驻前台服务。
             lastTunnelError = null
-            TunnelService.start(this, "已连接到 ${cfg.host}")
+
             DiagLog.i(TAG, "ensureTunnel: 已建立 ${t.localBaseUrl}")
             // 隧道刚起来：把权威回合状态的订阅挂上（页面被冻时通知只能靠它）。
             syncEventsClient()
@@ -558,8 +558,7 @@ class DshApp : Application() {
             tunnelFingerprint = null
             cur
         }
-        // 隧道没了就不该继续占着前台服务
-        TunnelService.stop(this)
+
         // 订阅也停掉：它的目标是那条隧道里的 127.0.0.1:3080，隧道没了重连只会白转。
         stopEventsClient()
         // 明确告诉界面「已经不可用」：主动断开时界面自己会刷新，但看门狗/后台路径不一定。
