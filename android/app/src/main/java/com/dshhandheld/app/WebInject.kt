@@ -31,7 +31,7 @@ object WebInject {
     private const val SIDEBAR_FAB_JS =
         "(function () {" +
         "  try {" +
-        "    var V = \"v12\";" +
+        "    var V = \"v13\";" +
         "    if (window.__dshhhSidebarFab === V) return \"already\";" +
         // 预留的让位开关：若页面（例如服务端插件）已自带窄屏适配并打了
         // data-dsh-mobile-fit 标记，就跳过本注入，避免出现两个悬浮按钮。
@@ -71,6 +71,10 @@ object WebInject {
         "      \"[class*=sidebarCol] > *{width:100% !important;max-width:none !important}\"," +
         "      \"[class*=sidebarCol] [class*=hHd-Xa_root]{width:100% !important;max-width:none !important}\"," +
         "      \"html.dshhh-open [class*=sidebarCol]{transform:translateX(0) !important}\"," +
+        "      \"[class*=sidebarCol] [class*=rowResting]{min-width:44px !important;\"," +
+        "      \"  display:inline-flex !important;justify-content:flex-end !important;margin-right:2px !important}\"," +
+        "      \"[class*=sidebarCol] [class*=rowActions]{opacity:1 !important;\"," +
+        "      \"  visibility:visible !important;margin-left:10px !important}\"," +
         // 悬浮按钮：最左上角；同时给头部让出左内边距，避免盖住宿主的「智能体团队」入口
         "      \"#dshhh-fab{position:fixed;left:6px;top:6px;width:40px;height:40px;border-radius:20px;\"," +
         "      \"  background:rgba(43,43,48,.92);border:1px solid #3d3d44;z-index:70;\"," +
