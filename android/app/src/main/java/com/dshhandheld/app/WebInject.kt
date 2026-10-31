@@ -226,40 +226,102 @@ object WebInject {
             DiagLog.i("DshHandheld", "inject: 侧栏悬浮按钮 → " + result)
         }
     }
-
     /**
-     * 会话行内联操作条（用户 2026-10-31 要求：把「⋯」里的操作直接铺在行上，不要藏起来）。
+     * 会话行内联操作条（用户 2026-10-31 要求：把「⋯」里的操作直接铺在行上）。
      *
-     * 做法：隐藏宿主自带的「⋯」按钮（rowActions），在每行尾部插入 5 个图标按钮：
-     * 置顶 / 重命名 / 分叉 / 归档 / 复制 Session ID。
-     * 点击时**不直接改宿主状态**：先点开宿主自己的「⋯」菜单，再按文本点中对应菜单项，
-     * 这样所有逻辑（权限、确认弹窗、动画）都还由宿主完成，我们只负责把它提前暴露出来。
+     * 只保留两个高频操作：**归档** 与 **置顶**；其余操作仍可通过宿主自带的「⋯」进入
+     * （这一版不再隐藏 rowActions，避免功能丢失）。
      *
-     * 置顶项文本会随状态变化（置顶会话 / 取消置顶），所以用 alts 列表匹配。
+     * 图标不用自己画：用户反馈「好像用的不是原来的图标」，所以改成在首次渲染时
+     * **打开一次宿主菜单、克隆它自己的 svg 图标**并缓存（约 150ms 后自动关闭）。
+     * 克隆失败才退回占位字母，保证按钮永远可用。
+     *
+     * 点击逻辑不变：先点开宿主「⋯」菜单，再按文本点中对应项 —— 权限/确认框仍由宿主处理。
+     * 置顶项文本随状态在「置顶会话 / 取消置顶」间变化，用 alts 列表匹配。
      */
-    private const val ROW_ACTIONS_JS = "" +
+        private const val ROW_ACTIONS_JS = "" +
         "(function () {" +
         "  try {" +
-        "    var V = \"v1\";" +
+        "    var V = \"v2\";" +
         "    if (window.__dshhhRowActions === V) return \"already\";" +
         "    window.__dshhhRowActions = V;" +
         "" +
         "    var CSS = [" +
-        "      \"[class*=sidebarCol] [class*=rowActions]{display:none !important}\"," +
-        "      \"[class*=sidebarCol] [class*=rowResting]{margin-right:4px !important;min-width:44px !important;display:inline-flex !important;justify-content:flex-end !important}\"," +
         "      \"#dshhh-rowact{display:flex;align-items:center;gap:2px;flex:0 0 auto;margin-left:6px}\"," +
-        "      \"#dshhh-rowact .b{width:20px;height:20px;border-radius:6px;display:flex;align-items:center;justify-content:center;color:#8b8b95;background:transparent;border:0;padding:0}\"," +
+        "      \"#dshhh-rowact .b{width:22px;height:22px;border-radius:6px;display:flex;align-items:center;justify-content:center;\"," +
+        "      \"  color:#8b8b95;background:transparent;border:0;padding:0}\"," +
         "      \"#dshhh-rowact .b:active{background:rgba(255,255,255,.12);color:#fff}\"," +
-        "      \"#dshhh-rowact .b svg{width:13px;height:13px;display:block;fill:none;stroke:currentColor;stroke-width:1.6;stroke-linecap:round;stroke-linejoin:round}\"" +
+        "      \"#dshhh-rowact .b svg{width:14px !important;height:14px !important;display:block !important;fill:none;stroke:currentColor}\"" +
         "    ].join(String.fromCharCode(10));" +
         "" +
         "    var ACTS = [" +
-        "      { label: \"置顶会话\", alts: [\"置顶会话\", \"取消置顶\"], icon: '<path d=\"M7 1.5v5L4.5 9v1.5h5V9L7 6.5v-5z\"/><path d=\"M7 10.5V13\"/>' }," +
-        "      { label: \"重命名\", alts: [\"重命名\"], icon: '<path d=\"M2 12h2.5L12 4.5 9.5 2 2 9.5z\"/><path d=\"M8.5 3l2.5 2.5\"/>' }," +
-        "      { label: \"分叉会话\", alts: [\"分叉会话\"], icon: '<path d=\"M3 12V6.5A2.5 2.5 0 015.5 4H11\"/><path d=\"M8.5 1.5L11 4l-2.5 2.5\"/>' }," +
-        "      { label: \"归档会话\", alts: [\"归档会话\"], icon: '<path d=\"M1.5 3.5h11V6h-11z\"/><path d=\"M2.5 6v6.5h9V6\"/><path d=\"M5.5 8.5h3\"/>' }," +
-        "      { label: \"复制 Session ID\", alts: [\"复制 Session ID\"], icon: '<path d=\"M5 5h7v7.5H5z\"/><path d=\"M3 9.5V2h7\"/>' }" +
+        "      { key: \"archive\", label: \"归档会话\", alts: [\"归档会话\"] }," +
+        "      { key: \"pin\", label: \"置顶会话\", alts: [\"置顶会话\", \"取消置顶\"] }" +
         "    ];" +
+        "" +
+        "    var ICONS = {};" +
+        "" +
+        "    function findDeepest(label) {" +
+        "      var all = document.querySelectorAll(\"span,div,button\");" +
+        "      for (var i = 0; i < all.length; i++) {" +
+        "        var e = all[i];" +
+        "        if (e.children.length) continue;" +
+        "        if ((e.textContent || \"\").trim() === label) return e;" +
+        "      }" +
+        "      return null;" +
+        "    }" +
+        "" +
+        "    function grabIcon(label) {" +
+        "      var node = findDeepest(label);" +
+        "      if (!node) return null;" +
+        "      var el = node;" +
+        "      for (var up = 0; up < 5 && el; up++, el = el.parentElement) {" +
+        "        var svg = el.querySelector(\"svg\");" +
+        "        if (svg) return svg.cloneNode(true);" +
+        "        var img = el.querySelector(\"img\");" +
+        "        if (img) {" +
+        "          var i2 = document.createElement(\"img\");" +
+        "          i2.src = img.src;" +
+        "          i2.style.cssText = \"width:14px;height:14px;display:block\";" +
+        "          return i2;" +
+        "        }" +
+        "      }" +
+        "      return null;" +
+        "    }" +
+        "" +
+        "    function closeMenu() {" +
+        "      document.dispatchEvent(new KeyboardEvent(\"keydown\", { key: \"Escape\", bubbles: true }));" +
+        "      document.body.dispatchEvent(new MouseEvent(\"mousedown\", { bubbles: true }));" +
+        "      document.body.dispatchEvent(new MouseEvent(\"mouseup\", { bubbles: true }));" +
+        "      document.body.click();" +
+        "    }" +
+        "" +
+        "    function captureIcons(done) {" +
+        "      if (ICONS.pin && ICONS.archive) { done(true); return; }" +
+        "      var rows = document.querySelectorAll(\"[class*=sidebarCol] [class*=sessionRow]\");" +
+        "      if (!rows.length) { done(false); return; }" +
+        "      var acts = rows[0].querySelector(\"[class*=rowActions]\");" +
+        "      var btn = acts && (acts.querySelector(\"button,[role=button]\") || acts);" +
+        "      if (!btn) { done(false); return; }" +
+        "      btn.click();" +
+        "      var tries = 0;" +
+        "      var timer = setInterval(function () {" +
+        "        tries++;" +
+        "        for (var i = 0; i < ACTS.length; i++) {" +
+        "          var k = ACTS[i].key;" +
+        "          if (!ICONS[k]) {" +
+        "            var ic = grabIcon(ACTS[i].label);" +
+        "            if (ic) ICONS[k] = ic;" +
+        "          }" +
+        "        }" +
+        "        var okCount = (ICONS.pin ? 1 : 0) + (ICONS.archive ? 1 : 0);" +
+        "        if (okCount === 2 || tries > 14) {" +
+        "          clearInterval(timer);" +
+        "          closeMenu();" +
+        "          done(okCount === 2);" +
+        "        }" +
+        "      }, 25);" +
+        "    }" +
         "" +
         "    function clickMenuItem(alts) {" +
         "      var all = document.querySelectorAll(\"span,div,button\");" +
@@ -296,7 +358,11 @@ object WebInject {
         "          var b = document.createElement(\"button\");" +
         "          b.className = \"b\";" +
         "          b.setAttribute(\"aria-label\", act.label);" +
-        "          b.innerHTML = '<svg viewBox=\"0 0 14 14\">' + act.icon + \"</svg>\";" +
+        "          if (ICONS[act.key]) {" +
+        "            b.appendChild(ICONS[act.key].cloneNode(true));" +
+        "          } else {" +
+        "            b.textContent = act.key === \"pin\" ? \"P\" : \"A\";" +
+        "          }" +
         "          b.addEventListener(\"click\", function (e) {" +
         "            e.preventDefault();" +
         "            e.stopPropagation();" +
@@ -320,25 +386,32 @@ object WebInject {
         "        st.textContent = CSS;" +
         "        document.head.appendChild(st);" +
         "      }" +
-        "      scan();" +
-        "      var mo = new MutationObserver(scan);" +
+        "      var rows = document.querySelectorAll(\"[class*=sidebarCol] [class*=sessionRow]\");" +
+        "      if (rows.length) {" +
+        "        captureIcons(function () { scan(); });" +
+        "      }" +
+        "      var mo = new MutationObserver(function () {" +
+        "        var rs = document.querySelectorAll(\"[class*=sidebarCol] [class*=sessionRow]\");" +
+        "        if (rs.length && (!ICONS.pin || !ICONS.archive)) captureIcons(function () { scan(); });" +
+        "        else scan();" +
+        "      });" +
         "      mo.observe(document.body, { childList: true, subtree: true });" +
-        "      setInterval(scan, 800);" +
+        "      setInterval(function () {" +
+        "        var rs = document.querySelectorAll(\"[class*=sidebarCol] [class*=sessionRow]\");" +
+        "        if (rs.length && (!ICONS.pin || !ICONS.archive)) captureIcons(function () { scan(); });" +
+        "        else scan();" +
+        "      }, 800);" +
         "      return true;" +
         "    }" +
         "" +
         "    if (start()) return \"ok\";" +
-        "    var tries = 0;" +
-        "    var timer = setInterval(function () {" +
-        "      tries++;" +
-        "      if (start() || tries > 60) clearInterval(timer);" +
-        "    }, 250);" +
-        "    return \"deferred\";" +
+        "    return \"no-body\";" +
         "  } catch (e) {" +
         "    window.__dshhhRowActions = null;" +
         "    return \"error: \" + (e && e.message ? e.message : String(e));" +
         "  }" +
-        "})()"
+        "})()" +
+        ""
 
     /** 幂等；页面每次加载完成后调用一次即可。 */
     fun applyRowActions(wv: WebView?) {

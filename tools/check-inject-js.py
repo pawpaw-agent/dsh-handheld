@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """检查 WebInject.kt 里拼接出来的注入 JS 语法是否合法。
 
-为什么需要它：注入脚本是 Kotlin 字符串拼出来的，一旦转义写错（踩过三次：
-三层反斜杠、带引号的选择器、注释里带双引号的示例），evaluateJavascript 会
-**静默吞掉语法错误**，表现是「注入无任何效果」，排查成本极高。
+为什么需要它：注入脚本是 Kotlin 字符串拼出来的，一旦转义写错（踩过四次：
+三层反斜杠、带引号的选择器、注释里带双引号的示例、字符串里含 //），
+evaluateJavascript 会**静默吞掉语法错误**，表现是「注入无任何效果」。
 本脚本把每个 *_JS 常量还原成真实 JS，逐个交给 node --check 判定。
 
 用法: python3 tools/check-inject-js.py
@@ -40,14 +40,46 @@ def unescape(s):
 
 
 def strip_comments(block):
-    """先剥掉 Kotlin 注释再抓字符串字面量。
+    """剥掉 Kotlin 注释，但**必须识别字符串字面量**。
 
-    否则注释里出现的成对双引号（例如举例说明写法）会被当成真实字面量拼进 JS，
-    而拼出来的 JS 是一整行，一段行注释就会把它后面的代码全部注释掉（2026-10-31 踩过）。
+    踩过的坑（2026-10-31）：注入的 JS 里写了行注释（双斜杠），
+    简单用正则剥注释会把字符串里的双斜杠连同后面的引号一起删掉，
+    于是还原出来的 JS 被截断、误报语法错误。
     """
-    block = re.sub(r"/\*.*?\*/", "", block, flags=re.S)
-    block = re.sub(r"//[^\n]*", "", block)
-    return block
+    out = []
+    i = 0
+    n = len(block)
+    in_str = False
+    while i < n:
+        c = block[i]
+        if in_str:
+            out.append(c)
+            if c == BS and i + 1 < n:
+                out.append(block[i + 1])
+                i += 2
+                continue
+            if c == '"':
+                in_str = False
+            i += 1
+            continue
+        if c == '"':
+            in_str = True
+            out.append(c)
+            i += 1
+            continue
+        if c == "/" and i + 1 < n and block[i + 1] == "/":
+            j = block.find(chr(10), i)
+            if j < 0:
+                break
+            i = j
+            continue
+        if c == "/" and i + 1 < n and block[i + 1] == "*":
+            j = block.find("*/", i + 2)
+            i = n if j < 0 else j + 2
+            continue
+        out.append(c)
+        i += 1
+    return "".join(out)
 
 
 def const_block(name):
