@@ -226,4 +226,124 @@ object WebInject {
             DiagLog.i("DshHandheld", "inject: 侧栏悬浮按钮 → " + result)
         }
     }
+
+    /**
+     * 会话行内联操作条（用户 2026-10-31 要求：把「⋯」里的操作直接铺在行上，不要藏起来）。
+     *
+     * 做法：隐藏宿主自带的「⋯」按钮（rowActions），在每行尾部插入 5 个图标按钮：
+     * 置顶 / 重命名 / 分叉 / 归档 / 复制 Session ID。
+     * 点击时**不直接改宿主状态**：先点开宿主自己的「⋯」菜单，再按文本点中对应菜单项，
+     * 这样所有逻辑（权限、确认弹窗、动画）都还由宿主完成，我们只负责把它提前暴露出来。
+     *
+     * 置顶项文本会随状态变化（置顶会话 / 取消置顶），所以用 alts 列表匹配。
+     */
+    private const val ROW_ACTIONS_JS = "" +
+        "(function () {" +
+        "  try {" +
+        "    var V = \"v1\";" +
+        "    if (window.__dshhhRowActions === V) return \"already\";" +
+        "    window.__dshhhRowActions = V;" +
+        "" +
+        "    var CSS = [" +
+        "      \"[class*=sidebarCol] [class*=rowActions]{display:none !important}\"," +
+        "      \"[class*=sidebarCol] [class*=rowResting]{margin-right:4px !important;min-width:44px !important;display:inline-flex !important;justify-content:flex-end !important}\"," +
+        "      \"#dshhh-rowact{display:flex;align-items:center;gap:2px;flex:0 0 auto;margin-left:6px}\"," +
+        "      \"#dshhh-rowact .b{width:20px;height:20px;border-radius:6px;display:flex;align-items:center;justify-content:center;color:#8b8b95;background:transparent;border:0;padding:0}\"," +
+        "      \"#dshhh-rowact .b:active{background:rgba(255,255,255,.12);color:#fff}\"," +
+        "      \"#dshhh-rowact .b svg{width:13px;height:13px;display:block;fill:none;stroke:currentColor;stroke-width:1.6;stroke-linecap:round;stroke-linejoin:round}\"" +
+        "    ].join(String.fromCharCode(10));" +
+        "" +
+        "    var ACTS = [" +
+        "      { label: \"置顶会话\", alts: [\"置顶会话\", \"取消置顶\"], icon: '<path d=\"M7 1.5v5L4.5 9v1.5h5V9L7 6.5v-5z\"/><path d=\"M7 10.5V13\"/>' }," +
+        "      { label: \"重命名\", alts: [\"重命名\"], icon: '<path d=\"M2 12h2.5L12 4.5 9.5 2 2 9.5z\"/><path d=\"M8.5 3l2.5 2.5\"/>' }," +
+        "      { label: \"分叉会话\", alts: [\"分叉会话\"], icon: '<path d=\"M3 12V6.5A2.5 2.5 0 015.5 4H11\"/><path d=\"M8.5 1.5L11 4l-2.5 2.5\"/>' }," +
+        "      { label: \"归档会话\", alts: [\"归档会话\"], icon: '<path d=\"M1.5 3.5h11V6h-11z\"/><path d=\"M2.5 6v6.5h9V6\"/><path d=\"M5.5 8.5h3\"/>' }," +
+        "      { label: \"复制 Session ID\", alts: [\"复制 Session ID\"], icon: '<path d=\"M5 5h7v7.5H5z\"/><path d=\"M3 9.5V2h7\"/>' }" +
+        "    ];" +
+        "" +
+        "    function clickMenuItem(alts) {" +
+        "      var all = document.querySelectorAll(\"span,div,button\");" +
+        "      for (var i = 0; i < all.length; i++) {" +
+        "        var e = all[i];" +
+        "        if (e.children.length) continue;" +
+        "        var t = (e.textContent || \"\").trim();" +
+        "        for (var j = 0; j < alts.length; j++) {" +
+        "          if (t === alts[j]) { e.click(); return true; }" +
+        "        }" +
+        "      }" +
+        "      return false;" +
+        "    }" +
+        "" +
+        "    function fireAction(row, act) {" +
+        "      var acts = row.querySelector(\"[class*=rowActions]\");" +
+        "      var btn = acts && (acts.querySelector(\"button,[role=button]\") || acts);" +
+        "      if (!btn) return;" +
+        "      btn.click();" +
+        "      var tries = 0;" +
+        "      var timer = setInterval(function () {" +
+        "        tries++;" +
+        "        if (clickMenuItem(act.alts)) { clearInterval(timer); return; }" +
+        "        if (tries > 12) clearInterval(timer);" +
+        "      }, 40);" +
+        "    }" +
+        "" +
+        "    function decorate(row) {" +
+        "      if (row.querySelector(\"#dshhh-rowact\")) return;" +
+        "      var bar = document.createElement(\"div\");" +
+        "      bar.id = \"dshhh-rowact\";" +
+        "      for (var i = 0; i < ACTS.length; i++) {" +
+        "        (function (act) {" +
+        "          var b = document.createElement(\"button\");" +
+        "          b.className = \"b\";" +
+        "          b.setAttribute(\"aria-label\", act.label);" +
+        "          b.innerHTML = '<svg viewBox=\"0 0 14 14\">' + act.icon + \"</svg>\";" +
+        "          b.addEventListener(\"click\", function (e) {" +
+        "            e.preventDefault();" +
+        "            e.stopPropagation();" +
+        "            fireAction(row, act);" +
+        "          });" +
+        "          bar.appendChild(b);" +
+        "        })(ACTS[i]);" +
+        "      }" +
+        "      row.appendChild(bar);" +
+        "    }" +
+        "" +
+        "    function scan() {" +
+        "      var rows = document.querySelectorAll(\"[class*=sidebarCol] [class*=sessionRow]\");" +
+        "      for (var i = 0; i < rows.length; i++) decorate(rows[i]);" +
+        "    }" +
+        "" +
+        "    function start() {" +
+        "      if (!document.getElementById(\"dshhh-rowact-style\")) {" +
+        "        var st = document.createElement(\"style\");" +
+        "        st.id = \"dshhh-rowact-style\";" +
+        "        st.textContent = CSS;" +
+        "        document.head.appendChild(st);" +
+        "      }" +
+        "      scan();" +
+        "      var mo = new MutationObserver(scan);" +
+        "      mo.observe(document.body, { childList: true, subtree: true });" +
+        "      setInterval(scan, 800);" +
+        "      return true;" +
+        "    }" +
+        "" +
+        "    if (start()) return \"ok\";" +
+        "    var tries = 0;" +
+        "    var timer = setInterval(function () {" +
+        "      tries++;" +
+        "      if (start() || tries > 60) clearInterval(timer);" +
+        "    }, 250);" +
+        "    return \"deferred\";" +
+        "  } catch (e) {" +
+        "    window.__dshhhRowActions = null;" +
+        "    return \"error: \" + (e && e.message ? e.message : String(e));" +
+        "  }" +
+        "})()"
+
+    /** 幂等；页面每次加载完成后调用一次即可。 */
+    fun applyRowActions(wv: WebView?) {
+        wv?.evaluateJavascript(ROW_ACTIONS_JS) { result ->
+            DiagLog.i("DshHandheld", "inject: 会话行操作条 → " + result)
+        }
+    }
 }

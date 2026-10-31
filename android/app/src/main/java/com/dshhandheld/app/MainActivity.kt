@@ -728,6 +728,8 @@ class MainActivity : Activity() {
                         if (prefs.getBoolean(PREF_INJECT_SIDEBAR_FAB, true)) {
                             WebInject.applySidebarFab(webView)
                             DiagLog.i(TAG, "inject: 侧栏悬浮按钮已注入")
+                            // 会话行内联操作条（置顶/重命名/分叉/归档/复制 ID）
+                            WebInject.applyRowActions(webView)
                         }
                     }
                 }
