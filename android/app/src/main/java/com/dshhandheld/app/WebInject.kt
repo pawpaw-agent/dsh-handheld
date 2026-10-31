@@ -31,7 +31,7 @@ object WebInject {
     private const val SIDEBAR_FAB_JS =
         "(function () {" +
         "  try {" +
-        "    var V = \"v11\";" +
+        "    var V = \"v12\";" +
         "    if (window.__dshhhSidebarFab === V) return \"already\";" +
         // 预留的让位开关：若页面（例如服务端插件）已自带窄屏适配并打了
         // data-dsh-mobile-fit 标记，就跳过本注入，避免出现两个悬浮按钮。
@@ -62,8 +62,12 @@ object WebInject {
         "      \"  width:100vw !important;max-width:none !important;z-index:60;background:#17171a;\"," +
         // transform 必须 !important：宿主可能给同一元素写内联 transform（展开/收起动画），
         // 内联样式优先级高于普通规则，会把我们的滑动直接顶掉 —— 表现就是「不走动画，直接闪一下」。
+        // will-change/translateZ：把抽屉提到独立合成层，滑动时走合成器，不随主线程掉帧
+        // （2026-10-31 真机实测：未加时 21fps，且有 276px 的跳帧）。
+        // 去掉 box-shadow：全屏抽屉不需要，且阴影要跟随整块面板每帧重绘，开销很大。
         "      \"  transform:translateX(-102%) !important;transition:transform .18s ease;\"," +
-        "      \"  box-shadow:2px 0 18px rgba(0,0,0,.55);display:block !important;overflow:hidden}\"," +
+        "      \"  will-change:transform;backface-visibility:hidden;contain:paint;\"," +
+        "      \"  display:block !important;overflow:hidden}\"," +
         "      \"[class*=sidebarCol] > *{width:100% !important;max-width:none !important}\"," +
         "      \"[class*=sidebarCol] [class*=hHd-Xa_root]{width:100% !important;max-width:none !important}\"," +
         "      \"html.dshhh-open [class*=sidebarCol]{transform:translateX(0) !important}\"," +
@@ -76,8 +80,10 @@ object WebInject {
         "      \"html.dshhh-open #dshhh-fab{opacity:0;pointer-events:none;transition:opacity .12s}\"," +
         "      \"#dshhh-fab i{display:block;width:18px;height:2px;background:#e6e6ea;border-radius:1px;\"," +
         "      \"  box-shadow:0 -6px 0 #e6e6ea,0 6px 0 #e6e6ea}\"," +
-        "      \"#dshhh-scrim{position:fixed;top:0;right:0;bottom:0;left:0;background:rgba(0,0,0,.42);z-index:55;display:none}\"," +
-        "      \"html.dshhh-open #dshhh-scrim{display:block}\"," +
+        // 遮罩用 opacity 过渡，不用 display 切换：display 变化会触发整屏重排。
+        "      \"#dshhh-scrim{position:fixed;top:0;right:0;bottom:0;left:0;background:rgba(0,0,0,.42);z-index:55;\"," +
+        "      \"  opacity:0;pointer-events:none;transition:opacity .18s ease}\"," +
+        "      \"html.dshhh-open #dshhh-scrim{opacity:1;pointer-events:auto}\"," +
         "      \"/* 消息区滚动条隐藏（见 tuneMessages 加的 .dshhh-msg） */\"," +
         "      \".dshhh-msg::-webkit-scrollbar{width:0 !important;height:0 !important}\"," +
         "      \".dshhh-msg{scrollbar-width:none !important}\"" +
@@ -85,6 +91,7 @@ object WebInject {
 
         "    var MSG_PAD = \"12px\";" +
         "    function tuneMessages() {" +
+        "      if (animating()) return;" +
         "      var cols = document.querySelectorAll(\"[class*=column]\");" +
         "      for (var i = 0; i < cols.length; i++) {" +
         "        var c = cols[i];" +
@@ -119,7 +126,15 @@ object WebInject {
         "    }" +
 
         // 只把第一列改成 0，其余列保留宿主原值（否则右侧面板会被压没）
+        // ⚠️ 注释必须写在 Kotlin 层；若把行注释写进字符串字面量，拼出来的 JS
+        // 是**一整行**，该注释会把它后面所有代码全部注释掉 → 语法错误（2026-10-31 踩过）。
+        // 同时，注释文字里也不要出现成对的双引号：校验脚本按双引号抓字面量，会把示例也拼进去。
+        "    var animUntil = 0;" +
+        "    function animating() { return Date.now() < animUntil; }" +
+        "    function markAnim() { animUntil = Date.now() + 450; }" +
         "    function fixGrid() {" +
+        // 窄屏（手机）由 CSS @media 用 !important 全权接管，JS 完全不需要介入。
+        "      if (innerWidth <= 520 || animating()) return;" +
         "      var f = document.querySelector(FRAME);" +
         "      if (!f || !f.style || !f.style.gridTemplateColumns) return;" +
         "      var raw = f.style.gridTemplateColumns;" +
@@ -133,6 +148,7 @@ object WebInject {
         "    function toggleHost() {" +
         "      var t = findToggle();" +
         "      if (!t) return false;" +
+        "      markAnim();" +
         "      t.click();" +
         "      setTimeout(sync, 60);" +
         "      return true;" +

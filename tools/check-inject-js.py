@@ -22,6 +22,12 @@ if start < 0 or end < 0:
     sys.exit(1)
 block = src[start:end]
 
+# 先剥掉 Kotlin 注释再抓字符串字面量。
+# 否则注释里出现的成对双引号（例如举例说明写法）会被当成真实字面量拼进 JS，
+# 而拼出来的 JS 是一整行，一段行注释就会把它后面的代码全部注释掉（2026-10-31 踩过）。
+block = re.sub(r"/\*.*?\*/", "", block, flags=re.S)   # 块注释
+block = re.sub(r"//[^\n]*", "", block)                  # 行注释
+
 quoted = re.compile(r'"((?:[^"\\]|\\.)*)"')
 lits = quoted.findall(block)
 if not lits:
