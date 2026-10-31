@@ -117,7 +117,16 @@ object WebInject {
 
         "    function rail() { return document.querySelector(RAIL); }" +
         "    function hostOpen() { var r = rail(); return !!r && r.className.toString().indexOf(\"collapsed\") < 0; }" +
-        "    function sync() { document.documentElement.classList.toggle(\"dshhh-open\", hostOpen()); }" +
+        // ⚠️ 必须同时确认「侧栏列存在」。否则会出现只有遮罩、没有抽屉的死状态：
+        // 新建会话的欢迎页没有 sidebarCol 容器，但 rail 状态仍可能是展开 —— 于是遮罩把
+        // 整页压暗、悬浮按钮也被隐藏，看起来像 App 卡死（2026-10-31 真机踩到）。
+        "    function sync() {" +
+        "      var col = document.querySelector(\"[class*=sidebarCol]\");" +
+        "      var want = !!col && hostOpen();" +
+        "      if (document.documentElement.classList.contains(\"dshhh-open\") !== want) {" +
+        "        document.documentElement.classList.toggle(\"dshhh-open\", want);" +
+        "      }" +
+        "    }" +
 
         // 找宿主侧栏开关：遍历 [aria-label] 比较文本，避免带引号的选择器
         "    function findToggle() {" +
@@ -239,17 +248,16 @@ object WebInject {
      * 点击逻辑不变：先点开宿主「⋯」菜单，再按文本点中对应项 —— 权限/确认框仍由宿主处理。
      * 置顶项文本随状态在「置顶会话 / 取消置顶」间变化，用 alts 列表匹配。
      */
-        private const val ROW_ACTIONS_JS = "" +
+            private const val ROW_ACTIONS_JS = "" +
         "(function () {" +
         "  try {" +
-        "    var V = \"v2\";" +
+        "    var V = \"v3\";" +
         "    if (window.__dshhhRowActions === V) return \"already\";" +
         "    window.__dshhhRowActions = V;" +
         "" +
         "    var CSS = [" +
         "      \"#dshhh-rowact{display:flex;align-items:center;gap:2px;flex:0 0 auto;margin-left:6px}\"," +
-        "      \"#dshhh-rowact .b{width:22px;height:22px;border-radius:6px;display:flex;align-items:center;justify-content:center;\"," +
-        "      \"  color:#8b8b95;background:transparent;border:0;padding:0}\"," +
+        "      \"#dshhh-rowact .b{width:22px;height:22px;border-radius:6px;display:flex;align-items:center;justify-content:center;color:#8b8b95;background:transparent;border:0;padding:0}\"," +
         "      \"#dshhh-rowact .b:active{background:rgba(255,255,255,.12);color:#fff}\"," +
         "      \"#dshhh-rowact .b svg{width:14px !important;height:14px !important;display:block !important;fill:none;stroke:currentColor}\"" +
         "    ].join(String.fromCharCode(10));" +
@@ -260,6 +268,8 @@ object WebInject {
         "    ];" +
         "" +
         "    var ICONS = {};" +
+        "    var capturing = false;" +
+        "    var started = false;" +
         "" +
         "    function findDeepest(label) {" +
         "      var all = document.querySelectorAll(\"span,div,button\");" +
@@ -278,13 +288,6 @@ object WebInject {
         "      for (var up = 0; up < 5 && el; up++, el = el.parentElement) {" +
         "        var svg = el.querySelector(\"svg\");" +
         "        if (svg) return svg.cloneNode(true);" +
-        "        var img = el.querySelector(\"img\");" +
-        "        if (img) {" +
-        "          var i2 = document.createElement(\"img\");" +
-        "          i2.src = img.src;" +
-        "          i2.style.cssText = \"width:14px;height:14px;display:block\";" +
-        "          return i2;" +
-        "        }" +
         "      }" +
         "      return null;" +
         "    }" +
@@ -296,13 +299,22 @@ object WebInject {
         "      document.body.click();" +
         "    }" +
         "" +
-        "    function captureIcons(done) {" +
-        "      if (ICONS.pin && ICONS.archive) { done(true); return; }" +
+        "    function firstActionButton() {" +
         "      var rows = document.querySelectorAll(\"[class*=sidebarCol] [class*=sessionRow]\");" +
-        "      if (!rows.length) { done(false); return; }" +
-        "      var acts = rows[0].querySelector(\"[class*=rowActions]\");" +
-        "      var btn = acts && (acts.querySelector(\"button,[role=button]\") || acts);" +
+        "      for (var i = 0; i < rows.length; i++) {" +
+        "        var acts = rows[i].querySelector(\"[class*=rowActions]\");" +
+        "        var b = acts && (acts.querySelector(\"button,[role=button]\") || acts);" +
+        "        if (b) return b;" +
+        "      }" +
+        "      return null;" +
+        "    }" +
+        "" +
+        "    function captureIcons(done) {" +
+        "      if (ICONS.archive && ICONS.pin) { done(true); return; }" +
+        "      if (capturing) return;" +
+        "      var btn = firstActionButton();" +
         "      if (!btn) { done(false); return; }" +
+        "      capturing = true;" +
         "      btn.click();" +
         "      var tries = 0;" +
         "      var timer = setInterval(function () {" +
@@ -314,13 +326,14 @@ object WebInject {
         "            if (ic) ICONS[k] = ic;" +
         "          }" +
         "        }" +
-        "        var okCount = (ICONS.pin ? 1 : 0) + (ICONS.archive ? 1 : 0);" +
-        "        if (okCount === 2 || tries > 14) {" +
+        "        var both = !!(ICONS.archive && ICONS.pin);" +
+        "        if (both || tries > 60) {" +
         "          clearInterval(timer);" +
         "          closeMenu();" +
-        "          done(okCount === 2);" +
+        "          capturing = false;" +
+        "          done(both);" +
         "        }" +
-        "      }, 25);" +
+        "      }, 30);" +
         "    }" +
         "" +
         "    function clickMenuItem(alts) {" +
@@ -349,27 +362,37 @@ object WebInject {
         "      }, 40);" +
         "    }" +
         "" +
+        "    function paint(btn, act) {" +
+        "      var ic = ICONS[act.key];" +
+        "      btn.innerHTML = \"\";" +
+        "      if (ic) btn.appendChild(ic.cloneNode(true));" +
+        "      else btn.textContent = act.key === \"pin\" ? \"P\" : \"A\";" +
+        "    }" +
+        "" +
         "    function decorate(row) {" +
-        "      if (row.querySelector(\"#dshhh-rowact\")) return;" +
-        "      var bar = document.createElement(\"div\");" +
+        "      var bar = row.querySelector(\"#dshhh-rowact\");" +
+        "      if (bar) {" +
+        "        var btns = bar.querySelectorAll(\".b\");" +
+        "        for (var i = 0; i < btns.length && i < ACTS.length; i++) {" +
+        "          if (!btns[i].querySelector(\"svg\") && ICONS[ACTS[i].key]) paint(btns[i], ACTS[i]);" +
+        "        }" +
+        "        return;" +
+        "      }" +
+        "      bar = document.createElement(\"div\");" +
         "      bar.id = \"dshhh-rowact\";" +
-        "      for (var i = 0; i < ACTS.length; i++) {" +
+        "      for (var i2 = 0; i2 < ACTS.length; i2++) {" +
         "        (function (act) {" +
         "          var b = document.createElement(\"button\");" +
         "          b.className = \"b\";" +
         "          b.setAttribute(\"aria-label\", act.label);" +
-        "          if (ICONS[act.key]) {" +
-        "            b.appendChild(ICONS[act.key].cloneNode(true));" +
-        "          } else {" +
-        "            b.textContent = act.key === \"pin\" ? \"P\" : \"A\";" +
-        "          }" +
+        "          paint(b, act);" +
         "          b.addEventListener(\"click\", function (e) {" +
         "            e.preventDefault();" +
         "            e.stopPropagation();" +
         "            fireAction(row, act);" +
         "          });" +
         "          bar.appendChild(b);" +
-        "        })(ACTS[i]);" +
+        "        })(ACTS[i2]);" +
         "      }" +
         "      row.appendChild(bar);" +
         "    }" +
@@ -377,6 +400,9 @@ object WebInject {
         "    function scan() {" +
         "      var rows = document.querySelectorAll(\"[class*=sidebarCol] [class*=sessionRow]\");" +
         "      for (var i = 0; i < rows.length; i++) decorate(rows[i]);" +
+        "      if (rows.length && (!ICONS.archive || !ICONS.pin) && !capturing) {" +
+        "        captureIcons(function () { scan(); });" +
+        "      }" +
         "    }" +
         "" +
         "    function start() {" +
@@ -386,26 +412,15 @@ object WebInject {
         "        st.textContent = CSS;" +
         "        document.head.appendChild(st);" +
         "      }" +
-        "      var rows = document.querySelectorAll(\"[class*=sidebarCol] [class*=sessionRow]\");" +
-        "      if (rows.length) {" +
-        "        captureIcons(function () { scan(); });" +
-        "      }" +
-        "      var mo = new MutationObserver(function () {" +
-        "        var rs = document.querySelectorAll(\"[class*=sidebarCol] [class*=sessionRow]\");" +
-        "        if (rs.length && (!ICONS.pin || !ICONS.archive)) captureIcons(function () { scan(); });" +
-        "        else scan();" +
-        "      });" +
+        "      scan();" +
+        "      var mo = new MutationObserver(function () { scan(); });" +
         "      mo.observe(document.body, { childList: true, subtree: true });" +
-        "      setInterval(function () {" +
-        "        var rs = document.querySelectorAll(\"[class*=sidebarCol] [class*=sessionRow]\");" +
-        "        if (rs.length && (!ICONS.pin || !ICONS.archive)) captureIcons(function () { scan(); });" +
-        "        else scan();" +
-        "      }, 800);" +
+        "      setInterval(scan, 700);" +
         "      return true;" +
         "    }" +
         "" +
-        "    if (start()) return \"ok\";" +
-        "    return \"no-body\";" +
+        "    if (!document.body || !document.head) return \"no-dom\";" +
+        "    return start() ? \"ok\" : \"fail\";" +
         "  } catch (e) {" +
         "    window.__dshhhRowActions = null;" +
         "    return \"error: \" + (e && e.message ? e.message : String(e));" +
