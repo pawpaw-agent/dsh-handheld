@@ -222,35 +222,4 @@ object WebInject {
             DiagLog.i("DshHandheld", "inject: 侧栏悬浮按钮 → " + result)
         }
     }
-
-    /**
-     * 关掉页面内的「自由缩放」（viewport 层兜底）。
-     *
-     * 为什么还要在页面里补一刀：WebSettings 关掉的是 WebView 自己的手势缩放，
-     * 而 dsh 的 index.html 只写了 `width=device-width, initial-scale=1`，
-     * 没写 user-scalable=no —— 页面层仍然对外声称可以缩放。这里把 viewport
-     * 改写成 maximum-scale=1 / user-scalable=no，双保险。
-     *
-     * 只动 meta，不碰任何布局尺寸：App 自己的字号缩放（setTextZoom）与
-     * 显示缩放（applyWebScale）都照旧生效（用户 2026-10-31 要求关自由缩放，
-     * 并非要取消字号调节）。
-     */
-    private const val ZOOM_LOCK_JS = "" +
-        "(function () {" +
-        "  try {" +
-        "    var m = document.querySelector(String.fromCharCode(109,101,116,97) + '[name=' + String.fromCharCode(34) + "viewport" + String.fromCharCode(34) + ']');" +
-        "    if (!m) return \"no-meta\";" +
-        "    var c = m.getAttribute(\"content\") || \"\";" +
-        "    if (c.indexOf(\"user-scalable=no\") >= 0 && c.indexOf(\"maximum-scale=1\") >= 0) return \"already\";" +
-        "    m.setAttribute(\"content\", \"width=device-width, initial-scale=1, maximum-scale=1, minimum-scale=1, user-scalable=no\");" +
-        "    return \"ok\";" +
-        "  } catch (e) { return \"error: \" + (e && e.message ? e.message : String(e)); }" +
-        "})()"
-
-    /** 幂等；页面每次加载完成后调用一次即可。 */
-    fun applyZoomLock(wv: WebView?) {
-        wv?.evaluateJavascript(ZOOM_LOCK_JS) { result ->
-            DiagLog.i("DshHandheld", "zoomLock → " + result)
-        }
-    }
 }

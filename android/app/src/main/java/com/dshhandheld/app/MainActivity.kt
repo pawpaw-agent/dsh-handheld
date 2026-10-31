@@ -664,8 +664,9 @@ class MainActivity : Activity() {
                 // 缩放：用户 2026-10-31 要求「关闭自由缩放」—— 禁止双指捏合/双击缩放。
                 // 注意这只关掉**手势缩放**；App 自己的字号缩放（setTextZoom）和
                 // 显示缩放（applyWebScale，见下方注释）都不受影响。
-                // dsh 的 index.html 只写了 `width=device-width, initial-scale=1`，
-                // 没有 user-scalable=no，所以还要在页面里补一刀（见 WebInject.applyZoomLock）。
+                // 注意：这里**不注入 JS 去改 viewport**。setSupportZoom(false) 关的就是
+                // WebView 自己的手势缩放，页面里的 meta 只在缩放可用时才生效，无需再改页面
+                // （用户 2026-10-31 也要求「尽量避免注入」）。
                 builtInZoomControls = false
                 displayZoomControls = false
                 setSupportZoom(false)
@@ -713,8 +714,6 @@ class MainActivity : Activity() {
                     if (u?.startsWith("http") == true) {
                         applyTextZoom()
                         applyWebScale()
-                        // 关掉页面内的自由缩放（viewport 层兜底；WebSettings 已关手势）
-                        WebInject.applyZoomLock(webView)
                         // 侧栏 → 悬浮按钮（App 侧注入；用户 2026-10-30 明确要求）
                         if (prefs.getBoolean(PREF_INJECT_SIDEBAR_FAB, true)) {
                             WebInject.applySidebarFab(webView)
