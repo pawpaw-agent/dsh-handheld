@@ -661,13 +661,14 @@ class MainActivity : Activity() {
                 domStorageEnabled = true
                 allowFileAccess = false
                 allowContentAccess = false
-                // 缩放：dsh 的 index.html 只写了 `width=device-width, initial-scale=1`，
-                // **没有** user-scalable=no / maximum-scale —— 所以缩放是允许的，
-                // 之前关掉纯属保守设置。打开 supportZoom 后才能用 zoomBy 落到目标比例，
-                // 同时用户也能双指缩放（按钮隐藏，避免遮挡页面）。
-                builtInZoomControls = true
+                // 缩放：用户 2026-10-31 要求「关闭自由缩放」—— 禁止双指捏合/双击缩放。
+                // 注意这只关掉**手势缩放**；App 自己的字号缩放（setTextZoom）和
+                // 显示缩放（applyWebScale，见下方注释）都不受影响。
+                // dsh 的 index.html 只写了 `width=device-width, initial-scale=1`，
+                // 没有 user-scalable=no，所以还要在页面里补一刀（见 WebInject.applyZoomLock）。
+                builtInZoomControls = false
                 displayZoomControls = false
-                setSupportZoom(true)
+                setSupportZoom(false)
                 loadWithOverviewMode = true
                 useWideViewPort = true
                 // dsh 用 `window.open(url, "_blank", ...)` 开外链（聊天里的链接、右栏浏览器
@@ -712,6 +713,8 @@ class MainActivity : Activity() {
                     if (u?.startsWith("http") == true) {
                         applyTextZoom()
                         applyWebScale()
+                        // 关掉页面内的自由缩放（viewport 层兜底；WebSettings 已关手势）
+                        WebInject.applyZoomLock(webView)
                         // 侧栏 → 悬浮按钮（App 侧注入；用户 2026-10-30 明确要求）
                         if (prefs.getBoolean(PREF_INJECT_SIDEBAR_FAB, true)) {
                             WebInject.applySidebarFab(webView)
