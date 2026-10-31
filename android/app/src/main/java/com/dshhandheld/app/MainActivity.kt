@@ -662,21 +662,31 @@ class MainActivity : Activity() {
                 allowFileAccess = false
                 allowContentAccess = false
                 // 缩放：用户 2026-10-31 要求「关闭自由缩放」—— 禁止双指捏合/双击缩放。
-                // 注意这只关掉**手势缩放**；App 自己的字号缩放（setTextZoom）和
-                // 显示缩放（applyWebScale，见下方注释）都不受影响。
-                // 注意：这里**不注入 JS 去改 viewport**。setSupportZoom(false) 关的就是
-                // WebView 自己的手势缩放，页面里的 meta 只在缩放可用时才生效，无需再改页面
-                // （用户 2026-10-31 也要求「尽量避免注入」）。
+                //
+                // ⚠️ 只设 setSupportZoom(false) **不够**：实测手指捏合仍能放大。
+                // 原因是 useWideViewPort=true 会开启「宽视口」模式，而 dsh 的 index.html
+                // 只写了 width=device-width, initial-scale=1，**没有 user-scalable=no**，
+                // 于是宽视口模式又把用户缩放放开了。
+                // 代价最小的纯设置解法：把宽视口与总览模式一起关掉。
+                // dsh 页面自带 viewport meta（width=device-width），关掉这两个不会改布局，
+                // 但会让 WebView 不再授予用户缩放能力 —— 也就不需要注入去改页面 meta。
                 builtInZoomControls = false
                 displayZoomControls = false
                 setSupportZoom(false)
-                loadWithOverviewMode = true
-                useWideViewPort = true
+                loadWithOverviewMode = false
+                useWideViewPort = false
                 // dsh 用 `window.open(url, "_blank", ...)` 开外链（聊天里的链接、右栏浏览器
                 // 面板的「外部打开」、工具输出里的链接）。默认 false 时这类调用**静默失效**
                 // —— 点了没反应。开多窗口能力后由下面的 onCreateWindow 接住。
                 setSupportMultipleWindows(true)
             }
+            // 把缩放相关的**最终生效值**记下来：这类开关一旦被别处悄悄改回，
+            // 光看代码会以为关掉了，只有日志能说明真相（2026-10-31 捏合仍能放大就是靠它定位）。
+            DiagLog.i(TAG, "zoom settings: supportZoom=${settings.supportZoom()} " +
+                "builtIn=${settings.builtInZoomControls} " +
+                "wideViewport=${settings.useWideViewPort} " +
+                "overview=${settings.loadWithOverviewMode} " +
+                "textZoom=${settings.textZoom}")
             // 缩放不走 WebView 的 API（对自带 viewport 的页面无效，见 [applyWebScale]）
 
             webViewClient = object : WebViewClient() {
