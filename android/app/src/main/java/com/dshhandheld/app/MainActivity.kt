@@ -534,14 +534,8 @@ class MainActivity : Activity() {
          */
         const val PREF_WEB_ZOOM_LAYOUT = "web_zoom_layout"
 
-        /**
-         * 是否注入「侧栏 → 悬浮按钮」。
-         *
-         * ⚠️ 这是**唯一**的界面注入项。2026-10-15 曾决定零注入并移除全部注入层；
-         * 2026-10-30 用户明确要求「侧边栏改成悬浮按钮显示，在 app 端注入」，因此重新引入，
-         * 且刻意只做这一件事：不改内容、不改宿主代码，出问题关掉开关即回到原版。
-         */
-        const val PREF_INJECT_SIDEBAR_FAB = "inject_sidebar_fab"
+        // 2026-11-05：界面注入已全部移除（用户要求零注入，避免 dsh 升级时的兼容性问题）。
+        // dsh 0.2.2 起自带移动端 UI：抽屉式侧栏、内容不位移、顶栏开关、行内归档/置顶按钮。
 
         // 配色与尺寸基元集中在 UiKit（此前 MainActivity / TuiActivity 各定义一份）。
         // 保留这些别名是为了让 60 余处调用点不必改动；定义只有一处。
@@ -724,13 +718,6 @@ class MainActivity : Activity() {
                     if (u?.startsWith("http") == true) {
                         applyTextZoom()
                         applyWebScale()
-                        // 移动端适配注入（用户 2026-10-30 要求「在 app 端注入」）
-                        // 2026-11-05 精简：dsh 0.2.2 起自带抽屉式侧栏与行内操作按钮，
-                        // 这里只保留两项宿主没有的定制：展开全屏 + 行内按钮常显。
-                        if (prefs.getBoolean(PREF_INJECT_SIDEBAR_FAB, true)) {
-                            WebInject.applySidebarFab(webView)
-                            DiagLog.i(TAG, "inject: 移动端适配已注入")
-                        }
                     }
                 }
                 /**
