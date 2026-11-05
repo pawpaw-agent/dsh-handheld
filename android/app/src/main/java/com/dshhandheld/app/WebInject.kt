@@ -46,8 +46,8 @@ object WebInject {
         "" +
         "    var NL = String.fromCharCode(10);" +
         "    var CSS = [" +
-        "      \"[class*=sidebarCol]{position:relative;width:100vw !important;max-width:none !important;transform:translateX(-101%) !important;transition:transform .22s ease !important;will-change:transform}\"," +
-        "      \"html.dshhh-open [class*=sidebarCol]{transform:translateX(0) !important}\"," +
+        "      \"[class*=sidebarCol]{position:relative;width:100vw !important;max-width:none !important;transform:translateX(-101%) !important;visibility:hidden;transition:transform .22s ease,visibility 0s linear .22s}\"," +
+        "      \"html.dshhh-open [class*=sidebarCol]{transform:translateX(0) !important;visibility:visible;transition:transform .22s ease,visibility 0s linear 0s}\"," +
         "      \"[class*=sidebarCol] > *{width:100% !important;max-width:none !important}\"," +
         "      \"[class*=sidebarCol] [class*=hHd-Xa_root]{width:100% !important;max-width:none !important}\"," +
         "      \"[class*=rowQuickActions] button{display:flex !important}\"," +
