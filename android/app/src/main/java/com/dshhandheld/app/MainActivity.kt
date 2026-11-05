@@ -724,12 +724,12 @@ class MainActivity : Activity() {
                     if (u?.startsWith("http") == true) {
                         applyTextZoom()
                         applyWebScale()
-                        // 侧栏 → 悬浮按钮（App 侧注入；用户 2026-10-30 明确要求）
+                        // 移动端适配注入（用户 2026-10-30 要求「在 app 端注入」）
+                        // 2026-11-05 精简：dsh 0.2.2 起自带抽屉式侧栏与行内操作按钮，
+                        // 这里只保留两项宿主没有的定制：展开全屏 + 行内按钮常显。
                         if (prefs.getBoolean(PREF_INJECT_SIDEBAR_FAB, true)) {
                             WebInject.applySidebarFab(webView)
-                            DiagLog.i(TAG, "inject: 侧栏悬浮按钮已注入")
-                            // 会话行内联操作条（置顶/重命名/分叉/归档/复制 ID）
-                            WebInject.applyRowActions(webView)
+                            DiagLog.i(TAG, "inject: 移动端适配已注入")
                         }
                     }
                 }

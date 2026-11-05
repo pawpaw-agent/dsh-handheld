@@ -136,8 +136,11 @@ def check(nm, cond):
 
 print("=== 设计约束 ===")
 check("未使用带引号的 aria-label 选择器（转义坑）", ("aria-label=" + BS + chr(34)) not in block)
-check("只改第一列，不写死整条 grid-template", ("gridTemplateColumns" in js) and ("parts[0]" in js))
-check("注入结果有回调日志", "evaluateJavascript(SIDEBAR_FAB_JS)" in src)
+# 2026-11-05：宿主已原生处理栅格/抽屉，注入不再碰 grid-template。
+check("不改写栅格（宿主已原生实现）", "grid-template-columns" not in js)
+# 拼好的 JS 是一整行：出现行注释会把后面全部注释掉（语法错误）。
+check("载荷内没有行注释（一整行拼接）", "//" not in js)
+check("注入结果有回调日志", "evaluateJavascript(" in src and "_JS)" in src)
 check("import 了 DiagLog", "import com.dshhandheld.diag.DiagLog" in src)
 print("总体:", "通过" if ok else "有 FAIL")
 sys.exit(0 if ok else 1)
