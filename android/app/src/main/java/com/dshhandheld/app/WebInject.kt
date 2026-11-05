@@ -40,14 +40,14 @@ object WebInject {
     private const val MOBILE_SIDEBAR_JS = "" +
         "(function () {" +
         "  try {" +
-        "    var V = \"m1\";" +
+        "    var V = \"m3\";" +
         "    if (window.__dshhhSidebar === V) return \"already\";" +
         "    window.__dshhhSidebar = V;" +
         "" +
         "    var NL = String.fromCharCode(10);" +
         "    var CSS = [" +
-        "      \"[class*=sidebarCol]{position:relative;width:100vw !important;max-width:none !important;transform:translateX(-101%) !important;visibility:hidden;transition:transform .22s ease,visibility 0s linear .22s}\"," +
-        "      \"html.dshhh-open [class*=sidebarCol]{transform:translateX(0) !important;visibility:visible;transition:transform .22s ease,visibility 0s linear 0s}\"," +
+        "      \"[class*=sidebarCol]{position:relative;width:100vw !important;max-width:none !important;transform:translateX(-101%) !important;opacity:0;pointer-events:none;transition:transform .22s ease,opacity 0s linear .22s}\"," +
+        "      \"html.dshhh-open [class*=sidebarCol]{transform:translateX(0) !important;opacity:1;pointer-events:auto;transition:transform .22s ease,opacity 0s linear 0s}\"," +
         "      \"[class*=sidebarCol] > *{width:100% !important;max-width:none !important}\"," +
         "      \"[class*=sidebarCol] [class*=hHd-Xa_root]{width:100% !important;max-width:none !important}\"," +
         "      \"[class*=rowQuickActions] button{display:flex !important}\"," +
@@ -60,8 +60,9 @@ object WebInject {
         "    function sync() {" +
         "      var c = col();" +
         "      var r = rail();" +
-        "      var open = !!c && !!r && r.className.toString().indexOf(\"collapsed\") < 0;" +
-        "      document.documentElement.classList.toggle(\"dshhh-open\", open);" +
+        "      var hidden = !!c && c.hasAttribute(\"inert\");" +
+        "      var legacy = !!r && r.className.toString().indexOf(\"collapsed\") >= 0;" +
+        "      document.documentElement.classList.toggle(\"dshhh-open\", !!c && !hidden && !legacy);" +
         "    }" +
         "" +
         "    function start() {" +
@@ -72,7 +73,7 @@ object WebInject {
         "        document.head.appendChild(st);" +
         "      }" +
         "      sync();" +
-        "      new MutationObserver(sync).observe(document.documentElement, { attributes: true, subtree: true, attributeFilter: [\"class\"] });" +
+        "      new MutationObserver(sync).observe(document.documentElement, { attributes: true, subtree: true, attributeFilter: [\"class\", \"inert\"] });" +
         "      setInterval(sync, 300);" +
         "      return true;" +
         "    }" +
