@@ -208,7 +208,7 @@ class HostSwitcherUi internal constructor(
         sheet = null
         ui.removeCallbacksAndMessages(null)
         listOf<View?>(chip, failureLink, progressLayer).forEach { v ->
-            (v?.parent as? ViewGroup)?.removeView(v)
+            if (v != null) (v.parent as? ViewGroup)?.removeView(v)
         }
         chip = null
         failureLink = null
@@ -411,27 +411,27 @@ class HostSwitcherUi internal constructor(
             else -> -1
         }
         views.forEachIndexed { i, v ->
-            v ?: return@forEachIndexed
+            val tv = v ?: return@forEachIndexed
             when (phase) {
                 Phase.FAILED -> {
-                    v.text = STEP_LABELS[i] + (when (i) {
+                    tv.text = STEP_LABELS[i] + (when (i) {
                         0 -> "  ✓"
                         1 -> "  ✗"
                         else -> "  未执行"
                     })
-                    v.setTextColor(if (i == 1) UiKit.ERROR else UiKit.MUTED)
+                    tv.setTextColor(if (i == 1) UiKit.ERROR else UiKit.MUTED)
                 }
                 Phase.DONE -> {
-                    v.text = STEP_LABELS[i] + "  ✓"
-                    v.setTextColor(UiKit.TEXT)
+                    tv.text = STEP_LABELS[i] + "  ✓"
+                    tv.setTextColor(UiKit.TEXT)
                 }
                 else -> {
-                    v.text = STEP_LABELS[i] + (when {
+                    tv.text = STEP_LABELS[i] + (when {
                         i < active -> "  ✓"
                         i == active -> "  ⋯"
                         else -> ""
                     })
-                    v.setTextColor(if (i <= active) UiKit.TEXT else UiKit.MUTED)
+                    tv.setTextColor(if (i <= active) UiKit.TEXT else UiKit.MUTED)
                 }
             }
         }
