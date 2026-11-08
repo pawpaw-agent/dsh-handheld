@@ -186,8 +186,10 @@ class HostSwitcherUi internal constructor(
     /** A3 的最后一步：切换后的页面真的加载完了。 */
     fun onPageLoaded(url: String?) {
         if (!switching || phase != Phase.LOADING) return
-        if (url?.startsWith("http") != true) return
-        DiagLog.i(TAG, "多主机：切换后的页面已加载 url=" + url)
+        val page = url ?: return
+        // 带 token 的中间页不算「页面已加载」，与 onPageFinished 里置 ack 的判据保持一致。
+        if (!page.startsWith("http") || page.contains("?token=")) return
+        DiagLog.i(TAG, "多主机：切换后的页面已加载 url=" + page)
         phase = Phase.DONE
         renderSteps()
         loadFallback?.let {
