@@ -16,6 +16,7 @@ import android.os.Bundle
 import android.os.Environment
 import android.os.Handler
 import android.os.Looper
+import android.os.SystemClock
 import android.text.InputType
 import android.view.Gravity
 import android.view.View
@@ -114,6 +115,27 @@ class MainActivity : Activity() {
                 refreshConnectState()
                 // A3：网页态下也要有反馈 —— 状态条画在连接屏上，用户此刻看不到。
                 refreshTunnelBanner()
+            }
+        }
+
+        /**
+         * 自动重试状态变了：更新连接屏那行倒计时（以及错误页副标题的追加行）。
+         *
+         * 回调本身来自 DshApp 的主线程 post，这里仍走 [onUi] —— 与另外两个回调同一写法，
+         * 实例已销毁时直接丢弃。
+         */
+        override fun onRetryStateChanged(attempt: Int, nextAtMs: Long, lastError: String?) {
+            onUi {
+                if (lastError != null) {
+                    DiagLog.i(TAG, "自动重试：attempt=$attempt 上次失败原因=$lastError")
+                }
+                applyRetryState(attempt, nextAtMs)
+                // 序列结束（拨通了 / 用户断开了）：把上一轮失败留下的红字与 ①②③ 一起收掉，
+                // 否则自动重拨成功之后，连接屏会一边写「已连上电脑」一边挂着红色的失败行。
+                if (attempt == 0) {
+                    connectFailed = false
+                    refreshConnectState()
+                }
             }
         }
     }
@@ -231,6 +253,19 @@ class MainActivity : Activity() {
     /** 表单滚动容器：校验失败要把对应的输入框滚进视野，需要它算偏移。 */
     private var connectScroll: ScrollView? = null
     private var connectContent: LinearLayout? = null
+
+    // ── 自动重试状态的显示（部署在 DshApp：拨号失败后自己按退避重拨）──────────
+    /** 连接屏状态块下面那行：「连接失败 · 第 3 次重试，24 秒后」。不重试时 GONE（不占位）。 */
+    private var retryLine: TextView? = null
+    /** 当前重试状态（DshApp 的镜像；[retryAttempt] = 0 表示不在重试）。 */
+    private var retryAttempt = 0
+    /** 下一次自动拨号的时刻（[SystemClock.elapsedRealtime] 基准；0 = 正在拨号）。 */
+    private var retryNextAt = 0L
+    /** 错误覆盖页的副标题与它的原始文案（重试倒计时追加在它下面）。 */
+    private var overlaySubtitle: TextView? = null
+    private var overlaySubtitleBase = ""
+    /** 这张覆盖页是「连接失败」吗 —— 只有它才追加重试倒计时（401 令牌页不追加）。 */
+    private var overlayShowsRetry = false
 
     // 通知开关（连接屏「任务完成时提醒我」）：权限回调要回来改它，故留一份引用。
     private var notifSwitchView: android.widget.Switch? = null
@@ -495,6 +530,72 @@ class MainActivity : Activity() {
         val port = if (saved.port == SshConfig.DEFAULT_SSH_PORT) "" else ":${saved.port}"
         return if (tunneled) "${saved.user}@${saved.host}$port"
         else "上次连的是 ${saved.user}@${saved.host}$port"
+    }
+
+    // ── 自动重试状态的显示（重拨由 DshApp 的退避引擎做，这里只画）──────────────
+
+    /**
+     * 重试倒计时：每秒刷一次那行字。
+     *
+     * 用本 Activity 的 [ui] Handler，onDestroy 里的 removeCallbacksAndMessages(null)
+     * 一并撤销 —— 不为一个倒计时再起一条线程。
+     */
+    private val retryTicker = object : Runnable {
+        override fun run() {
+            renderRetryLine()
+            if (retryAttempt > 0) ui.postDelayed(this, 1_000L)
+        }
+    }
+
+    /**
+     * 接住 DshApp 的重试状态：记下来、立刻画一次、需要时起重试倒计时。
+     *
+     * 下一次拨号的**时刻**由 DshApp 给（[DshApp.TunnelRetryState]），界面只负责把它画成
+     * 「还剩几秒」—— 这样 Activity 中途重建也不会显示错位的倒计时。
+     */
+    private fun applyRetryState(attempt: Int, nextAtMs: Long) {
+        retryAttempt = attempt
+        retryNextAt = nextAtMs
+        ui.removeCallbacks(retryTicker)
+        renderRetryLine()
+        if (retryAttempt > 0) ui.postDelayed(retryTicker, 1_000L)
+    }
+
+    /**
+     * 画重试那一行：连接屏状态块下面一行，以及错误覆盖页副标题的追加行。
+     *
+     * 两处都要，是因为错误覆盖页盖在 WebView 上（用户此刻在网页态），连接屏那行他看不见。
+     * 文案只由事实算（attempt / nextAt），不记忆上一次画了什么。
+     */
+    private fun renderRetryLine() {
+        val text = retryLineText()
+        retryLine?.let { v ->
+            v.text = text ?: ""
+            v.visibility = if (text == null) View.GONE else View.VISIBLE
+        }
+        // 覆盖页：只有「连接失败」那张追加（401 令牌页与重试无关，见 showOverlay）
+        val sub = overlaySubtitle ?: return
+        sub.text = if (overlayShowsRetry && text != null) {
+            "$overlaySubtitleBase\n$text"
+        } else {
+            overlaySubtitleBase
+        }
+    }
+
+    /**
+     * 重试那一行的文案；null = 不在重试（调用方据此隐藏）。
+     *
+     * 剩余秒数**向上取整**：显示「1 秒后」时确实还剩不足 1 秒，而不是已经到点的「0 秒后」。
+     * 到点后（nextAt 已清成 0，或已过触发时刻）改说「正在拨号」—— 那一下最长要 90s，
+     * 用户至少知道 App 在动，而不是倒计时停在 0。
+     */
+    private fun retryLineText(): String? {
+        if (retryAttempt <= 0) return null
+        val left = retryNextAt - SystemClock.elapsedRealtime()
+        if (retryNextAt <= 0L || left <= 0L) {
+            return "连接失败 · 第 $retryAttempt 次重试，正在拨号…"
+        }
+        return "连接失败 · 第 $retryAttempt 次重试，${(left + 999L) / 1_000L} 秒后"
     }
 
     private companion object {
@@ -984,6 +1085,9 @@ class MainActivity : Activity() {
         setContentView(root)
         applyImmersive()
         (application as DshApp).addTunnelObserver(tunnelObserver)
+        // 上一轮（Activity 重建 / 从网页回连接屏）可能已经排着自动重试：把状态接回来，
+        // 否则连接屏上一点迹象都没有，用户要等到下一次状态变化才知道它在自动重拨。
+        (application as DshApp).currentRetryState().let { applyRetryState(it.attempt, it.nextAtMs) }
 
         // 自动连接（仅 SSH 模式）：存在完整 SSH 配置即恢复隧道 + 加载回环 URL；
         // 否则停留在连接屏。直连模式已移除。
@@ -1068,8 +1172,10 @@ class MainActivity : Activity() {
                     connectFailed = true
                     // app.lastTunnelError：隧道自己的判定（dbclient 的真实 stderr）。
                     // 拿不到签名就退回原来的通用文案，绝不把英文机器文本直接上屏。
+                    // 失败后会由 DshApp 的退避引擎自动重试（见 DshApp 的「拨号失败后的
+                    // 自动退避重试」一节），所以这里说的是「正在重试」而不是「请手动重试」。
                     status(tunnelFailureHint(app.lastTunnelError)
-                        ?: "自动连接失败，请在连接屏手动重试")
+                        ?: "自动连接失败，正在自动重试…")
                     refreshConnectState()
                     endConnect()
                 }
@@ -1269,6 +1375,16 @@ class MainActivity : Activity() {
         val sub = UiKit.text(this@MainActivity, "", 12f, COL_MUTED)
         heroSub = sub
         content.addView(sub, rowParams(top = dp(9), width = ViewGroup.LayoutParams.MATCH_PARENT))
+
+        // 自动重试那行（拨号失败后 DshApp 会按 5s→300s 退避自己重拨，这里给出次数与倒计时）。
+        // 放在状态块下面、①②③ 之上：它是「现在发生了什么」的补充说明；不重试时 GONE。
+        // 复用现成的 UiKit.text，不新增样式。
+        val retry = UiKit.text(this@MainActivity, "", 13f, COL_MUTED).apply {
+            visibility = View.GONE
+            setIncludeFontPadding(false)
+        }
+        retryLine = retry
+        content.addView(retry, rowParams(top = dp(12), width = ViewGroup.LayoutParams.MATCH_PARENT))
 
         // ①②③ 进度行：连接中与「刚失败还没重试」时显示（失败原因要留在屏幕上）
         fun guideRow(text: String): TextView =
@@ -1489,6 +1605,9 @@ class MainActivity : Activity() {
                 val picked = hosts.firstOrNull { it.id == hostIds.getOrNull(pos) } ?: return
                 applyHostToForm(picked)
                 SshHosts.setActive(prefs, picked.id)
+                // 换主机 = 换一台电脑：上一台挂着的自动重拨必须撤掉，否则它可能在你点
+                // 「连上」之前就用旧配置拨通，「已连上电脑」会指向另一台电脑。
+                (application as DshApp).cancelTunnelRetry("切换主机")
                 DiagLog.i(TAG, "多主机：切到 ${picked.label}")
                 // 切主机 = 换一台电脑。旧隧道必须拆掉，否则按钮还停在「打开 dsh 网页」，
                 // 点它只会打开**旧主机**的页面（真机反馈：切换主机并没有连接上）。
@@ -2532,8 +2651,16 @@ class MainActivity : Activity() {
      * 早前的实现是「谁先构造谁定文案」：401 令牌页从不写副标题，于是先出网络错误、
      * 后出 401 时，页面会顶着「需要访问令牌」的标题配一条过期的 `HTTP xxx`；反向同理。
      * 按钮改为每次重建，两页各自的按钮文案/动作不同也不再互相污染。
+     *
+     * @param retryable 这张页是不是「连接失败」。是的话副标题下面会追加自动重试的倒计时
+     *   （每秒刷新，见 [renderRetryLine]）；401 令牌页传 false —— 它跟退避重试无关。
      */
-    private fun showOverlay(title: String, subtitle: String, actions: List<OverlayAction>) {
+    private fun showOverlay(
+        title: String,
+        subtitle: String,
+        actions: List<OverlayAction>,
+        retryable: Boolean = false,
+    ) {
         val box = errorView as? LinearLayout ?: LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setBackgroundColor(COL_BG)
@@ -2550,7 +2677,12 @@ class MainActivity : Activity() {
             (webView?.parent as? ViewGroup)?.addView(this)
         }
         (box.getChildAt(0) as? TextView)?.text = title
-        (box.getChildAt(1) as? TextView)?.text = subtitle
+        val sub = box.getChildAt(1) as? TextView
+        sub?.text = subtitle
+        // 留下副标题引用与原始文案：重试倒计时要追加在它下面（见 renderRetryLine）
+        overlaySubtitle = sub
+        overlaySubtitleBase = subtitle
+        overlayShowsRetry = retryable
         while (box.childCount > 2) box.removeViewAt(2)
         actions.forEachIndexed { index, action ->
             box.addView(
@@ -2564,6 +2696,8 @@ class MainActivity : Activity() {
             )
         }
         box.visibility = View.VISIBLE
+        // 覆盖页刚重建：把当前的重试倒计时补上去（重试期间由 renderRetryLine 每秒刷新）
+        renderRetryLine()
     }
 
     private fun showErrorPage(message: String) {
@@ -2574,7 +2708,9 @@ class MainActivity : Activity() {
                     hideErrorPage(); lastUrl?.let { sshTokenAck = false; connectWeb(it) }
                 },
                 OverlayAction("换服务器", false) { hideErrorPage(); showConnectScreen() }
-            )
+            ),
+            // 这张页就是「连接失败」：重试中要在副标题下面显示「第 N 次重试，M 秒后」
+            retryable = true,
         )
     }
 
@@ -2695,6 +2831,9 @@ class MainActivity : Activity() {
             append('\n')
             append("WebView    ").append(webUrl ?: "（无）").append('\n')
             append("prefs[url] ").append(prefs.getString("url", null) ?: "（无）").append('\n')
+            append("自动重试   ").append(retryAttempt).append(" 次（0 = 不在重试），nextInMs=")
+                .append(if (retryNextAt > 0L) retryNextAt - SystemClock.elapsedRealtime() else 0L)
+                .append('\n')
             append("\n── 本次运行日志（").append(DiagLog.stats()).append("）──\n")
             append(DiagLog.snapshot().ifEmpty { "（空）" }).append('\n')
             val tail = DiagLog.persistedTail()
@@ -2864,7 +3003,7 @@ class MainActivity : Activity() {
                         DiagLog.i(TAG, "rebuildTunnel: 期间用户已断开/取消，丢弃失败回调")
                         return@onUi
                     }
-                    status("重连失败，请回连接屏手动重试"); refreshConnectState(); endConnect()
+                    status("重连失败，正在自动重试…"); refreshConnectState(); endConnect()
                 }
                 return@Thread
             }
