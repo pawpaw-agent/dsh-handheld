@@ -9,6 +9,9 @@ import android.content.MutableContextWrapper
 import android.net.ConnectivityManager
 import android.net.Network
 import android.os.Build
+import android.os.Handler
+import android.os.Looper
+import android.os.SystemClock
 import android.webkit.WebView
 import androidx.annotation.RequiresApi
 import com.dshhandheld.diag.DiagLog
@@ -19,6 +22,8 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 import java.util.concurrent.CopyOnWriteArrayList
+import java.util.concurrent.ExecutorService
+import java.util.concurrent.Executors
 
 /**
  * Application 级单例：持有跨 Activity 存活的 WebView 与 **唯一的 SSH 隧道**。
@@ -172,6 +177,17 @@ class DshApp : Application() {
          * 点进去是死页面，只有切前后台才自愈。
          */
         fun onTunnelAliveChanged(alive: Boolean) {}
+
+        /**
+         * 自动重试状态变了（拨号失败 → 进入退避等待 / 开始拨号 / 拨通 / 被取消）。
+         *
+         * 参数与 [TunnelRetryState] 一一对应：[attempt] = 序列内第几次（**0 = 不在重试**），
+         * [nextAtMs] = 下一次拨号的时刻（[SystemClock.elapsedRealtime] 基准；0 = 正在拨号），
+         * [lastError] = 最近一次失败原因（dbclient 的原始机器文本，界面自己决定怎么翻译）。
+         *
+         * **带默认实现**：既有订阅者不必改动（目前只有 MainActivity 一处订阅）。
+         */
+        fun onRetryStateChanged(attempt: Int, nextAtMs: Long, lastError: String?) {}
     }
 
     private val tunnelObservers = CopyOnWriteArrayList<TunnelObserver>()
@@ -321,9 +337,20 @@ class DshApp : Application() {
             val cm = getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager ?: return
             cm.registerDefaultNetworkCallback(object : ConnectivityManager.NetworkCallback() {
                 override fun onAvailable(network: Network) {
-                    val t = sshTunnel ?: return
-                    DiagLog.i(TAG, "网络已恢复 → 让隧道立即重试")
-                    t.nudgeNow()
+                    val t = sshTunnel
+                    if (t != null) {
+                        DiagLog.i(TAG, "网络已恢复 → 让隧道立即重试")
+                        t.nudgeNow()
+                        return
+                    }
+                    // sshTunnel == null：上一次拨号已经失败并留下了失败原因。若 DshApp 正挂着
+                    // 自动重试，网络刚回来就别再干等退避 —— 立刻拨一次（用户说的
+                    // 「网明明回来了却还是连不上」就是这一段在空等）。
+                    // 没有挂起的序列时什么都不做：用户没在连，App 也不该自己拨。
+                    if (retryAttempt > 0) {
+                        DiagLog.i(TAG, "网络已恢复 → 立刻自动重试（跳过剩余退避）")
+                        retryNow("网络恢复")
+                    }
                 }
             })
         } catch (t: Throwable) {
@@ -449,8 +476,16 @@ class DshApp : Application() {
      *  - [tunnelLock]：只做字段级短临界区，主线程可以安全地拿；
      *  - [dialLock]：串行化拨号，长阻塞只发生在后台线程上；
      *  - [dialGeneration]：拨号期间发生过「断开/换配置」就丢弃这次结果。
+     *
+     * @param fromRetry 由自动重试引擎调用（见 [scheduleRetryAfterFailure]）。传 false 表示
+     *   「有人主动要连」—— 入口处会先取消挂起的自动重试，避免刚拨上又被一次自动重拨拆掉。
      */
-    fun ensureTunnel(cfg: SshConfig, force: Boolean = false): SshTunnel? {
+    fun ensureTunnel(cfg: SshConfig, force: Boolean = false, fromRetry: Boolean = false): SshTunnel? {
+        // 任何「主动拨号」都先作废挂起的自动重试（用户点重试 / 冷启动自动恢复 / 回前台
+        // 探针重建走的都是这条路）；自动重试自己（fromRetry）不能取消自己这条序列，
+        // 否则计数被清零、永远退不到 300s 那一档。
+        if (!fromRetry) clearRetry("主动拨号")
+
         val fp = cfg.fingerprint()
         // 先短看一眼能不能复用（健康探针本身要发真流量，放到锁外做）
         val reusable = synchronized(tunnelLock) {
@@ -463,6 +498,7 @@ class DshApp : Application() {
             val stillOurs = synchronized(tunnelLock) { sshTunnel === reusable }
             if (stillOurs && reusable.isUp) {
                 DiagLog.i(TAG, "ensureTunnel: 复用已有隧道 ${reusable.localBaseUrl}")
+                clearRetry("隧道可用")
                 return reusable
             }
             DiagLog.i(TAG, "ensureTunnel: 复用判定期间现场已变（仍是当前隧道=$stillOurs），重新拨号")
@@ -481,6 +517,7 @@ class DshApp : Application() {
             }
             if (again != null && again.isHealthy()) {
                 DiagLog.i(TAG, "ensureTunnel: 复用已有隧道 ${again.localBaseUrl}（等锁期间建立）")
+                clearRetry("隧道可用")
                 return again
             }
             val (obsolete, generation) = synchronized(tunnelLock) {
@@ -493,7 +530,13 @@ class DshApp : Application() {
             // 所以刻意放在短锁之外 —— 代价由后台线程承担。
             obsolete?.close()
 
-            val t = build(cfg) ?: return null
+            val t = build(cfg)
+            if (t == null) {
+                // 配置本身不完整（缺地址 / 缺认证材料）：拨号压根没发生，重试没有意义 ——
+                // 不排自动重试，该做的是回连接屏把配置补齐。
+                DiagLog.w(TAG, "ensureTunnel: 配置不完整，不拨号也不排自动重试")
+                return null
+            }
             t.onStateChange = { s ->
                 // 只记日志：状态条由 ①②③ 引导流程表达，connecting/connected 属内部
                 // 状态（曾显示为「隧道: connected」，是术语）。
@@ -515,6 +558,8 @@ class DshApp : Application() {
                 lastTunnelError = t.lastError
                 t.close()
                 DiagLog.w(TAG, "ensureTunnel: 拨号失败（${lastTunnelError ?: "原因未记录"}）")
+                // 排下一次自动重拨（主线程 Handler + 单线程 Executor，见本类的退避重试一节）
+                scheduleRetryAfterFailure(cfg, generation)
                 return null
             }
             val published = synchronized(tunnelLock) {
@@ -527,18 +572,283 @@ class DshApp : Application() {
                 }
             }
             if (!published) {
-                DiagLog.i(TAG, "ensureTunnel: 拨号期间用户已断开/已换配置，丢弃这次拨号结果")
+                // 用户已断开/已换配置：这次结果作废，**也不排自动重试** ——
+                // 「断开」必须赢，不能几秒后被一次自动重拨推翻。
+                DiagLog.i(TAG, "ensureTunnel: 拨号期间用户已断开/已换配置，丢弃这次拨号结果（不排自动重试）")
                 t.close()
                 return null
             }
             // 隧道真的起来了才需要保活。放在成功分支里（而不是 build()），
             // 免得拨号失败也留下一个常驻前台服务。
             lastTunnelError = null
+            // 拨通了：自动重试序列到此结束（界面那行倒计时随即隐藏）。
+            clearRetry("隧道可用")
 
             DiagLog.i(TAG, "ensureTunnel: 已建立 ${t.localBaseUrl}")
             // 隧道刚起来：把权威回合状态的订阅挂上（页面被冻时通知只能靠它）。
             syncEventsClient()
             return t
+        }
+    }
+
+    // ── 拨号失败后的自动退避重试 ─────────────────────────────────────────
+    //
+    // 为什么要有它（用户明确抱怨过的痛点）：[ensureTunnel] 一条命只拨 3 次
+    // （SshTunnel.MAX_ATTEMPTS），失败后返回 null —— 此后**没有任何东西**会再拨。
+    // 手机网络抖一下（Wi-Fi 掉几秒又回来）就永久卡在「连不上」：用户必须手动点重试，
+    // 或者切一次前台让 onResume 的探针去重建。
+    //
+    // 设计（2026-11-08）：
+    //   · 定时用主线程 Handler，拨号在 [retryExecutor] 单线程上跑 —— ensureTunnel 是
+    //     阻塞的（最坏 3×30s），绝不能占主线程；单线程也保证同一时刻只有一次自动拨号。
+    //   · 退避 5 / 15 / 30 / 60 / 120 / 300 秒（300s 封顶），一条序列最多
+    //     [RETRY_MAX_ATTEMPTS] 次。电脑整晚关机时到此为止，不会整夜空转。
+    //   · 可见状态（attempt / nextAt / lastError）只在主线程写：所有入口都投到
+    //     [retryHandler]，观察者回调因此也在主线程。字段标 @Volatile 方便界面与诊断页随时读。
+    //   · 迟到的后台结果靠代数作废：[retryEpoch] 在取消/拨通时自增；
+    //     「用户断开」还有一道 [dialGeneration] 校验（见 [scheduleRetryAfterFailure]）。
+    //   · 不做保活：进程被冻结/回收时 Handler 自然停，回到前台仍由既有路径接手。
+
+    /**
+     * 自动重试的状态快照（给界面读）。
+     *
+     * [attempt] = 0 表示「不在重试」；[nextAtMs] 是下一次拨号的时刻，基准是
+     * [SystemClock.elapsedRealtime]（界面用 `nextAtMs - elapsedRealtime()` 算剩余秒数，
+     * 不受用户改系统时间影响），0 表示正在拨号、没有倒计时。
+     */
+    data class TunnelRetryState(
+        val attempt: Int = 0,
+        val nextAtMs: Long = 0L,
+        val lastError: String? = null,
+    )
+
+    /** 自动重试的定时器（主线程）：可见状态全在它上面改。 */
+    private val retryHandler = Handler(Looper.getMainLooper())
+
+    /** 自动拨号线程：单线程 = 自动拨号串行（ensureTunnel 自己还有 dialLock 兜底）。 */
+    private val retryExecutor: ExecutorService = Executors.newSingleThreadExecutor { r ->
+        Thread(r, "tunnel-retry").apply { isDaemon = true }
+    }
+
+    /** 挂起的这一次重试用哪份配置重拨（拨号失败时记下；null = 没有序列）。 */
+    @Volatile
+    private var retryCfg: SshConfig? = null
+
+    /** 序列内已排出的重试次数；0 = 不在重试（界面据此隐藏那行倒计时）。 */
+    @Volatile
+    private var retryAttempt = 0
+
+    /** 下一次自动拨号的时刻（elapsedRealtime 基准；0 = 既没挂起也没在拨）。 */
+    @Volatile
+    private var retryNextAt = 0L
+
+    /** 最近一次拨号失败的原因（给界面一行说明；拨通/取消时清空）。 */
+    @Volatile
+    private var retryLastError: String? = null
+
+    /** 本序列内连续失败的次数，只用来算下一档退避（网络恢复/取消时清零）。 */
+    @Volatile
+    private var retryStep = 0
+
+    /**
+     * 重试代数：取消 / 拨通时自增。
+     *
+     * 后台线程改不了主线程的东西，就靠它把「迟到的结果」判掉：排下一次和开始拨号时各记下
+     * 当时的代数，结果回来对不上就丢弃（用户断开的另一道保险是 [dialGeneration]）。
+     */
+    private val retryEpoch = java.util.concurrent.atomic.AtomicInteger(0)
+
+    /** 当前自动重试状态（任何线程可读；主线程读到的一定是最新）。 */
+    fun currentRetryState(): TunnelRetryState =
+        TunnelRetryState(retryAttempt, retryNextAt, retryLastError)
+
+    /**
+     * 取消挂起的自动重试（不碰隧道本身）。
+     *
+     * [closeTunnel] 已经内置了它；单独暴露是为了「隧道早就没了、但旧配置的重拨还挂着」
+     * 的场景 —— 连接屏切换主机就属于这种：不撤掉的话，自动重拨可能在你点「连上」之前
+     * 就用**旧主机**的配置拨通，界面上的「已连上电脑」会指向另一台电脑。
+     */
+    fun cancelTunnelRetry(reason: String) = clearRetry(reason)
+
+    private fun notifyRetryState() {
+        val s = currentRetryState()
+        DiagLog.i(
+            TAG,
+            "自动重试状态：attempt=${s.attempt} " +
+                "nextInMs=${if (s.nextAtMs > 0L) s.nextAtMs - SystemClock.elapsedRealtime() else 0} " +
+                "err=${s.lastError ?: "-"}"
+        )
+        tunnelObservers.forEach { o ->
+            runCatching { o.onRetryStateChanged(s.attempt, s.nextAtMs, s.lastError) }
+                .onFailure { DiagLog.w(TAG, "观察者 onRetryStateChanged 抛异常：${it.message}") }
+        }
+    }
+
+    /** 挂起的自动重拨：到点后交给 [retryExecutor] 真正拨号。 */
+    private val retryTask = object : Runnable {
+        override fun run() {
+            val cfg = retryCfg
+            if (retryAttempt == 0 || cfg == null) {
+                // 到点前已被取消：已派发到队列里的这一条只能自己认账（removeCallbacks 撤不掉它）。
+                DiagLog.i(TAG, "自动重试：没有挂起的序列（attempt=$retryAttempt），忽略这次到点")
+                return
+            }
+            if (liveTunnel() != null) {
+                DiagLog.i(TAG, "自动重试：已有可用隧道，取消序列")
+                clearRetry("已有可用隧道")
+                return
+            }
+            retryNextAt = 0L
+            notifyRetryState()   // 界面从倒计时切成「正在拨号」
+            startRetryDial(cfg)
+        }
+    }
+
+    /**
+     * 结束自动重试序列：撤掉挂起的任务、清零状态、通知界面把那行倒计时收起来。
+     *
+     * **任何线程可调**：撤任务与自增代数当场做（removeCallbacks 本身线程安全），
+     * 可见状态一律回主线程改 —— 观察者回调因此也在主线程，界面不必自己再转一手。
+     *
+     * @param reason 只进日志：排查「为什么不再自动重试」时这一行是唯一线索。
+     */
+    private fun clearRetry(reason: String) {
+        retryEpoch.incrementAndGet()
+        retryHandler.removeCallbacks(retryTask)
+        retryHandler.post {
+            val had = retryAttempt != 0 || retryNextAt != 0L || retryLastError != null
+            retryCfg = null
+            retryAttempt = 0
+            retryStep = 0
+            retryNextAt = 0L
+            retryLastError = null
+            if (had) {
+                DiagLog.i(TAG, "自动重试：序列结束（$reason）")
+                notifyRetryState()
+            }
+        }
+    }
+
+    /**
+     * 拨号失败后排下一次自动重试。
+     *
+     * 由 [ensureTunnel] 的失败路径调用，**可在任意线程**：可见状态的改动全部投到主线程。
+     *
+     * @param cfg 本次拨号用的配置 —— 重试就用它重拨（用户此时可能已经离开连接屏，
+     *   不能指望界面再来喂一次配置）。
+     * @param generation 本次拨号开始时的 [dialGeneration]。用户在这期间点了「断开连接」
+     *   （[closeTunnel] 会自增它）就说明这次失败已经作废，不能再排下一次 ——
+     *   否则「断开」会被一次自动重拨逆转。
+     */
+    private fun scheduleRetryAfterFailure(cfg: SshConfig, generation: Long) {
+        val epoch = retryEpoch.get()
+        retryHandler.post {
+            if (epoch != retryEpoch.get()) {
+                DiagLog.i(TAG, "自动重试：这次失败已被取消/已重连，不排下一次")
+                return@post
+            }
+            if (dialGeneration != generation) {
+                DiagLog.i(TAG, "自动重试：拨号期间用户已断开（或已换配置），不排下一次")
+                return@post
+            }
+            if (retryAttempt >= RETRY_MAX_ATTEMPTS) {
+                DiagLog.w(TAG, "自动重试：已连试 $RETRY_MAX_ATTEMPTS 次仍未成功，停止（等用户手动重试）")
+                clearRetry("已达次数上限")
+                return@post
+            }
+            retryCfg = cfg
+            retryAttempt++
+            val delay = RETRY_BACKOFF_MS[minOf(retryStep, RETRY_BACKOFF_MS.size - 1)]
+            retryStep++
+            retryLastError = lastTunnelError
+            retryNextAt = SystemClock.elapsedRealtime() + delay
+            retryHandler.removeCallbacks(retryTask)
+            retryHandler.postDelayed(retryTask, delay)
+            DiagLog.i(
+                TAG,
+                "自动重试：第 $retryAttempt 次已排定，${delay / 1000}s 后（上次失败：${retryLastError ?: "未记录"}）"
+            )
+            notifyRetryState()
+        }
+    }
+
+    /**
+     * 立刻拨一次、跳过剩余退避（网络恢复时用），并把退避档位清零。
+     *
+     * **可在任意线程**（系统网络回调不在主线程），实际动作回主线程做。反复触发无副作用：
+     * 没有挂起的序列就什么都不做。
+     */
+    private fun retryNow(reason: String) {
+        retryHandler.post {
+            if (retryAttempt == 0) {
+                DiagLog.i(TAG, "立刻重试：当前没有挂起的序列（$reason）")
+                return@post
+            }
+            val cfg = retryCfg
+            if (cfg == null) {
+                clearRetry("没有可用的连接配置")
+                return@post
+            }
+            if (liveTunnel() != null) {
+                clearRetry("已有可用隧道")
+                return@post
+            }
+            if (retryNextAt == 0L) {
+                // 第 N 次已经在拨号（nextAt 在到点时被清成 0）：网络抖动一次不该再叠一次拨号。
+                DiagLog.i(TAG, "立刻重试：第 $retryAttempt 次已在拨号，忽略（$reason）")
+                return@post
+            }
+            retryHandler.removeCallbacks(retryTask)
+            retryStep = 0                 // 退避重置：下一次失败重新从 5s 开始
+            retryNextAt = 0L
+            DiagLog.i(TAG, "立刻重试（$reason）：跳过剩余退避，第 $retryAttempt 次")
+            notifyRetryState()
+            startRetryDial(cfg)
+        }
+    }
+
+    /** 在 [retryExecutor] 上真正拨一次号（阻塞，最长 3×30s）。主线程调用。 */
+    private fun startRetryDial(cfg: SshConfig) {
+        val attempt = retryAttempt
+        val epoch = retryEpoch.get()
+        DiagLog.i(TAG, "自动重试：第 $attempt 次开始拨号（${cfg.user}@${cfg.host}:${cfg.port}）")
+        retryExecutor.execute {
+            if (epoch != retryEpoch.get()) {
+                DiagLog.i(TAG, "自动重试：第 $attempt 次在拨号前已被取消")
+                return@execute
+            }
+            // fromRetry = true：自动重拨不能把自己这条序列在入口处取消掉。
+            // force = false：这期间若有人已经把同一条配置拨通，直接复用，不拆一次新的。
+            val t = try {
+                ensureTunnel(cfg, force = false, fromRetry = true)
+            } catch (e: Throwable) {
+                // ensureTunnel 内部各条路径都自己兜了异常，走到这里说明是没预料到的 ——
+                // 自动重试线程绝不能因此死掉（死了就再也不会有下一次）。
+                DiagLog.e(TAG, "自动重试：第 $attempt 次拨号抛异常：${e.javaClass.simpleName} ${e.message}")
+                null
+            }
+            retryHandler.post {
+                if (t != null && t.localBaseUrl != null) {
+                    // ensureTunnel 的成功路径已经 clearRetry 了（调用无害，幂等），这里只补日志。
+                    // 注意**先判成功再判代数**：成功本身就会让代数自增，反过来判会把成功误报成
+                    // 「结果迟到」，日志会误导排查。
+                    DiagLog.i(TAG, "自动重试：第 $attempt 次成功 ${t.localBaseUrl}")
+                    clearRetry("自动重拨成功")
+                    return@post
+                }
+                if (epoch != retryEpoch.get()) {
+                    DiagLog.i(TAG, "自动重试：第 $attempt 次结果迟到（期间已取消/已重连），丢弃")
+                    return@post
+                }
+                // 失败：ensureTunnel 的失败路径已经排好了下一次（scheduleRetryAfterFailure）。
+                // 万一没排上（配置不完整 / 拨号期间被取消），序列不能悬在半空 ——
+                // 否则界面会永远停在「第 N 次重试」的倒计时上。
+                if (retryNextAt == 0L && retryAttempt > 0) {
+                    DiagLog.w(TAG, "自动重试：第 $attempt 次失败且没有下一次，停止序列")
+                    clearRetry("失败且无下一次")
+                }
+            }
         }
     }
 
@@ -551,6 +861,10 @@ class DshApp : Application() {
      * 只是这份代价不再由 UI 线程付（原先它要排队等拨号锁，是 ANR 来源）。
      */
     fun closeTunnel() {
+        // 用户主动断开：**必须**撤掉挂起的自动重试，否则「断开」会在几秒后被一次自动
+        // 重拨推翻（用户看到的就是「点了断开又自己连上」）。代数同时自增，在飞的自动
+        // 拨号的迟到结果也会被丢弃。
+        clearRetry("用户断开连接")
         val closing = synchronized(tunnelLock) {
             dialGeneration++
             val cur = sshTunnel
@@ -594,6 +908,25 @@ class DshApp : Application() {
         private const val TAG = "DshApp"
         /** 新拨号前最多等多久让上一次「断开」把旧 owner 收完（正常 <100ms）。 */
         private const val CLOSE_JOIN_MS = 5_000L
+
+        /**
+         * 自动重试的退避档位（毫秒）：5s → 15s → 30s → 60s → 120s → 300s，之后固定 300s。
+         *
+         * 前几档贴近「网络刚抖完、马上就能通」的常见情形；300s 封顶是为了电脑真的关机时
+         * 别把手机网络/CPU 拖一整天（再密也没有意义：用户不在电脑旁的话拨多少次都连不上）。
+         */
+        private val RETRY_BACKOFF_MS = longArrayOf(
+            5_000L, 15_000L, 30_000L, 60_000L, 120_000L, 300_000L
+        )
+
+        /**
+         * 一条序列最多自动重试多少次（按 300s 封顶算 ≈ 3 小时）。
+         *
+         * 为什么要有上限：电脑整晚关机时，无限重试就是整夜每 5 分钟派生一次 dbclient ——
+         * 白耗电、白占 SSH 会话，而用户第二天手动点一下就能连上。40 次覆盖
+         * 「出门几个小时、回来网还在」的常见情形，再往上只会变成后台空转。
+         */
+        private const val RETRY_MAX_ATTEMPTS = 40
 
         /**
          * 「任务完成时提醒我」开关的偏好键。
