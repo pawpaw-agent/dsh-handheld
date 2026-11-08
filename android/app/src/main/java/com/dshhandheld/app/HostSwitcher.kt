@@ -714,11 +714,11 @@ class HostSwitcherUi internal constructor(
         return h.password.isNotEmpty()
     }
 
+    /** 地址一律写成 user@host:port（A2 要求看到端口；多主机时这个端口是必要信息）。 */
     private fun hostAddress(h: SshConfig): String {
         val who = if (h.user.isBlank()) "" else h.user + "@"
-        val port = if (h.port == SshConfig.DEFAULT_SSH_PORT) "" else ":" + h.port
-        val addr = who + h.host + port
-        return if (addr.isBlank()) "（地址未填）" else addr
+        val addr = who + h.host + ":" + h.port
+        return if (h.host.isBlank()) "（地址未填）" else addr
     }
 
     private fun shortLabel(text: String): String =
