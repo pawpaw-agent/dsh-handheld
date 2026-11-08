@@ -205,6 +205,8 @@ class MainActivity : Activity() {
 
     private var statusView: TextView? = null
     private var sshKeyPathInput: EditText? = null
+    /** 把一条主机配置填进连接屏表单；网页态切换主机时表单也要跟上，否则重连用的是上一台。 */
+    private var applyHostToFormAction: ((SshConfig) -> Unit)? = null
     /** 连接屏是否处于「新主机」态（下拉选中了 `＋ 新建主机…`）。连接落库时据此决定新建还是更新。 */
     private var sshNewHostMode = false
     /**
@@ -212,6 +214,8 @@ class MainActivity : Activity() {
      * 那段流程定义在主机选择行**之后**，局部函数在前面调不到。
      */
     private var connectAction: (() -> Unit)? = null
+    /** 多主机快速切换 UI（HostSwitcher.kt）：网页态入口、底部弹层、切换进度、失败「换一台」。 */
+    private var hostSwitcher: HostSwitcherUi? = null
 
     // ── 连接屏（状态优先版）的引用：见 [createConnectView] ────────────────
     /** 贴底动作区那一个主按钮（文案与动作随相位/隧道状态变）。 */
@@ -355,6 +359,7 @@ class MainActivity : Activity() {
         if (screen != target) DiagLog.i(TAG, "screen: $screen → $target")
         screen = target
         connectView?.visibility = if (target == Screen.CONNECT) View.VISIBLE else View.GONE
+        hostSwitcher?.onWebScreen(target == Screen.WEB)
         refreshTunnelBanner()
     }
 
@@ -469,6 +474,7 @@ class MainActivity : Activity() {
 
         connectMainBtn?.text = ConnectDecisions.primaryLabel(f)
         disconnectLink?.visibility = if (f.tunneled) View.VISIBLE else View.GONE
+        hostSwitcher?.onConnectFacts(f)
     }
 
     /**
@@ -719,6 +725,7 @@ class MainActivity : Activity() {
                         applyTextZoom()
                         applyWebScale()
                     }
+                    hostSwitcher?.onPageLoaded(u)
                 }
                 /**
                  * 页面里点了个**非隧道**的链接（没有走 `_blank` 的那种）：别把壳导航走 ——
@@ -976,6 +983,8 @@ class MainActivity : Activity() {
             ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
         ).apply { gravity = Gravity.TOP })
 
+        // 多主机（A1/A2/A3/A5）：网页态入口 + 底部弹层 + 切换进度 + 失败「换一台」。
+        hostSwitcher = HostSwitcher.attach(this, root, progressBlock as? ViewGroup, ::switchHost, ::showConnectScreen)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
             window.attributes.layoutInDisplayCutoutMode =
                 WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
@@ -1591,6 +1600,8 @@ class MainActivity : Activity() {
         )
         theForm.addView(hint("dsh 网页的端口，默认 3080。"),
             rowParams(top = dp(6), width = ViewGroup.LayoutParams.MATCH_PARENT))
+        // 供网页态切换主机复用：连同 dsh 端口一起填，否则切换会带着上一台的端口重连。
+        applyHostToFormAction = { h -> applyHostToForm(h); sshTargetPortInput.setText(h.remotePort.toString()) }
 
         val summary = UiKit.text(this@MainActivity, "", 13f, COL_TEXT)
         settingsSummary = summary
@@ -1891,6 +1902,21 @@ class MainActivity : Activity() {
         connectPhase = if (savedConfigUsable()) ConnectPhase.IDLE else ConnectPhase.EDIT
         syncConnectUi()
         return root
+    }
+
+    /** 网页态切主机：写 ssh_json → 拆旧隧道 → 等释放 → 走既有重连；false = 正在连接中。 */
+    private fun switchHost(id: String): Boolean {
+        val picked = SshHosts.list(prefs).firstOrNull { it.id == id } ?: return false
+        if (!ConnectDecisions.hostSwitchAllowed(connectFacts())) return false
+        DiagLog.i(TAG, "多主机：网页态切到 " + picked.label)
+        SshHosts.setActive(prefs, picked.id)
+        applyHostToFormAction?.invoke(picked)
+        invalidateAttempt(); connectFailed = false
+        if ((application as DshApp).liveTunnel() == null) { connectAction?.invoke(); return true }
+        closeCurrentTunnel(); prefs.edit().remove("url").apply()
+        sshTokenAck = false; unauthorizedCleanTried = false; webView?.stopLoading()
+        waitTunnelReleasedThen(2000) { connectAction?.invoke() }
+        return true
     }
 
     private fun pickSshKey() {
@@ -2917,6 +2943,7 @@ class MainActivity : Activity() {
         // 去改共享状态（prefs["url"]、保活 WebView、DshApp 的隧道）。
         alive.set(false)
         ui.removeCallbacksAndMessages(null)
+        hostSwitcher?.onDestroy()
         val app = application as? DshApp
         app?.removeTunnelObserver(tunnelObserver)
         // WebView 仍由 DshApp 保活，但必须把它的 context 从本 Activity 上摘下来，
@@ -2967,6 +2994,8 @@ class MainActivity : Activity() {
 
     @Deprecated("Deprecated in Java")
     override fun onBackPressed() {
+        // 切换主机进行中：进度层不可被 BACK 按没（A3），这一下直接吃掉。
+        if (hostSwitcher?.onBackPressed() == true) return
         // 键盘弹起时，BACK 的第一语义是**收起键盘**（Android 约定）。少了这一级，
         // 会话页上「想收键盘」的那一下会落到下面的阶梯里，而无网页历史时它直接是
         // 「回连接屏」—— 用户只是想收键盘，却被切出会话页；流式输出照旧在后台的 WebView
