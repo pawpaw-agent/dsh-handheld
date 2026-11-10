@@ -11,10 +11,13 @@ import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
 import android.view.Gravity
+import android.view.MotionEvent
 import android.view.View
+import android.view.ViewConfiguration
 import android.view.ViewGroup
 import android.view.Window
 import android.view.WindowManager
+import android.view.animation.DecelerateInterpolator
 import android.widget.FrameLayout
 import android.widget.LinearLayout
 import android.widget.ScrollView
@@ -25,6 +28,7 @@ import java.io.File
 import java.net.InetSocketAddress
 import java.net.Socket
 import java.util.concurrent.atomic.AtomicBoolean
+import kotlin.math.roundToInt
 import org.json.JSONObject
 
 private const val TAG = "DshHandheld"
@@ -40,6 +44,15 @@ private const val SWITCH_TIMEOUT_MS = 46_000L
  * 到点就把进度层收掉，别让用户以为卡住了。
  */
 private const val PAGE_READY_FALLBACK_MS = 1_500L
+
+/** ④ 胶囊吸附动画：120~180ms 之间取中，太快看不出「吸过去了」，太慢像卡住。 */
+private const val CHIP_SNAP_MS = 160L
+
+/** 胶囊贴左右的余量（原先固定右上角时用的就是 marginEnd = 8dp）。 */
+private const val CHIP_SIDE_GAP_DP = 8
+
+/** 胶囊贴上下的余量（原先的 topMargin 是 6dp；底部同样留 6dp，别让圆角压着屏幕边）。 */
+private const val CHIP_VERT_GAP_DP = 6
 
 /** A3 进度层的三行文案，编号与连接屏既有 ①②③ 引导一致。 */
 private val STEP_LABELS = listOf("① 断开当前连接", "② 重新拨号建立通道", "③ 重新加载页面")
@@ -110,6 +123,28 @@ class HostSwitcherUi internal constructor(
 
     /** A1：网页态常驻入口（顶部一条轻量胶囊，不是悬浮按钮）。 */
     private var chip: TextView? = null
+
+    /** ④：胶囊位置（贴哪一侧 + 纵向像素）；null = 没存过，按默认的右上角摆。 */
+    private var chipPos: HostChipPos.Pos? = null
+    /** 正在拖动胶囊：布局回调这时不要按模型把它重摆一遍。 */
+    private var chipDragging = false
+    /** 按下那一刻的手指位置与胶囊几何，拖动位移都相对它算。 */
+    private var chipDownX = 0f
+    private var chipDownY = 0f
+    private var chipBaseLeft = 0
+    private var chipBaseTop = 0
+    private var chipStartTx = 0f
+    private var chipStartTy = 0f
+    /** 吸附动画的代次：收尾动作发现自己不是最新那次就什么都不写。 */
+    private var chipSnapToken = 0
+    /**
+     * 父容器尺寸变了（旋转 / 分屏 / 系统栏让位）就按新尺寸重新夹紧。
+     *
+     * 这个字段必须声明在 init 之前：init 里的 buildChip 会立刻注册它。
+     */
+    private val chipLayoutWatcher = View.OnLayoutChangeListener { _, _, _, right, bottom, _, _, oldRight, oldBottom ->
+        if (right != oldRight || bottom != oldBottom) applyChipPos()
+    }
     /** A5：连接失败时接到 ①②③ 下面的「换一台」。 */
     private var failureLink: TextView? = null
     /** A3：切换进度层（盖住整屏、BACK 收不掉）。 */
@@ -136,6 +171,8 @@ class HostSwitcherUi internal constructor(
 
     init {
         health = HostHealth.parse(prefs.getString(HostHealth.PREF_KEY, null))
+        // ④：位置记录和健康记录一样是自包含的一条；坏了就当作没存过，回落到默认右上角。
+        chipPos = HostChipPos.parse(prefs.getString(HostChipPos.PREF_KEY, null))
         buildChip()
         buildFailureLink()
         buildProgressLayer()
@@ -209,6 +246,8 @@ class HostSwitcherUi internal constructor(
         runCatching { sheet?.dismiss() }
         sheet = null
         ui.removeCallbacksAndMessages(null)
+        chipSnapToken++
+        root.removeOnLayoutChangeListener(chipLayoutWatcher)
         listOf<View?>(chip, failureLink, progressLayer).forEach { v ->
             if (v != null) (v.parent as? ViewGroup)?.removeView(v)
         }
@@ -220,11 +259,12 @@ class HostSwitcherUi internal constructor(
     // ── A1 网页态入口 ────────────────────────────────────────────────────────
 
     /**
-     * 入口放在网页顶部右上角，做成一条贴着边缘的深色胶囊。
+     * 入口做成一条贴着边缘的深色胶囊，默认在右上角。
      *
      * 为什么不是悬浮按钮：需求明确不要 FAB；这里的定位是「原生工具条上的一个主机开关」——
-     * 只占右上角一小块，不占新的一行，也不碰页面左侧的抽屉开关（那个区域必须留出来）。
-     * 这一区在真机上会与 dsh 自己的顶栏右上角有重叠，属于设计稿里「需真机权衡」的那一项。
+     * 只占一小块，不占新的一行，也不碰页面左侧的抽屉开关（那个区域必须留出来）。
+     * 这一区在真机上会与 dsh 自己的顶栏右上角有重叠，正是设计稿里「需真机权衡」的那一项：
+     * 现在交给用户自己拖开（见 [installChipTouch]），位置记在 ssh_host_chip_pos 里。
      */
     private fun buildChip() {
         val v = UiKit.text(activity, "", 11f, UiKit.TEXT).apply {
@@ -240,13 +280,17 @@ class HostSwitcherUi internal constructor(
             }
         }
         chip = v
+        // 位置用绝对边距表达（不再是 gravity TOP|END）：拖动改的就是这两个边距。
+        // 这里的初值只是占位，第一次布局时 applyChipPos 会按记忆位置改写。
         root.addView(v, FrameLayout.LayoutParams(
             ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT
         ).apply {
-            gravity = Gravity.TOP or Gravity.END
-            topMargin = dp(6)
-            marginEnd = dp(8)
+            gravity = Gravity.TOP or Gravity.START
+            leftMargin = dp(CHIP_SIDE_GAP_DP)
+            topMargin = dp(CHIP_VERT_GAP_DP)
         })
+        installChipTouch(v)
+        root.addOnLayoutChangeListener(chipLayoutWatcher)
         refreshChip()
     }
 
@@ -258,7 +302,224 @@ class HostSwitcherUi internal constructor(
         v.text = "⇄ " + label
         v.contentDescription = "切换主机（当前：" + label + "）"
         val alive = (activity.application as? DshApp)?.liveTunnel() != null
-        v.visibility = if (webScreen && alive && !switching) View.VISIBLE else View.GONE
+        val show = webScreen && alive && !switching
+        // 文案变了宽度就变；露出之前先按记忆位置摆好，免得先在旧边距上闪一帧再跳过去。
+        if (show) applyChipPos()
+        v.visibility = if (show) View.VISIBLE else View.GONE
+    }
+
+    // ── ④ 胶囊拖动与位置记忆 ────────────────────────────────────────────────
+
+    /**
+     * 触摸分两种走法：位移超过系统触摸阈值（约 8dp）才算拖动，未达阈值的抬手仍是点击。
+     *
+     * 为什么不是「长按才拖」：胶囊本来就压在网页顶栏上，用户想挪开时不会先去长按；
+     * 直接拖 + 阈值判定既保住了「点一下开弹层」，横向滑动时也不会被误当成拖动。
+     * 点击显式走 [View.performClick]：原生按下态被这层 onTouch 吃掉了，只有它能让原来的
+     * onClick（含 TalkBack 的点击动作）继续生效。
+     */
+    private fun installChipTouch(v: TextView) {
+        val slop = ViewConfiguration.get(activity).scaledTouchSlop
+        v.setOnTouchListener { view, e ->
+            when (e.actionMasked) {
+                MotionEvent.ACTION_DOWN -> {
+                    // 上一次吸附动画没走完就按下了：以屏幕上此刻的位置为基准，别从旧边距起算。
+                    cancelChipAnimation(view)
+                    val lp = view.layoutParams as? FrameLayout.LayoutParams
+                    if (lp == null) {
+                        false
+                    } else {
+                        chipDragging = false
+                        chipDownX = e.rawX
+                        chipDownY = e.rawY
+                        chipBaseLeft = lp.leftMargin
+                        chipBaseTop = lp.topMargin
+                        chipStartTx = view.translationX
+                        chipStartTy = view.translationY
+                        true
+                    }
+                }
+                MotionEvent.ACTION_MOVE -> {
+                    val dx = e.rawX - chipDownX
+                    val dy = e.rawY - chipDownY
+                    if (!chipDragging && dx * dx + dy * dy < (slop * slop).toFloat()) {
+                        true
+                    } else {
+                        if (!chipDragging) {
+                            chipDragging = true
+                            setChipPressed(true)
+                            // 拖动期间别让父容器把事件当成自己的滚动或点击收走。
+                            view.parent?.requestDisallowInterceptTouchEvent(true)
+                        }
+                        dragChip(view, dx, dy)
+                        true
+                    }
+                }
+                MotionEvent.ACTION_UP -> {
+                    // 极快的一甩可能一个 MOVE 都没送到：按抬手点的位移补判一次，别把它当点击。
+                    if (!chipDragging) {
+                        val dx = e.rawX - chipDownX
+                        val dy = e.rawY - chipDownY
+                        if (dx * dx + dy * dy >= (slop * slop).toFloat()) {
+                            chipDragging = true
+                            dragChip(view, dx, dy)
+                        }
+                    }
+                    val dragged = chipDragging
+                    endChipDrag(view)
+                    if (dragged) snapChip(view) else view.performClick()
+                    true
+                }
+                MotionEvent.ACTION_CANCEL -> {
+                    // 被系统打断（来电、父容器抢走事件）也照样落位，别停在半空。
+                    val dragged = chipDragging
+                    endChipDrag(view)
+                    if (dragged) snapChip(view)
+                    true
+                }
+                // 多指动作属于同一次手势：吃掉，别漏给下面的网页。
+                MotionEvent.ACTION_POINTER_DOWN, MotionEvent.ACTION_POINTER_UP -> true
+                else -> false
+            }
+        }
+    }
+
+    /**
+     * 拖动中只改 translation，不动边距。
+     *
+     * 边距一改就是整棵视图树重新布局（网页根里还挂着 WebView），每帧来一次会明显掉手感；
+     * translation 只影响绘制。落位时才把最终边距一次性写回（见 [snapChip]）。
+     */
+    private fun dragChip(view: View, dx: Float, dy: Float) {
+        val area = chipArea() ?: return
+        val size = chipSize(view)
+        if (size[0] <= 0 || size[1] <= 0) return
+        val placed = HostChipPos.at(
+            (chipBaseLeft + chipStartTx + dx).roundToInt(),
+            (chipBaseTop + chipStartTy + dy).roundToInt(),
+            area, size[0], size[1]
+        )
+        view.translationX = (placed.left - chipBaseLeft).toFloat()
+        view.translationY = (placed.top - chipBaseTop).toFloat()
+    }
+
+    /** 手指离开了：恢复按下态、放开父容器的事件拦截（拖动与被打断都走这里）。 */
+    private fun endChipDrag(view: View) {
+        chipDragging = false
+        setChipPressed(false)
+        view.parent?.requestDisallowInterceptTouchEvent(false)
+    }
+
+    /**
+     * 松手吸附：水平贴到最近的一侧（纵向保留），补一段 160ms 的位移动画。
+     *
+     * 动画只是看起来在动 —— 最终边距在动画结束时一次性写回、translation 归零；否则下一次
+     * 布局（旋转、弹层收起、系统栏让位）会按旧边距把胶囊摆回拖之前的位置。
+     * 位置在松手时就落盘，不依赖动画跑完：Activity 在这 160ms 里被销毁也不会丢掉记忆。
+     */
+    private fun snapChip(view: View) {
+        val area = chipArea() ?: return
+        val size = chipSize(view)
+        if (size[0] <= 0 || size[1] <= 0) return
+        val cur = HostChipPos.at(
+            (chipBaseLeft + view.translationX).roundToInt(),
+            (chipBaseTop + view.translationY).roundToInt(),
+            area, size[0], size[1]
+        )
+        val target = HostChipPos.resolve(cur.pos, area, size[0], size[1])
+        chipPos = target.pos
+        persistChipPos(target.pos)
+        val token = ++chipSnapToken
+        view.animate()
+            .translationX((target.left - chipBaseLeft).toFloat())
+            .translationY((target.top - chipBaseTop).toFloat())
+            .setDuration(CHIP_SNAP_MS)
+            .setInterpolator(DecelerateInterpolator())
+            .withEndAction {
+                // 被新的拖动 / 布局作废，或 Activity 已经销毁：这次收尾就什么都不写。
+                if (!gone.get() && token == chipSnapToken) {
+                    val lp = view.layoutParams as? FrameLayout.LayoutParams
+                    if (lp != null) {
+                        lp.leftMargin = target.left
+                        lp.topMargin = target.top
+                        view.translationX = 0f
+                        view.translationY = 0f
+                        view.requestLayout()
+                    }
+                }
+            }
+            .start()
+    }
+
+    /** 作废正在跑的吸附动画：cancel 会连带跑收尾动作，所以先抬代次把它挡掉。 */
+    private fun cancelChipAnimation(view: View) {
+        chipSnapToken++
+        view.animate().cancel()
+    }
+
+    /**
+     * 把胶囊摆到记忆的位置；父容器尺寸或安全区变了也走这里。
+     *
+     * 位置没变化就直接返回 —— 否则「设边距 → 触发布局 → 布局回调 → 再设边距」会自己转起来。
+     */
+    private fun applyChipPos() {
+        val v = chip ?: return
+        if (gone.get() || chipDragging) return
+        val area = chipArea() ?: return
+        val size = chipSize(v)
+        if (size[0] <= 0 || size[1] <= 0) return
+        val placed = HostChipPos.resolve(chipPos, area, size[0], size[1])
+        val lp = v.layoutParams as? FrameLayout.LayoutParams ?: return
+        if (lp.leftMargin == placed.left && lp.topMargin == placed.top) return
+        cancelChipAnimation(v)
+        lp.leftMargin = placed.left
+        lp.topMargin = placed.top
+        v.translationX = 0f
+        v.translationY = 0f
+        v.requestLayout()
+    }
+
+    /**
+     * 父容器里给胶囊用的可用矩形：扣掉系统栏 / 刘海，再留一层贴边余量。
+     *
+     * App 是沉浸全屏，系统栏默认收起，所以 inset 平时是 0；但挖孔屏的刘海、以及用户划出
+     * 系统栏的那一刻会给出真实值，胶囊不能压在这些区域下面。
+     */
+    private fun chipArea(): HostChipPos.Area? {
+        val w = root.width
+        val h = root.height
+        if (w <= 0 || h <= 0) return null
+        val bars = androidx.core.view.ViewCompat.getRootWindowInsets(root)?.getInsets(
+            androidx.core.view.WindowInsetsCompat.Type.systemBars() or
+                androidx.core.view.WindowInsetsCompat.Type.displayCutout()
+        )
+        return HostChipPos.area(
+            w, h,
+            bars?.left ?: 0, bars?.top ?: 0, bars?.right ?: 0, bars?.bottom ?: 0,
+            dp(CHIP_SIDE_GAP_DP), dp(CHIP_VERT_GAP_DP)
+        )
+    }
+
+    /** 胶囊的像素尺寸；还没被布局过（GONE 期间、或刚改完文案）就按内容量一次。 */
+    private fun chipSize(v: View): IntArray {
+        if (v.width <= 0 || v.height <= 0 || v.isLayoutRequested) {
+            val spec = View.MeasureSpec.makeMeasureSpec(0, View.MeasureSpec.UNSPECIFIED)
+            v.measure(spec, spec)
+        }
+        return intArrayOf(v.measuredWidth, v.measuredHeight)
+    }
+
+    /** 按下的视觉：背景加深一档。不改尺寸，免得拖动时胶囊自己忽大忽小。 */
+    private fun setChipPressed(pressed: Boolean) {
+        chip?.background = pillDrawable(pressed)
+    }
+
+    private fun persistChipPos(pos: HostChipPos.Pos) {
+        runCatching {
+            prefs.edit().putString(HostChipPos.PREF_KEY, HostChipPos.encode(pos)).apply()
+        }.onFailure {
+            DiagLog.w(TAG, "多主机：胶囊位置写入失败 " + it.javaClass.simpleName)
+        }
     }
 
     // ── A5 失败后的「换一台」 ────────────────────────────────────────────────
@@ -734,10 +995,11 @@ class HostSwitcherUi internal constructor(
         ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
     ).apply { topMargin = dp(top) }
 
-    private fun pillDrawable(): GradientDrawable = GradientDrawable().apply {
+    /** 胶囊底：不透明一点 = 「按下了」，拖动时用（描边也提亮一档，黑底上才看得出来）。 */
+    private fun pillDrawable(pressed: Boolean = false): GradientDrawable = GradientDrawable().apply {
         cornerRadius = dp(15).toFloat()
-        setColor(0xCC16161D.toInt())
-        setStroke(dp(1), 0x3DFFFFFF)
+        setColor(if (pressed) 0xF216161D.toInt() else 0xCC16161D.toInt())
+        setStroke(dp(1), if (pressed) 0x66FFFFFF else 0x3DFFFFFF)
     }
 
     private fun dotDrawable(color: Int): GradientDrawable = GradientDrawable().apply {
@@ -833,5 +1095,104 @@ object HostHealth {
                 else -> (minutes / 60L).toString() + " 小时前 ✓"
             }
         }
+    }
+}
+
+/**
+ * 网页态胶囊的位置（纯逻辑，不碰 Android —— JVM 单测可直接跑，见 HostChipPosTest）。
+ *
+ * 为什么存「贴哪一侧 + 纵向像素」而不是原始 x/y：旋转屏幕后父容器宽度会变，一个旧的 x
+ * 很可能落在新屏幕之外；改成「侧 + 纵向」后，水平方向跟着新的边缘走，纵向再按新高度夹
+ * 一次即可 —— 这就是需求里的「边缘 + 偏移」，只是松手必定吸附到边缘，水平偏移恒为 0。
+ *
+ * 存储格式：ssh_host_chip_pos = "end|406"（侧|纵向 px）。解析失败一律当作「没存过」，
+ * 回落到默认的右上角：一条坏记录不该让入口消失或跑到屏幕外。
+ */
+object HostChipPos {
+
+    const val PREF_KEY = "ssh_host_chip_pos"
+
+    /** 停在哪一侧。 */
+    enum class Edge { START, END }
+
+    /**
+     * @param edge 吸附侧（START = 左边，END = 右边）
+     * @param top  胶囊上沿的 px（相对父容器顶部）
+     */
+    data class Pos(val edge: Edge, val top: Int)
+
+    /** 可放置区域（px，已扣掉系统栏 / 刘海与贴边余量）。 */
+    data class Area(val left: Int, val top: Int, val right: Int, val bottom: Int) {
+        val width: Int get() = right - left
+        val height: Int get() = bottom - top
+    }
+
+    /** 一次摆放的结果：夹紧后的模型，以及此刻该用的左上角像素。 */
+    data class Placement(val pos: Pos, val left: Int, val top: Int)
+
+    /** 存成 "end|406"；用字符串而不是枚举序号，改枚举顺序读旧值也不会错位。 */
+    fun encode(pos: Pos): String =
+        (if (pos.edge == Edge.END) "end" else "start") + "|" + pos.top
+
+    /** 容错解析：为空、缺字段、非数字、未知侧 —— 一律返回 null（= 没存过）。 */
+    fun parse(raw: String?): Pos? {
+        val parts = raw?.split("|") ?: return null
+        if (parts.size != 2) return null
+        val edge = when (parts[0].trim()) {
+            "start" -> Edge.START
+            "end" -> Edge.END
+            else -> return null
+        }
+        return Pos(edge, parts[1].trim().toIntOrNull() ?: return null)
+    }
+
+    /**
+     * 按容器尺寸算可用区域：四边都扣掉系统栏 / 刘海（inset）与贴边余量。
+     *
+     * 扣完比胶囊还小时让 left/right（top/bottom）相等，后面用 coerceAtLeast 兜住，
+     * 保证「贴住左上角」而不是出现负的可用宽度。
+     */
+    fun area(
+        containerW: Int,
+        containerH: Int,
+        insetLeft: Int,
+        insetTop: Int,
+        insetRight: Int,
+        insetBottom: Int,
+        gapH: Int,
+        gapV: Int,
+    ): Area {
+        val left = insetLeft + gapH
+        val top = insetTop + gapV
+        val right = (containerW - insetRight - gapH).coerceAtLeast(left)
+        val bottom = (containerH - insetBottom - gapV).coerceAtLeast(top)
+        return Area(left, top, right, bottom)
+    }
+
+    /** 松手该吸到哪一侧：看中心落在可用区的左半还是右半。 */
+    fun snapEdge(left: Int, area: Area, chipW: Int): Edge =
+        if (left + chipW / 2 < area.left + area.width / 2) Edge.START else Edge.END
+
+    /** 拖动中的落点：横向纵向都夹进可用区（父容器比胶囊还小时贴住左上）。 */
+    fun at(left: Int, top: Int, area: Area, chipW: Int, chipH: Int): Placement {
+        val maxLeft = (area.right - chipW).coerceAtLeast(area.left)
+        val maxTop = (area.bottom - chipH).coerceAtLeast(area.top)
+        val l = left.coerceIn(area.left, maxLeft)
+        val t = top.coerceIn(area.top, maxTop)
+        return Placement(Pos(snapEdge(l, area, chipW), t), l, t)
+    }
+
+    /**
+     * 恢复 / 夹紧：把存下来的模型摆进当前可用区，返回夹紧后的模型与实际左上角。
+     *
+     * 没存过（null）就回到设计稿的默认位置 —— 右上角，等于把原先的 gravity TOP|END 摊成像素。
+     */
+    fun resolve(saved: Pos?, area: Area, chipW: Int, chipH: Int): Placement {
+        val maxLeft = (area.right - chipW).coerceAtLeast(area.left)
+        val maxTop = (area.bottom - chipH).coerceAtLeast(area.top)
+        val top = (saved?.top ?: area.top).coerceIn(area.top, maxTop)
+        val edge = saved?.edge ?: Edge.END
+        val left = if (edge == Edge.END) maxLeft else area.left
+        return Placement(Pos(edge, top), left, top)
     }
 }
